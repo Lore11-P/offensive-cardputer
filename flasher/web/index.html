@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CardputerFirmware v1.0 - Flasher</title>
+<style>
+  :root {
+    --bg: #0b1116;
+    --panel: #141d24;
+    --panel2: #1b2731;
+    --line: #2a3a47;
+    --text: #e6edf3;
+    --muted: #8fa3b4;
+    --accent: #00d68f;
+    --warn: #ffb020;
+    --danger: #ff4d4d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: radial-gradient(circle at 50% 0%, #10222b 0%, var(--bg) 60%);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+  main {
+    width: 100%;
+    max-width: 620px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 28px;
+    box-shadow: 0 20px 60px rgba(0,0,0,.45);
+  }
+  h1 { margin: 0 0 4px; font-size: 26px; letter-spacing: .2px; }
+  h1 span { color: var(--accent); }
+  .sub { color: var(--muted); margin: 0 0 20px; font-size: 14px; }
+  .warning {
+    background: #2a1f12;
+    border: 1px solid #6b4a1d;
+    color: #ffd591;
+    border-radius: 10px;
+    padding: 12px 14px;
+    font-size: 13px;
+    line-height: 1.5;
+    margin-bottom: 20px;
+  }
+  .warning strong { color: var(--warn); }
+  .device {
+    display: flex;
+    gap: 14px;
+    align-items: center;
+    background: var(--panel2);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 20px;
+  }
+  .device .dot {
+    width: 42px; height: 42px; border-radius: 10px;
+    background: linear-gradient(145deg, #00d68f, #007a52);
+    flex: 0 0 auto;
+  }
+  .device h2 { margin: 0 0 3px; font-size: 16px; }
+  .device p { margin: 0; color: var(--muted); font-size: 13px; }
+  esp-web-install-button { display: block; }
+  esp-web-install-button::part(button) {
+    width: 100%;
+    border: 0;
+    border-radius: 10px;
+    padding: 14px 18px;
+    background: var(--accent);
+    color: #052014;
+    font-weight: 700;
+    font-size: 16px;
+    cursor: pointer;
+  }
+  esp-web-install-button::part(button):hover { filter: brightness(1.08); }
+  .steps { margin: 20px 0 0; padding-left: 20px; color: var(--muted); font-size: 13px; line-height: 1.8; }
+  .steps b { color: var(--text); }
+  .footer { margin-top: 22px; color: var(--muted); font-size: 12px; border-top: 1px solid var(--line); padding-top: 14px; }
+  .footer a { color: var(--accent); text-decoration: none; }
+  code { background: #0e171d; border: 1px solid var(--line); padding: 1px 5px; border-radius: 5px; }
+  .badge { display: inline-block; font-size: 11px; color: var(--accent); border: 1px solid #1d5c46; background: #0d241c; padding: 2px 8px; border-radius: 999px; margin-left: 8px; vertical-align: middle; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Cardputer<span>Firmware</span> <span class="badge">v1.0.0</span></h1>
+  <p class="sub">M5Stack Cardputer ADV &middot; ESP32-S3 &middot; 8 MB flash &middot; LittleFS inclusa &middot; build offensiva</p>
+
+  <div class="warning">
+    <strong>Build offensiva.</strong> Deauth Wi-Fi, evil twin/portal, BLE spam e jammer IR sono
+    <b>attivi</b> (<code>ENABLE_OFFENSIVE=1</code>). Usala solo su hardware e reti tuoi, in ambiente
+    RF isolato e nel rispetto delle leggi locali. Il flashing cancella la memoria del dispositivo:
+    non scollegare il cavo durante la scrittura. Usa Chrome o Edge su desktop.
+  </div>
+
+  <div class="device">
+    <div class="dot"></div>
+    <div>
+      <h2>CardputerFirmware v1.0.0 <span class="badge" style="color:#ffb020;border-color:#6b4a1d;background:#2a1f12;">offensiva</span></h2>
+      <p>Firmware modulare: BLE, Wi-Fi, 307 telecomandi IR, giochi, file browser SD e impostazioni. Funzioni offensive abilitate per test autorizzati.</p>
+    </div>
+  </div>
+
+  <esp-web-install-button manifest="manifest.json">
+    <span slot="unsupported">Browser non supportato. Usa Chrome o Edge su desktop.</span>
+    <span slot="not-allowed">Apri questa pagina via http://localhost o HTTPS.</span>
+  </esp-web-install-button>
+
+  <ol class="steps">
+    <li>Collega la Cardputer al PC con un cavo USB dati.</li>
+    <li>Premi <b>Installa firmware</b> e seleziona la porta seriale.</li>
+    <li>Se la porta non compare, tieni premuto <b>G0</b> e reinserisci il cavo.</li>
+    <li>Al termine scollega e riavvia: il firmware parte con la splash screen.</li>
+  </ol>
+
+  <div class="footer">
+    Offsets: <code>0x0</code> bootloader, <code>0x8000</code> partizioni,
+    <code>0x10000</code> app, <code>0x410000</code> LittleFS (3,9 MB).
+    Flasher web basato su <a href="https://esphome.github.io/esp-web-tools/" target="_blank" rel="noopener">ESP Web Tools</a>.
+    Uso consentito solo su dispositivi propri; rispetta le normative radio locali.
+  </div>
+</main>
+<script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+</body>
+</html>

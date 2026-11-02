@@ -1,0 +1,42 @@
+Database telecomandi IR - CardputerFirmware
+===========================================
+
+Fonte: Flipper-IRDB di Lucaslhm
+https://github.com/Lucaslhm/Flipper-IRDB
+Licenza: CC0 1.0 Universal (public domain dedication)
+https://creativecommons.org/publicdomain/zero/1.0/
+
+I file nella cartella _Converted_ del repository sorgente derivano dalla
+conversione di banche dati IR_Plus, CSV e Pronto. I comandi raw mantengono
+i tempi originali e sono inviati direttamente dal firmware.
+
+Copertura delle 40 marche richieste
+-----------------------------------
+Codici TV/display dedicati (32):
+Samsung, LG, Sony, Panasonic, Philips, TCL, Hisense, Xiaomi, Haier, Akai,
+Telefunken, Sharp, Toshiba, JVC, Hitachi, Blaupunkt, Grundig, Thomson,
+Strong, United, Loewe, Gigabyte, Amazon Fire TV, Roku TV, Changhong,
+Nordmende, Saba, Sinudyne, Metz, Seleco, Acer, Bang & Olufsen.
+
+Codici solo parziali o per dispositivi non TV (5):
+ASUS (media player O!Play), Huawei (set-top box), Majestic (DVB/DVD),
+Trevi (DVB), Inno-Hit (climatizzatore).
+
+Senza codice dedicato in Flipper-IRDB (3):
+Skyworth, OnePlus, Realme.
+Per queste marche usare la cartella Universale: contiene telecomandi
+universali con Power, Volume, Mute e cambio canale. La corrispondenza
+dipende dal modello e dall'anno del televisore.
+
+Note
+----
+- Panasonic include sia i file parsed Kaseikyo sia copie raw Pronto
+  (TC-L47WT50, TC-P42ST30, TC-P42X3, TH-42PCZ85U, VT_series) utilizzabili
+  se il protocollo Kaseikyo non e' supportato.
+- Alcuni file possono contenere comandi con protocolli non supportati:
+  nell'app compaiono con [n/d].
+- La cartella Universale contiene i sei telecomandi universali CC0 di
+  Flipper-IRDB.
+- Nessuna garanzia: i codici possono non corrispondere al modello esatto.
+
+Totale: 307 file .ir, circa 1,41 MB (inclusi README e SOURCES).

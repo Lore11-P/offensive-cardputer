@@ -1,0 +1,12 @@
+﻿.pio/
+.vscode/
+*.log
+.DS_Store
+Thumbs.db
+.env
+.env.*
+include/ApiKeyLocal.h
+include/secrets.h
+*.pem
+*.key
+
