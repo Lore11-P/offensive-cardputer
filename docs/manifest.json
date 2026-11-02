@@ -1,0 +1,16 @@
+{
+  "name": "CardputerFirmware v1.0.0 (offensiva)",
+  "version": "1.0.0",
+  "new_install_prompt_erase": true,
+  "builds": [
+    {
+      "chipFamily": "ESP32-S3",
+      "parts": [
+        { "path": "https://raw.githubusercontent.com/Lore11-P/offensive-cardputer/main/flasher/bin/bootloader.bin", "offset": 0 },
+        { "path": "https://raw.githubusercontent.com/Lore11-P/offensive-cardputer/main/flasher/bin/partitions.bin", "offset": 32768 },
+        { "path": "https://raw.githubusercontent.com/Lore11-P/offensive-cardputer/main/flasher/bin/firmware.bin", "offset": 65536 },
+        { "path": "https://raw.githubusercontent.com/Lore11-P/offensive-cardputer/main/flasher/bin/littlefs.bin", "offset": 4259840 }
+      ]
+    }
+  ]
+}

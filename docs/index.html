@@ -1,0 +1,1099 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#FFE7D6">
+<meta name="description" content="Installa CardputerFirmware (build offensiva) su M5Stack Cardputer ADV direttamente dal browser, senza toolchain e senza driver.">
+<title>CardputerFirmware Offensive - Flash dal browser</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Space+Grotesk:wght@400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --paper: #ffe7d6;
+    --paper-2: #fff7ee;
+    --ink: #111111;
+    --muted: #5a5a5a;
+    --yellow: #ffe600;
+    --cyan: #38e8ff;
+    --pink: #ff5cc8;
+    --green: #4ce66b;
+    --orange: #ffa51f;
+    --red: #ff3b30;
+    --shadow: 6px 6px 0 var(--ink);
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: "Space Grotesk", system-ui, -apple-system, "Segoe UI", sans-serif;
+    line-height: 1.5;
+    overflow-x: hidden;
+  }
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -2;
+    pointer-events: none;
+    background-image:
+      linear-gradient(rgba(17, 17, 17, .055) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(17, 17, 17, .055) 1px, transparent 1px);
+    background-size: 28px 28px;
+  }
+  body::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background: radial-gradient(circle at 50% 0%, transparent 35%, rgba(17, 17, 17, .07) 100%);
+  }
+  a { color: inherit; }
+  button, input, select { font: inherit; }
+  a:focus-visible, button:focus-visible {
+    outline: 3px solid var(--pink);
+    outline-offset: 3px;
+  }
+  .skip {
+    position: absolute;
+    left: 16px;
+    top: -80px;
+    z-index: 100;
+    padding: 10px 14px;
+    background: var(--yellow);
+    border: 3px solid var(--ink);
+    box-shadow: 4px 4px 0 var(--ink);
+    font-family: "Space Mono", monospace;
+    font-size: 12px;
+    font-weight: 700;
+    text-decoration: none;
+  }
+  .skip:focus { top: 16px; }
+
+  .topbar {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    padding: 13px clamp(16px, 4vw, 48px);
+    background: var(--paper);
+    border-bottom: 3px solid var(--ink);
+  }
+  .brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    text-decoration: none;
+    flex: 0 0 auto;
+  }
+  .brand-mark {
+    display: grid;
+    place-items: center;
+    width: 42px;
+    height: 42px;
+    background: var(--yellow);
+    border: 3px solid var(--ink);
+    box-shadow: 3px 3px 0 var(--ink);
+    font-family: "Archivo Black", sans-serif;
+    font-size: 17px;
+    line-height: 1;
+  }
+  .brand-text {
+    font-family: "Archivo Black", sans-serif;
+    font-size: 19px;
+    letter-spacing: -.04em;
+    white-space: nowrap;
+  }
+  .brand-text span { color: var(--pink); }
+  .nav {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .nav a {
+    padding: 7px 9px;
+    border: 3px solid transparent;
+    font-family: "Space Mono", monospace;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .04em;
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  .nav a:hover {
+    background: var(--cyan);
+    border-color: var(--ink);
+    box-shadow: 3px 3px 0 var(--ink);
+  }
+  .nav .nav-github {
+    background: var(--ink);
+    color: var(--paper-2);
+    border-color: var(--ink);
+    box-shadow: 3px 3px 0 var(--pink);
+  }
+  .nav .nav-github:hover {
+    background: var(--pink);
+    color: var(--ink);
+    box-shadow: 3px 3px 0 var(--ink);
+  }
+
+  main {
+    width: min(1180px, calc(100% - 32px));
+    margin: 0 auto;
+  }
+  .hero-copy { min-width: 0; }
+  .hero {
+    display: grid;
+    grid-template-columns: minmax(0, 1.12fr) minmax(0, .88fr);
+    gap: clamp(24px, 5vw, 64px);
+    align-items: center;
+    padding: clamp(38px, 7vw, 88px) 0 clamp(44px, 7vw, 84px);
+  }
+  .eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 22px;
+    padding: 7px 10px;
+    background: var(--ink);
+    color: var(--paper-2);
+    border: 3px solid var(--ink);
+    box-shadow: 4px 4px 0 var(--pink);
+    font-family: "Space Mono", monospace;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+  .eyebrow .dot {
+    width: 8px;
+    height: 8px;
+    flex: 0 0 auto;
+    border: 2px solid var(--ink);
+    border-radius: 50%;
+    background: var(--green);
+  }
+  h1 {
+    margin: 0 0 24px;
+    font-family: "Archivo Black", sans-serif;
+    font-size: clamp(50px, 8.5vw, 104px);
+    line-height: .88;
+    letter-spacing: -.06em;
+    text-transform: uppercase;
+  }
+  h1 .hl {
+    display: inline-block;
+    padding: 0 .07em .05em;
+    background: var(--yellow);
+    border: 4px solid var(--ink);
+    box-shadow: 8px 8px 0 var(--ink);
+    transform: rotate(-1.4deg);
+  }
+  .lede {
+    max-width: 58ch;
+    margin: 0 0 28px;
+    color: #282828;
+    font-size: clamp(16px, 2vw, 20px);
+  }
+  .lede strong {
+    padding: 0 4px;
+    background: var(--cyan);
+    border-bottom: 3px solid var(--ink);
+    white-space: nowrap;
+  }
+  .hero-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    margin-bottom: 30px;
+  }
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    min-height: 48px;
+    padding: 13px 18px;
+    background: var(--paper-2);
+    color: var(--ink);
+    border: 3px solid var(--ink);
+    box-shadow: 5px 5px 0 var(--ink);
+    font-family: "Space Mono", monospace;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: .03em;
+    text-align: center;
+    text-decoration: none;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: transform .12s ease, box-shadow .12s ease;
+  }
+  .btn:hover {
+    transform: translate(-2px, -2px);
+    box-shadow: 7px 7px 0 var(--ink);
+  }
+  .btn:active {
+    transform: translate(2px, 2px);
+    box-shadow: 3px 3px 0 var(--ink);
+  }
+  .btn-yellow { background: var(--yellow); }
+  .btn-green { background: var(--green); }
+  .btn-wide { width: 100%; }
+
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+    max-width: 540px;
+  }
+  .stat {
+    padding: 10px 12px;
+    background: var(--paper-2);
+    border: 3px solid var(--ink);
+    box-shadow: 4px 4px 0 var(--ink);
+  }
+  .stat-label {
+    display: block;
+    margin-bottom: 2px;
+    color: var(--muted);
+    font-family: "Space Mono", monospace;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: .08em;
+  }
+  .stat strong {
+    display: block;
+    overflow: hidden;
+    font-family: "Archivo Black", sans-serif;
+    font-size: 17px;
+    line-height: 1.15;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .hero-art {
+    position: relative;
+    display: flex;
+    justify-content: center;
+    padding: 22px 10px 30px;
+  }
+  .device {
+    width: min(100%, 430px);
+    background: var(--paper-2);
+    border: 4px solid var(--ink);
+    box-shadow: 12px 12px 0 var(--ink);
+    transform: rotate(1.4deg);
+  }
+  .device-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 8px 11px;
+    background: var(--yellow);
+    border-bottom: 3px solid var(--ink);
+    font-family: "Space Mono", monospace;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: .05em;
+  }
+  .led {
+    width: 9px;
+    height: 9px;
+    border: 2px solid var(--ink);
+    border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 0 3px rgba(76, 230, 107, .28);
+  }
+  .screen {
+    margin: 11px;
+    padding: 10px;
+    background: #10141a;
+    color: var(--green);
+    border: 3px solid var(--ink);
+    box-shadow: inset 0 0 0 2px #26313d;
+    font-family: "Space Mono", monospace;
+  }
+  .screen-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 8px;
+    padding-bottom: 6px;
+    border-bottom: 1px dashed #3a4a57;
+    color: #9ab0a5;
+    font-size: 9px;
+  }
+  .screen-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 5px;
+  }
+  .screen-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    padding: 6px 2px;
+    border: 1px solid #3a4a57;
+    color: #c7ffd9;
+    font-size: 7px;
+    line-height: 1.1;
+    text-align: center;
+  }
+  .screen-item b { font-size: 8px; font-weight: 700; }
+  .screen-item .ico { font-size: 13px; line-height: 1; }
+  .screen-item.active {
+    background: var(--green);
+    border-color: var(--green);
+    color: #10141a;
+  }
+  .screen-foot {
+    margin-top: 8px;
+    padding-top: 6px;
+    border-top: 1px dashed #3a4a57;
+    color: #7f9489;
+    font-size: 7px;
+    text-align: center;
+  }
+  .keyboard {
+    display: grid;
+    grid-template-columns: repeat(11, minmax(0, 1fr));
+    gap: 4px;
+    padding: 0 11px 14px;
+  }
+  .keyboard span {
+    height: 19px;
+    background: var(--paper);
+    border: 2px solid var(--ink);
+    box-shadow: 1px 1px 0 var(--ink);
+  }
+  .keyboard span:nth-child(3n) { background: var(--cyan); }
+  .keyboard span:nth-child(4n) { background: var(--yellow); }
+  .keyboard span:nth-child(7n) { background: var(--pink); }
+  .sticker {
+    position: absolute;
+    padding: 8px 11px;
+    border: 3px solid var(--ink);
+    box-shadow: 4px 4px 0 var(--ink);
+    font-family: "Space Mono", monospace;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .04em;
+  }
+  .sticker-a {
+    top: 6px;
+    right: 0;
+    background: var(--pink);
+    transform: rotate(6deg);
+  }
+  .sticker-b {
+    bottom: 12px;
+    left: 0;
+    background: var(--cyan);
+    transform: rotate(-5deg);
+  }
+  .scribble {
+    position: absolute;
+    right: 16px;
+    bottom: -2px;
+    color: var(--ink);
+    font-family: "Archivo Black", sans-serif;
+    font-size: 20px;
+    opacity: .45;
+    transform: rotate(-8deg);
+  }
+
+  .ticker {
+    overflow: hidden;
+    background: var(--ink);
+    color: var(--paper-2);
+    border-top: 3px solid var(--ink);
+    border-bottom: 3px solid var(--ink);
+  }
+  .ticker-track {
+    display: flex;
+    width: max-content;
+    animation: ticker 26s linear infinite;
+  }
+  .ticker-track span {
+    padding: 10px 0;
+    font-family: "Space Mono", monospace;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .12em;
+    white-space: nowrap;
+  }
+  .ticker-track span::after {
+    content: "  /  ";
+    color: var(--yellow);
+  }
+  @keyframes ticker {
+    from { transform: translateX(0); }
+    to { transform: translateX(-50%); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    .ticker-track { animation: none; }
+    .btn { transition: none; }
+  }
+
+  .section {
+    padding: clamp(46px, 7vw, 84px) 0;
+    border-top: 3px solid var(--ink);
+  }
+  .section-head {
+    display: grid;
+    grid-template-columns: 62px minmax(0, 1fr) minmax(0, 1fr);
+    gap: 18px;
+    align-items: start;
+    margin-bottom: 28px;
+  }
+  .section-num {
+    display: grid;
+    place-items: center;
+    width: 56px;
+    height: 56px;
+    background: var(--ink);
+    color: var(--paper-2);
+    box-shadow: 5px 5px 0 var(--pink);
+    font-family: "Archivo Black", sans-serif;
+    font-size: 18px;
+  }
+  .section-head h2 {
+    margin: 0;
+    font-family: "Archivo Black", sans-serif;
+    font-size: clamp(32px, 5vw, 58px);
+    line-height: .92;
+    letter-spacing: -.05em;
+    text-transform: uppercase;
+  }
+  .section-head p {
+    align-self: end;
+    max-width: 50ch;
+    margin: 0;
+    color: #2a2a2a;
+    font-size: 15px;
+  }
+
+  .flash-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 24px;
+    align-items: stretch;
+  }
+  .flash-card {
+    padding: clamp(20px, 3vw, 32px);
+    background: var(--paper-2);
+    border: 4px solid var(--ink);
+    box-shadow: 10px 10px 0 var(--ink);
+  }
+  .flash-status {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 18px;
+    font-family: "Space Mono", monospace;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .03em;
+    text-transform: uppercase;
+  }
+  .status-dot {
+    width: 12px;
+    height: 12px;
+    flex: 0 0 auto;
+    border: 3px solid var(--ink);
+    border-radius: 50%;
+    background: var(--orange);
+  }
+  .status-dot.ok { background: var(--green); }
+  .status-dot.bad { background: var(--red); }
+  esp-web-install-button { display: block; }
+  esp-web-install-button::part(button) {
+    width: 100%;
+    min-height: 52px;
+    padding: 14px 18px;
+    background: var(--green);
+    color: var(--ink);
+    border: 3px solid var(--ink);
+    border-radius: 0;
+    box-shadow: 5px 5px 0 var(--ink);
+    font-family: "Space Mono", monospace;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  esp-web-install-button::part(button):hover {
+    transform: translate(-2px, -2px);
+    box-shadow: 7px 7px 0 var(--ink);
+  }
+  .slot-msg {
+    display: block;
+    margin-top: 12px;
+    padding: 12px;
+    background: var(--orange);
+    border: 3px solid var(--ink);
+    box-shadow: 4px 4px 0 var(--ink);
+    font-size: 12px;
+    font-weight: 700;
+  }
+  .flash-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 16px;
+  }
+  .flash-meta a {
+    padding: 5px 8px;
+    background: var(--yellow);
+    border: 2px solid var(--ink);
+    box-shadow: 2px 2px 0 var(--ink);
+    font-family: "Space Mono", monospace;
+    font-size: 10px;
+    font-weight: 700;
+    text-decoration: none;
+  }
+  .flash-meta a:hover { background: var(--cyan); }
+  .micro {
+    margin: 16px 0 0;
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.55;
+  }
+  .terminal {
+    overflow: hidden;
+    background: #10141a;
+    color: #d7ffe5;
+    border: 4px solid var(--ink);
+    box-shadow: 10px 10px 0 var(--cyan);
+    font-family: "Space Mono", monospace;
+    font-size: 12px;
+    line-height: 1.75;
+  }
+  .terminal-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 10px;
+    background: #1b222b;
+    border-bottom: 3px solid var(--ink);
+  }
+  .terminal-bar i {
+    width: 10px;
+    height: 10px;
+    border: 2px solid var(--ink);
+    border-radius: 50%;
+    background: var(--red);
+  }
+  .terminal-bar i:nth-child(2) { background: var(--yellow); }
+  .terminal-bar i:nth-child(3) { background: var(--green); }
+  .terminal-bar span {
+    margin-left: auto;
+    color: #7f9489;
+    font-size: 9px;
+  }
+  .terminal pre {
+    margin: 0;
+    padding: 18px;
+    overflow-x: auto;
+    white-space: pre-wrap;
+  }
+  .t-dim { color: #6f857a; }
+  .t-ok { color: var(--green); font-weight: 700; }
+  .t-warn { color: var(--yellow); }
+
+  .steps-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 16px;
+  }
+  .step-card {
+    padding: 20px;
+    border: 4px solid var(--ink);
+    box-shadow: 8px 8px 0 var(--ink);
+    background: var(--paper-2);
+  }
+  .step-card:nth-child(1) { background: var(--yellow); }
+  .step-card:nth-child(2) { background: var(--cyan); }
+  .step-card:nth-child(3) { background: var(--pink); }
+  .step-card:nth-child(4) { background: var(--green); }
+  .step-card .num {
+    display: block;
+    margin-bottom: 10px;
+    font-family: "Archivo Black", sans-serif;
+    font-size: 38px;
+    line-height: 1;
+  }
+  .step-card h3 {
+    margin: 0 0 7px;
+    font-family: "Archivo Black", sans-serif;
+    font-size: 18px;
+    line-height: 1;
+    text-transform: uppercase;
+  }
+  .step-card p {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
+  .features-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+  }
+  .feature {
+    min-height: 112px;
+    padding: 16px 14px;
+    background: var(--paper-2);
+    border: 3px solid var(--ink);
+    box-shadow: 5px 5px 0 var(--ink);
+  }
+  .feature:nth-child(1) { background: var(--yellow); }
+  .feature:nth-child(2) { background: var(--cyan); }
+  .feature:nth-child(3) { background: var(--pink); }
+  .feature:nth-child(4) { background: var(--green); }
+  .feature:nth-child(5) { background: var(--paper-2); }
+  .feature:nth-child(6) { background: var(--yellow); }
+  .feature:nth-child(7) { background: var(--cyan); }
+  .feature:nth-child(8) { background: var(--pink); }
+  .feature h3 {
+    margin: 0;
+    font-family: "Archivo Black", sans-serif;
+    font-size: 15px;
+    line-height: 1.05;
+    text-transform: uppercase;
+  }
+  .feature p {
+    margin: 8px 0 0;
+    font-size: 12px;
+    line-height: 1.45;
+  }
+
+  .warning {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 20px;
+    align-items: start;
+    margin: 0 0 clamp(46px, 7vw, 84px);
+    padding: 24px;
+    background: var(--orange);
+    border: 4px solid var(--ink);
+    box-shadow: 10px 10px 0 var(--ink);
+  }
+  .warning-icon {
+    display: grid;
+    place-items: center;
+    width: 62px;
+    height: 62px;
+    background: var(--ink);
+    color: var(--yellow);
+    border: 3px solid var(--ink);
+    box-shadow: 5px 5px 0 var(--paper-2);
+    font-family: "Archivo Black", sans-serif;
+    font-size: 38px;
+    line-height: 1;
+  }
+  .warning h3 {
+    margin: 0 0 6px;
+    font-family: "Archivo Black", sans-serif;
+    font-size: 22px;
+    line-height: 1;
+    text-transform: uppercase;
+  }
+  .warning p {
+    max-width: 90ch;
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.55;
+  }
+
+  .footer {
+    padding: 28px clamp(16px, 4vw, 48px);
+    background: var(--ink);
+    color: var(--paper-2);
+    border-top: 4px solid var(--ink);
+  }
+  .footer-inner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    flex-wrap: wrap;
+    width: min(1180px, 100%);
+    margin: 0 auto;
+  }
+  .footer p {
+    margin: 0;
+    font-family: "Space Mono", monospace;
+    font-size: 10px;
+    line-height: 1.7;
+  }
+  .footer a { color: var(--yellow); }
+  .footer a:hover { color: var(--cyan); }
+  .footer-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    font-family: "Space Mono", monospace;
+    font-size: 10px;
+    font-weight: 700;
+  }
+  .footer-links a { text-decoration: none; }
+  .footer-links a:hover { text-decoration: underline; }
+
+  @media (max-width: 980px) {
+    .hero { grid-template-columns: 1fr; }
+    .hero-art { order: -1; padding-top: 8px; }
+    .device { width: min(100%, 380px); }
+    .section-head { grid-template-columns: 62px minmax(0, 1fr); }
+    .section-head p { grid-column: 2; }
+    .flash-grid { grid-template-columns: 1fr; }
+    .steps-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .features-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  @media (max-width: 640px) {
+    .topbar { align-items: flex-start; flex-direction: column; gap: 10px; }
+    .nav { justify-content: flex-start; }
+    .nav a { padding: 6px 7px; font-size: 10px; }
+    h1 { font-size: clamp(42px, 13vw, 62px); }
+    .hero-art { padding-left: 12px; padding-right: 12px; }
+    .device { width: calc(100% - 10px); transform: rotate(.7deg); box-shadow: 8px 8px 0 var(--ink); }
+    .stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .stat strong { font-size: 14px; }
+    .sticker-a { right: -4px; }
+    .sticker-b { left: -4px; }
+    .scribble { display: none; }
+    .section-head { grid-template-columns: 48px minmax(0, 1fr); gap: 12px; }
+    .section-num { width: 44px; height: 44px; font-size: 15px; box-shadow: 4px 4px 0 var(--pink); }
+    .section-head p { grid-column: 1 / -1; }
+    .steps-grid, .features-grid { grid-template-columns: 1fr; }
+    .warning { grid-template-columns: 1fr; }
+    .warning-icon { width: 52px; height: 52px; font-size: 30px; }
+  }
+  @media (max-width: 420px) {
+    .hero-actions .btn { flex: 1 1 100%; }
+    .stats { gap: 7px; }
+    .stat { padding: 8px; }
+    .stat strong { font-size: 12px; }
+    .stat-label { font-size: 8px; }
+    .device { transform: none; }
+  }
+</style>
+</head>
+<body>
+<a class="skip" href="#flash">Vai al flashing</a>
+
+<header class="topbar">
+  <a class="brand" href="./" aria-label="CardputerFirmware, torna all'inizio">
+    <span class="brand-mark">CP</span>
+    <span class="brand-text">CARDPUTER<span>FW</span></span>
+  </a>
+  <nav class="nav" aria-label="Navigazione principale">
+    <a href="#flash">FLASH</a>
+    <a href="#guida">GUIDA</a>
+    <a href="#contenuti">CONTENUTI</a>
+    <a class="nav-github" href="https://github.com/Lore11-P/offensive-cardputer" target="_blank" rel="noopener">GITHUB &nearr;</a>
+  </nav>
+</header>
+
+<main>
+  <section class="hero">
+    <div class="hero-copy">
+      <div class="eyebrow"><span class="dot"></span> BUILD OFFENSIVA &middot; SOLO USO AUTORIZZATO</div>
+      <h1>FLASH<br><span class="hl">DAL BROWSER.</span></h1>
+      <p class="lede">
+        Metti <strong>CardputerFirmware Offensive</strong> sulla tua M5Stack Cardputer ADV senza toolchain,
+        senza driver e senza riga di comando. Un cavo USB-C, un click e sei nel menu, con i moduli
+        radio e IR offensivi gi&agrave; compilati.
+      </p>
+      <div class="hero-actions">
+        <a class="btn btn-yellow" href="#flash">INSTALLA ORA <span>&darr;</span></a>
+        <a class="btn btn-paper" href="https://github.com/Lore11-P/offensive-cardputer" target="_blank" rel="noopener">SORGENTE GITHUB <span>&nearr;</span></a>
+      </div>
+      <div class="stats" aria-label="Informazioni firmware">
+        <div class="stat">
+          <span class="stat-label">RELEASE</span>
+          <strong data-release-tag>v1.0.0-offensive</strong>
+        </div>
+        <div class="stat">
+          <span class="stat-label">TARGET</span>
+          <strong>ESP32-S3</strong>
+        </div>
+        <div class="stat">
+          <span class="stat-label">FLASH</span>
+          <strong>8 MB</strong>
+        </div>
+      </div>
+    </div>
+
+    <div class="hero-art" aria-hidden="true">
+      <div class="device">
+        <div class="device-top">
+          <span>CARDPUTER ADV</span>
+          <span class="led"></span>
+          <span>USB-C</span>
+        </div>
+        <div class="screen">
+          <div class="screen-head">
+            <span>MAIN MENU</span>
+            <span>100%</span>
+          </div>
+          <div class="screen-grid">
+            <div class="screen-item active"><span class="ico">B</span><b>BLE</b></div>
+            <div class="screen-item"><span class="ico">W</span><b>WIFI</b></div>
+            <div class="screen-item"><span class="ico">R</span><b>RADAR</b></div>
+            <div class="screen-item"><span class="ico">IR</span><b>IR</b></div>
+            <div class="screen-item"><span class="ico">G</span><b>GAMES</b></div>
+            <div class="screen-item"><span class="ico">FM</span><b>RADIO</b></div>
+            <div class="screen-item"><span class="ico">SD</span><b>SD</b></div>
+            <div class="screen-item"><span class="ico">S</span><b>SET</b></div>
+          </div>
+          <div class="screen-foot">ENTER = APRI&nbsp;&nbsp;&nbsp;` = INDIETRO</div>
+        </div>
+        <div class="keyboard">
+          <span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span>
+          <span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span>
+          <span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span>
+          <span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span>
+        </div>
+      </div>
+      <div class="sticker sticker-a">NO DRIVER</div>
+      <div class="sticker sticker-b">WEB SERIAL</div>
+      <div class="scribble">OFFENSIVE</div>
+    </div>
+  </section>
+</main>
+
+<div class="ticker" aria-hidden="true">
+  <div class="ticker-track">
+    <span>FLASH DAL BROWSER</span><span>BUILD OFFENSIVA</span><span>ESP32-S3</span><span>DEAUTH</span><span>EVIL TWIN</span><span>BLE SPAM</span><span>IR JAMMER</span><span>SOLO USO AUTORIZZATO</span>
+    <span>FLASH DAL BROWSER</span><span>BUILD OFFENSIVA</span><span>ESP32-S3</span><span>DEAUTH</span><span>EVIL TWIN</span><span>BLE SPAM</span><span>IR JAMMER</span><span>SOLO USO AUTORIZZATO</span>
+  </div>
+</div>
+
+<main>
+  <section id="flash" class="section">
+    <div class="section-head">
+      <span class="section-num">01</span>
+      <h2>INSTALLA<br>IN 3 MOSSE.</h2>
+      <p>Collega, premi, aspetta. Il flasher usa Web Serial e scrive bootloader, partizioni, firmware e LittleFS direttamente dalla pagina: &egrave; la build con i moduli offensivi attivi.</p>
+    </div>
+
+    <div class="flash-grid">
+      <div class="flash-card">
+        <div class="flash-status">
+          <span class="status-dot" id="browser-dot"></span>
+          <span id="browser-status">Controllo del browser...</span>
+        </div>
+
+        <esp-web-install-button manifest="manifest.json">
+          <button slot="activate" class="btn btn-green btn-wide" type="button">INSTALLA FIRMWARE</button>
+          <span slot="unsupported" class="slot-msg">Browser non supportato. Usa Chrome o Edge desktop.</span>
+          <span slot="not-allowed" class="slot-msg">Apri il sito in HTTPS o su localhost.</span>
+        </esp-web-install-button>
+
+        <div class="flash-meta">
+          <a data-asset="firmware.bin" href="https://github.com/Lore11-P/offensive-cardputer/releases/latest" target="_blank" rel="noopener">firmware.bin</a>
+          <a data-asset="littlefs.bin" href="https://github.com/Lore11-P/offensive-cardputer/releases/latest" target="_blank" rel="noopener">littlefs.bin</a>
+          <a href="https://github.com/Lore11-P/offensive-cardputer/releases/latest" target="_blank" rel="noopener">RELEASE &nearr;</a>
+        </div>
+
+        <p class="micro">
+          I binari vengono letti dal repository GitHub della build offensiva. La pagina non
+          scrive nulla sul dispositivo finché non premi il pulsante. Il flashing cancella
+          la memoria del microcontrollore.
+        </p>
+      </div>
+
+      <div class="terminal" aria-label="Log di esempio del flashing">
+        <div class="terminal-bar"><i></i><i></i><i></i><span>flash.log</span></div>
+        <pre><span class="t-dim">$</span> connect --usb
+<span class="t-ok">OK</span> Cardputer ADV found
+<span class="t-dim">$</span> write bootloader <span class="t-dim">@ 0x0</span>
+<span class="t-dim">$</span> write partitions <span class="t-dim">@ 0x8000</span>
+<span class="t-dim">$</span> write firmware   <span class="t-dim">@ 0x10000</span>
+<span class="t-dim">$</span> write littlefs   <span class="t-dim">@ 0x410000</span>
+<span class="t-warn">!</span> non scollegare il cavo
+<span class="t-ok">DONE</span> reboot &rarr; menu</pre>
+      </div>
+    </div>
+  </section>
+
+  <section id="guida" class="section">
+    <div class="section-head">
+      <span class="section-num">02</span>
+      <h2>DAL CAVO<br>AL MENU.</h2>
+      <p>Quattro passi, zero installazioni. Serve un browser Chromium desktop e un cavo USB dati.</p>
+    </div>
+
+    <div class="steps-grid">
+      <article class="step-card">
+        <span class="num">01</span>
+        <h3>COLLEGA</h3>
+        <p>Attacca la Cardputer con un cavo USB-C dati. Se la porta non compare, tieni premuto G0 e reinserisci il cavo.</p>
+      </article>
+      <article class="step-card">
+        <span class="num">02</span>
+        <h3>INSTALLA</h3>
+        <p>Premi il pulsante verde e seleziona la porta seriale. Il browser chiede il permesso una sola volta.</p>
+      </article>
+      <article class="step-card">
+        <span class="num">03</span>
+        <h3>ASPETTA</h3>
+        <p>Il flasher scrive bootloader, partizioni, firmware e LittleFS. Non scollegare il cavo durante la scrittura.</p>
+      </article>
+      <article class="step-card">
+        <span class="num">04</span>
+        <h3>RIAVVIA</h3>
+        <p>Al termine stacca e riattacca la USB. La Cardputer parte con la splash screen e il menu principale.</p>
+      </article>
+    </div>
+  </section>
+
+  <section id="contenuti" class="section">
+    <div class="section-head">
+      <span class="section-num">03</span>
+      <h2>COSA C'&Egrave;<br>DENTRO.</h2>
+      <p>La build offensiva: deauth Wi-Fi, evil twin/portal, BLE spam e jammer IR attivi, oltre a scanner, radar, web radio, telecomandi IR, giochi e microSD.</p>
+    </div>
+
+    <div class="features-grid">
+      <article class="feature">
+        <h3>DEAUTH WIFI</h3>
+        <p>Deautenticazione con limite di 60 secondi per singolo attacco.</p>
+      </article>
+      <article class="feature">
+        <h3>EVIL TWIN</h3>
+        <p>Clone di rete con evil portal; credenziali solo in RAM.</p>
+      </article>
+      <article class="feature">
+        <h3>BLE SPAM</h3>
+        <p>Modalit&agrave; Random, Apple, Samsung, Google e Windows.</p>
+      </article>
+      <article class="feature">
+        <h3>IR JAMMER</h3>
+        <p>Disturbo IR opzionale accanto a scanner Power e TV-B-Gone.</p>
+      </article>
+      <article class="feature">
+        <h3>RADAR</h3>
+        <p>Finder BLE hot/cold, PPI e vista banda 2.4 GHz.</p>
+      </article>
+      <article class="feature">
+        <h3>IR REMOTE</h3>
+        <p>307 file .ir, ricerca, preferiti e tasti rapidi.</p>
+      </article>
+      <article class="feature">
+        <h3>GAMES</h3>
+        <p>Dieci giochi con record persistenti sulla microSD.</p>
+      </article>
+      <article class="feature">
+        <h3>SETTINGS</h3>
+        <p>Luminosit&agrave;, rotazione, sleep timer e moduli on/off.</p>
+      </article>
+    </div>
+  </section>
+
+  <section class="warning" aria-labelledby="warning-title">
+    <div class="warning-icon" aria-hidden="true">!</div>
+    <div>
+      <h3 id="warning-title">PRIMA DI FLASHARE</h3>
+      <p>
+        <strong>Avviso legale.</strong> Questa build contiene funzioni offensive attive: deauth Wi-Fi,
+        evil twin/portal, BLE spam e jammer IR. Trasmissioni radio non autorizzate, disturbo di reti
+        altrui e raccolta non consensuale di credenziali sono reati in Italia e in molti altri Paesi.
+        Usala solo su dispositivi e reti tuoi, oppure in un ambiente RF isolato con autorizzazione
+        scritta. L'autore non si assume alcuna responsabilit&agrave; per usi impropri.
+      </p>
+      <p style="margin-top:10px">
+        Il flashing sostituisce il firmware e cancella la flash interna: eventuali dati salvati
+        nel filesystem vanno persi. Usa Chrome o Edge desktop con Web Serial, una porta USB dati
+        e un dispositivo tuo. Dopo la scrittura serve un ciclo di alimentazione: la USB nativa
+        dell'ESP32-S3 resta in download mode dopo un reset software.
+      </p>
+    </div>
+  </section>
+</main>
+
+<footer class="footer">
+  <div class="footer-inner">
+    <p>
+      CardputerFirmware v1.0 &middot; build offensiva &middot; licenza MIT<br>
+      Ultima release: <span data-release-tag>v1.0.0-offensive</span> &middot; <span data-release-date>2 nov 2026</span>
+    </p>
+    <div class="footer-links">
+      <a href="https://github.com/Lore11-P/offensive-cardputer" target="_blank" rel="noopener">GITHUB &nearr;</a>
+      <a href="https://github.com/Lore11-P/offensive-cardputer/releases/latest" target="_blank" rel="noopener">RELEASE &nearr;</a>
+      <a href="https://esphome.github.io/esp-web-tools/" target="_blank" rel="noopener">ESP WEB TOOLS &nearr;</a>
+    </div>
+  </div>
+</footer>
+
+<script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+<script>
+  (function () {
+    var secure = location.protocol === "https:" || location.hostname === "localhost" || location.hostname === "127.0.0.1";
+    var supported = "serial" in navigator;
+    var dot = document.getElementById("browser-dot");
+    var status = document.getElementById("browser-status");
+    if (dot && status) {
+      if (supported && secure) {
+        dot.classList.add("ok");
+        status.textContent = "Web Serial pronto - Chrome/Edge desktop";
+      } else if (!secure) {
+        dot.classList.add("bad");
+        status.textContent = "Serve HTTPS o localhost per usare Web Serial";
+      } else {
+        dot.classList.add("bad");
+        status.textContent = "Browser non supportato - usa Chrome o Edge desktop";
+      }
+    }
+
+    var repo = "Lore11-P/offensive-cardputer";
+    var releaseApi = "https://api.github.com/repos/" + repo + "/releases/latest";
+    var fallbackRelease = "https://github.com/" + repo + "/releases/latest";
+
+    fetch(releaseApi, { headers: { Accept: "application/vnd.github+json" } })
+      .then(function (response) {
+        if (!response.ok) throw new Error("release " + response.status);
+        return response.json();
+      })
+      .then(function (release) {
+        document.querySelectorAll("[data-release-tag]").forEach(function (node) {
+          node.textContent = release.tag_name || "v1.0.0-offensive";
+        });
+        var date = release.published_at ? new Date(release.published_at) : null;
+        if (date && !isNaN(date.getTime())) {
+          var formatted = date.toLocaleDateString("it-IT", { day: "2-digit", month: "short", year: "numeric" });
+          document.querySelectorAll("[data-release-date]").forEach(function (node) {
+            node.textContent = formatted;
+          });
+        }
+        (release.assets || []).forEach(function (asset) {
+          document.querySelectorAll('[data-asset="' + asset.name + '"]').forEach(function (link) {
+            link.href = asset.browser_download_url;
+            link.title = asset.name + " - " + (asset.size / 1024 / 1024).toFixed(1) + " MB";
+          });
+        });
+      })
+      .catch(function () {
+        document.querySelectorAll('[data-asset]').forEach(function (link) {
+          link.href = fallbackRelease;
+        });
+      });
+  })();
+</script>
+</body>
+</html>
