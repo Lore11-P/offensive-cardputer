@@ -4,6 +4,7 @@
 #include <FS.h>
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -494,6 +495,49 @@ void wrapText(int x, int y, int maxWidth, const std::vector<std::string>& lines,
     }
 }
 
+void drawBatteryWidget(int right, int y) {
+    auto& d = g();
+    const int level = static_cast<int>(M5Cardputer.Power.getBatteryLevel());
+    const bool charging = M5Cardputer.Power.isCharging() == m5::Power_Class::is_charging;
+    const int percent = level < 0 ? -1 : std::min(level, 100);
+
+    uint16_t color = kTextDim;
+    char label[8];
+    if (percent < 0) {
+        std::snprintf(label, sizeof(label), "--%%");
+    } else {
+        std::snprintf(label, sizeof(label), "%d%%", percent);
+        color = percent <= 15 ? kNeoRed : (percent <= 35 ? kNeoOrange : kNeoGreen);
+    }
+
+    d.setFont(&fonts::Font0);
+    d.setTextSize(1.0f);
+    d.setTextDatum(0);
+    d.setTextColor(charging ? kNeoCyan : kPaper);
+    const int textW = d.textWidth(label);
+
+    constexpr int kBodyW = 17;
+    constexpr int kBodyH = 9;
+    const int bodyX = right - (kBodyW + 2);
+    const int bodyY = y;
+    d.drawString(label, bodyX - 4 - textW, y);
+    d.drawRect(bodyX, bodyY, kBodyW, kBodyH, kPaper);
+    d.fillRect(bodyX + kBodyW, bodyY + 3, 2, 3, kPaper);
+
+    if (percent > 0) {
+        const int fillW = (kBodyW - 4) * percent / 100;
+        if (fillW > 0) {
+            d.fillRect(bodyX + 2, bodyY + 2, fillW, kBodyH - 4, color);
+        }
+    }
+    if (charging) {
+        const int cx = bodyX + kBodyW / 2;
+        d.drawLine(cx + 1, bodyY + 1, cx - 2, bodyY + 5, kNeoYellow);
+        d.drawLine(cx - 2, bodyY + 5, cx + 2, bodyY + 5, kNeoYellow);
+        d.drawLine(cx + 2, bodyY + 5, cx - 1, bodyY + 8, kNeoYellow);
+    }
+}
+
 void header(const std::string& title, const std::string& parent) {
     auto& d = g();
     d.fillRect(0, 0, width(), 21, kInk);
@@ -501,13 +545,27 @@ void header(const std::string& title, const std::string& parent) {
     d.fillRect(3, 4, 4, 12, kNeoCyan);
 
     std::string full = parent.empty() ? title : (parent + " > " + title);
-    // Breadcrumb lunghi vengono compattati.
-    const int maxChars = (width() - 16) / 6;
-    if (static_cast<int>(full.size()) > maxChars && maxChars > 3) {
-        full = full.substr(full.size() - static_cast<size_t>(maxChars - 3));
-        full = "..." + full;
+
+    // L'indicatore batteria occupa ~50 px a destra: titolo scelto e troncato
+    // in base allo spazio rimasto, anche in portrait.
+    constexpr int kTitleX = 10;
+    constexpr int kBatteryReserve = 50;
+    const int maxTitleW = width() - kTitleX - kBatteryReserve - 4;
+    d.setFont(&fonts::Font2);
+    uint8_t font = 2;
+    if (d.textWidth(full.c_str()) > maxTitleW) {
+        d.setFont(&fonts::Font0);
+        font = 0;
     }
-    text(10, 3, full, kPaper, full.size() > 26 ? 0 : 2);
+    if (d.textWidth(full.c_str()) > maxTitleW) {
+        const std::string ellipsis = "...";
+        while (!full.empty() && d.textWidth((full + ellipsis).c_str()) > maxTitleW) {
+            full.pop_back();
+        }
+        full += ellipsis;
+    }
+    text(kTitleX, 3, full, kPaper, font);
+    drawBatteryWidget(width() - 3, 6);
 }
 
 void footer(const std::string& hint) {

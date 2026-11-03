@@ -60,7 +60,8 @@ void textCentered(int y, const std::string& s, uint16_t color, uint8_t font = 2)
 void wrapText(int x, int y, int maxWidth, const std::vector<std::string>& lines, uint16_t color,
               uint8_t font = 2, int lineHeight = 12);
 
-// Barra superiore con titolo e breadcrumb (es. "WiFi > Evil Portal").
+// Barra superiore con titolo, breadcrumb (es. "WiFi > Evil Portal") e
+// indicatore batteria con percentuale e stato di carica.
 void header(const std::string& title, const std::string& parent = "");
 void footer(const std::string& text);
 

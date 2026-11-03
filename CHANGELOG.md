@@ -6,6 +6,7 @@ Tutte le modifiche rilevanti del progetto. Formato basato su Keep a Changelog.
 
 ### Aggiunto
 
+- Indicatore batteria nella barra superiore: percentuale, colore per livello e stato di carica, visibile in tutte le schermate con header.
 - Modulo **Radar** (`src/modules/radar/`, `ENABLE_MODULE_RADAR`): modulo passivo che ricostruisce per comportamento osservato le funzioni del "Wi-Fi & BLE Radar ADV" closed source.
   - *Find BLE*: inseguimento di un singolo beacon/tag con media mobile esponenziale dell'RSSI, distanza stimata con modello log-distanza, gauge circolare, barra a 16 segmenti con Peak Hold, indicatori `WARMER`/`COLDER`/`HOTSPOT`, tic audio in stile contatore Geiger e timeout di link.
   - *Radar BLE*: vista PPI con sweep e blip stabili per MAC, posizionati per intensità di segnale, con elenco dei segnali più forti.

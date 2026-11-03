@@ -27,6 +27,7 @@ Firmware modulare per **M5Stack Cardputer ADV** (ESP32-S3FN8, 8 MB flash, **senz
 
 - **Menu gerarchico** con carosello orizzontale animato, card centrale e anteprime laterali; le viste con molti elementi usano griglie o liste con auto-repeat.
 - **Display** 240×135 in landscape, framebuffer 16 bpp (nessun flicker), tema neubrutalista e rotazione configurabile.
+- **Batteria**: indicatore nella barra superiore con percentuale, colore per livello e stato di carica.
 - **Storage** LittleFS + microSD opzionale (`/sd`), con fallback automatico e file browser.
 - **Configurazione** in NVS, export/import JSON (`/config.json`) senza dati sensibili; backup e screenshot su SD.
 - **Giochi interrompibili** con `` ` `` (ESC fisico), record persistenti su SD e ripristino della rotazione all'uscita.
