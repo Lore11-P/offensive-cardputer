@@ -6,6 +6,7 @@ Tutte le modifiche rilevanti del progetto. Formato basato su Keep a Changelog.
 
 ### Aggiunto
 
+- **Chat BLE** (`src/modules/chat/`, `ENABLE_MODULE_CHAT`): messaggi broadcast tra Cardputer vicini tramite advertising BLE legacy, senza pairing, con nickname configurabile (max 6 caratteri), cronologia degli ultimi 8 messaggi e conteggio dei dispositivi attivi. All'ingresso forza l'indirizzo pubblico per non ereditare il MAC random del BLE spam.
 - Indicatore batteria nella barra superiore: percentuale, colore per livello e stato di carica, visibile in tutte le schermate con header.
 - Modulo **Radar** (`src/modules/radar/`, `ENABLE_MODULE_RADAR`): modulo passivo che ricostruisce per comportamento osservato le funzioni del "Wi-Fi & BLE Radar ADV" closed source.
   - *Find BLE*: inseguimento di un singolo beacon/tag con media mobile esponenziale dell'RSSI, distanza stimata con modello log-distanza, gauge circolare, barra a 16 segmenti con Peak Hold, indicatori `WARMER`/`COLDER`/`HOTSPOT`, tic audio in stile contatore Geiger e timeout di link.

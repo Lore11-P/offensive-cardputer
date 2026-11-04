@@ -167,6 +167,14 @@ void drawFallbackIcon(const std::string& id, int x, int y, int s) {
         d.drawLine(x + s - 7, y + 9, x + 7, cy, c);
         d.drawLine(x + 7, cy, x + s - 7, y + s - 9, c);
         d.drawLine(x + s - 7, y + s - 9, cx, y + s - 3, c);
+    } else if (id == "chat") {
+        const uint16_t c = kNeoCyan;
+        d.fillRoundRect(x + 2, y + 4, s - 4, s - 11, 4, c);
+        d.drawRoundRect(x + 2, y + 4, s - 4, s - 11, 4, kInk);
+        d.fillTriangle(x + 7, y + s - 7, x + 15, y + s - 7, x + 7, y + s - 1, c);
+        d.drawLine(x + 7, y + s - 7, x + 7, y + s - 1, kInk);
+        d.fillRect(x + 9, y + 10, s - 18, 2, kInk);
+        d.fillRect(x + 9, y + 15, s - 24, 2, kInk);
     } else if (id == "wifi") {
         const uint16_t c = kAccent;
         d.drawArc(cx, y + s - 6, 3, 5, 225, 315, c);

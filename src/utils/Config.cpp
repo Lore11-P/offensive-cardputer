@@ -4,6 +4,7 @@
 #include <LittleFS.h>
 #include <Preferences.h>
 #include <algorithm>
+#include <cstdio>
 
 #include "Logger.h"
 #include "Storage.h"
@@ -36,14 +37,40 @@ bool bitFor(Module module, uint16_t& mask) {
     return true;
 }
 
+std::string defaultChatNickname() {
+    char buf[8];
+    std::snprintf(buf, sizeof(buf), "CP%04X",
+                  static_cast<unsigned>(ESP.getEfuseMac() & 0xFFFF));
+    return buf;
+}
+
+std::string sanitizeChatNickname(const std::string& value) {
+    std::string out;
+    out.reserve(kChatNicknameMax);
+    for (char c : value) {
+        if (out.size() >= kChatNicknameMax) {
+            break;
+        }
+        if (c >= 0x20 && c < 0x7F) {
+            out.push_back(c);
+        }
+    }
+    while (!out.empty() && out.back() == ' ') {
+        out.pop_back();
+    }
+    return out.empty() ? defaultChatNickname() : out;
+}
+
 void applyDefaults() {
     g_settings = Settings();
+    g_settings.chatNickname = defaultChatNickname();
 }
 
 void refreshCompiledModules() {
     // Un modulo non compilato non deve mai risultare attivo a runtime.
     const Module modules[] = {Module::Ble,   Module::Wifi, Module::Ir,  Module::Games,
-                              Module::Settings, Module::Sd, Module::Radar, Module::Radio};
+                              Module::Settings, Module::Sd, Module::Radar, Module::Radio,
+                              Module::Chat};
     for (Module m : modules) {
         if (!moduleCompiled(m)) {
             uint16_t bit = 0;
@@ -87,6 +114,9 @@ void begin() {
         g_settings.sleepTimeoutSec = g_prefs.getUShort("sleep_s", 120);
         g_settings.radarSensitivity =
             static_cast<uint8_t>(std::max(1, std::min(5, static_cast<int>(g_prefs.getUChar("radar_s", 3)))));
+        const String storedNickname =
+            g_prefs.getString("chat_nick", defaultChatNickname().c_str());
+        g_settings.chatNickname = sanitizeChatNickname(storedNickname.c_str());
         refreshCompiledModules();
     }
 }
@@ -108,6 +138,7 @@ void save() {
     g_prefs.putUShort("ir_tvd", g_settings.irTvbgDelayMs);
     g_prefs.putUShort("sleep_s", g_settings.sleepTimeoutSec);
     g_prefs.putUChar("radar_s", g_settings.radarSensitivity);
+    g_prefs.putString("chat_nick", g_settings.chatNickname.c_str());
     g_prefs.putUInt("magic", kConfigMagic);
 }
 
@@ -157,6 +188,8 @@ bool moduleCompiled(Module module) {
             return ENABLE_MODULE_RADAR;
         case Module::Radio:
             return ENABLE_MODULE_RADIO;
+        case Module::Chat:
+            return ENABLE_MODULE_CHAT && ENABLE_MODULE_BLE;
         default:
             return false;
     }
@@ -246,6 +279,15 @@ void setRadarSensitivity(uint8_t level) {
     save();
 }
 
+std::string chatNickname() {
+    return g_settings.chatNickname;
+}
+
+void setChatNickname(const std::string& nickname) {
+    g_settings.chatNickname = sanitizeChatNickname(nickname);
+    save();
+}
+
 std::string toJson() {
     JsonDocument doc;
     doc["version"] = 1;
@@ -262,6 +304,10 @@ std::string toJson() {
     modules["sd"] = moduleEnabled(Module::Sd);
     modules["radar"] = moduleEnabled(Module::Radar);
     modules["radio"] = moduleEnabled(Module::Radio);
+    modules["chat"] = moduleEnabled(Module::Chat);
+
+    JsonObject chat = doc["chat"].to<JsonObject>();
+    chat["nickname"] = g_settings.chatNickname;
 
     JsonObject ble = doc["ble"].to<JsonObject>();
     ble["duration_sec"] = g_settings.bleDurationSec;
@@ -275,7 +321,7 @@ std::string toJson() {
     radarCfg["sensitivity"] = g_settings.radarSensitivity;
 
     std::string out;
-    out.reserve(384);
+    out.reserve(512);
     serializeJson(doc, out);
     return out;
 }
@@ -305,6 +351,12 @@ bool applyJson(const char* json, size_t len) {
         if (modules["sd"].is<bool>()) setModuleEnabled(Module::Sd, modules["sd"].as<bool>());
         if (modules["radar"].is<bool>()) setModuleEnabled(Module::Radar, modules["radar"].as<bool>());
         if (modules["radio"].is<bool>()) setModuleEnabled(Module::Radio, modules["radio"].as<bool>());
+        if (modules["chat"].is<bool>()) setModuleEnabled(Module::Chat, modules["chat"].as<bool>());
+    }
+
+    if (doc["chat"].is<JsonObject>() && doc["chat"]["nickname"].is<const char*>()) {
+        g_settings.chatNickname =
+            sanitizeChatNickname(doc["chat"]["nickname"].as<std::string>());
     }
 
     if (doc["ble"].is<JsonObject>()) {

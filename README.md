@@ -14,6 +14,7 @@ Firmware modulare per **M5Stack Cardputer ADV** (ESP32-S3FN8, 8 MB flash, **senz
 | Giochi | ✅ | Tetris, Breakout, Doom Lite, Snake, Pong, 2048, Flappy, Simon, Minesweeper e Connect 4 con record su SD |
 | Infrarossi | ✅ | Parser `.ir` Flipper, ricerca per nome, preferiti, ripresa ultimo telecomando, tasti rapidi, scanner Power, TV-B-Gone, jammer opzionale, learn disabilitato |
 | BLE | ✅ | Scanner passivo/attivo, spam Random/Samsung/Google/Windows opzionale |
+| Chat BLE | ✅ | Messaggi broadcast tra Cardputer vicini, nickname configurabile e cronologia locale |
 | Wi-Fi | ✅ | Scanner reti, deauth/evil twin/evil portal opzionali |
 | Radar Wi-Fi/BLE | ✅ | Finder BLE hot/cold con HUD stile contatore Geiger, radar PPI, vista banda 2.4 GHz con TDM Wi-Fi/BLE, presenza CSI sperimentale |
 | Web Radio | ✅ | 5 stazioni HTTP MP3 con decoder ESP32-audioI2S, volume, stato; usa il bus I2S dello speaker |
@@ -37,6 +38,7 @@ Firmware modulare per **M5Stack Cardputer ADV** (ESP32-S3FN8, 8 MB flash, **senz
 - **IR tasti rapidi**: dentro un telecomando `P` = Power, `M` = Mute, `=`/`+` = Volume +, `-` = Volume −, `C` = Canale +, `X` = Canale −. Il tasto sposta la selezione sul comando, lo invia e `ENTER` lo ripete.
 - **IR ripresa**: l'ultimo telecomando aperto compare come prima voce ("Riprendi marca/modello") ed è salvato in NVS.
 - **BLE**: scansione con nome, MAC e RSSI; spam con MAC casuale e modalità Random, Apple, Samsung, Google Fast Pair e Windows SwiftPair.
+- **Chat BLE**: messaggi brevi (max 19 caratteri) scambiati via advertising BLE legacy, senza pairing. `ENTER` scrive, `` ` `` esce; il menu Chat permette di cambiare nickname (max 6 caratteri) e mostra i dispositivi vicini. La cronologia locale conserva gli ultimi 8 messaggi. All'ingresso forza l'indirizzo pubblico, così il filtro dei propri pacchetti resta corretto anche dopo BLE spam.
 - **Wi-Fi**: scanner con dettagli; deauth con limite di 60 s; evil twin/portal con credenziali **solo in RAM** e cancellate all'uscita.
 - **Radar**: modulo passivo (nessuna trasmissione). *Find BLE* insegue un singolo beacon/tag con media mobile dell'RSSI, distanza stimata dal modello log-distanza, gauge, barra a 16 segmenti con Peak Hold e indicatori `WARMER`/`COLDER`/`HOTSPOT`, con **bussola** (gyro BMI270) e freccia verso la direzione stimata. La voce *Sensibilità* (livelli 1–5, salvata in NVS) regola quanto rapidamente il tic accelera con la distanza: 5 = reattivo già a media distanza, 1 = solo da molto vicino; la schermata mostra l'anteprima in ms a −70/−55/−40 dBm. *Radar BLE* mostra tutti i dispositivi come blip su un PPI con sweep continuo, ancorati al mondo tramite la bussola. *Banda 2.4 GHz* misura i canali Wi-Fi 1–13 con lo sniffer promiscuo in modo continuo (cornice che scorre sui canali, fase BLE, picchi) e sovrappone i tre canali advertising BLE 37/38/39 sulla stessa scala di frequenza, dichiarando il riparto TDM del tempo radio. *Presenza CSI* usa il motore Channel State Information dell'ESP32-S3 con calibrazione su ambiente vuoto.
 - **Spegnimento automatico**: dopo un tempo configurabile di inattività (30 s, 1, 2, 5, 10, 15 o 30 min, oppure disattivato) il dispositivo **abbassa la luminosità** (12/255) e, se non arriva un tasto entro 10 secondi, si spegne. Qualsiasi tasto annulla e ripristina la luminosità. Nelle schermate di sola osservazione (radar, banda, CSI, radio) il timer è sospeso.
@@ -94,6 +96,7 @@ Ogni modulo si esclude dalla build con il proprio flag (in `platformio.ini` o in
 
 | Flag | Default | Effetto quando vale 0 |
 |---|---|---|
+| `ENABLE_MODULE_CHAT` | 1 | esclude `src/modules/chat/`; richiede comunque `ENABLE_MODULE_BLE=1` |
 | `ENABLE_MODULE_RADAR` | 1 | esclude `src/modules/radar/` (Finder BLE, PPI, banda, CSI) |
 | `ENABLE_MODULE_RADIO` | 1 | esclude `src/modules/radio/` (web radio) |
 | `ENABLE_RADAR_CSI` | 1 | compila il radar ma toglie la sola voce "Presenza CSI" |
@@ -180,6 +183,7 @@ cardputer firmware/
 │   ├── utils/                # storage, configurazione, rete, input testuale
 │   └── modules/
 │       ├── ble/              # scanner + spam (payload separati)
+│       ├── chat/             # chat BLE broadcast
 │       ├── wifi/             # scanner + test sicurezza
 │       ├── radar/            # finder BLE, PPI, banda 2.4 GHz, presenza CSI
 │       ├── radio/            # web radio MP3 via ESP32-audioI2S
@@ -200,6 +204,7 @@ Le impostazioni sono salvate in NVS nel namespace `cardputer-fw`:
 
 - luminosità (10–255), rotazione (0–3);
 - maschera moduli attivi (runtime);
+- nickname Chat BLE (`chat_nick`, default `CPxxxx` dal MAC efuse, max 6 caratteri);
 - durata spam BLE, intervallo advertising, ripetizioni IR, ritardo TV-B-Gone;
 - spegnimento automatico in secondi (`sleep_timeout_sec`: 0 = disattivato, 30, 60, 120, 300, 600, 900, 1800), default 120.
 
@@ -239,6 +244,7 @@ Protocolli parsed supportati: `NEC`, `NECext`, `Samsung32`, `LG`, `Sony`/`SIRC12
 - Radar: il "single target" del progetto originale ricava anche un bearing con IMU e schermatura del corpo. Qui non c'è bussola: `WARMER`/`COLDER` indicano solo la variazione di distanza stimata, non la direzione.
 - Radar CSI (`ENABLE_RADAR_CSI`): le API `esp_wifi_set_csi_rx_cb/_config/_set_csi` esistono su ESP32-S3 in arduino-esp32 2.0.16 e `CONFIG_ESP32_WIFI_CSI_ENABLED=1` nella sdkconfig precompilata, ma senza un access point che generi traffico arrivano solo i beacon degli AP vicini (10–30 frame/s). La sensibilità è quindi molto inferiore al progetto di riferimento (290–320 pkt/s iniettati). Va verificata su hardware e va ricalibrata a ogni cambio canale.
 - Web Radio: solo stream **HTTP in MP3/AAC** (niente HTTPS: il decoder non ha un client TLS e la RAM è contata) e una stazione alla volta. Durante l'ascolto il bus I2S è del decoder, quindi i beep del radar non suonano; il decoder consuma ~40 KB di heap, quindi conviene non ascoltare con radar/BLE attivi insieme. Se una stazione cambia URL va aggiornata la tabella `kStations` in `src/modules/radio/RadioMenu.cpp`.
+- Chat BLE: i messaggi viaggiano in chiaro negli advertising BLE e sono visibili a chiunque sia nel raggio; non usarla per dati sensibili. Funziona solo tra Cardputer con Chat aperta e non garantisce la consegna se il dispositivo è fuori portata. L'ingresso in Chat forza l'indirizzo pubblico, quindi non eredita il MAC random del BLE spam.
 - Il progetto è compilato e verificato a livello di build; il collaudo su hardware reale è a carico dell'utente.
 
 ## Licenza

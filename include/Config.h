@@ -10,7 +10,23 @@
 // namespace NVS dedicato "cpfw-net" (vedi utils/WifiSetup.cpp).
 namespace config {
 
-enum class Module : uint8_t { Ble = 0, Wifi, Ir, Games, Settings, Sd, Radar, Radio, Count };
+// Nuove voci vanno aggiunte in fondo (prima di Count) per non cambiare il
+// significato dei bit gia' salvati in NVS.
+enum class Module : uint8_t {
+    Ble = 0,
+    Wifi,
+    Ir,
+    Games,
+    Settings,
+    Sd,
+    Radar,
+    Radio,
+    Chat,
+    Count
+};
+
+// Lunghezza massima del nickname usato nei pacchetti chat.
+constexpr size_t kChatNicknameMax = 6;
 
 struct Settings {
     uint8_t brightness = 128;      // 10..255
@@ -25,6 +41,9 @@ struct Settings {
     // Sensibilita' del radar BLE (1..5): controlla quanto rapidamente il tic
     // del finder accelera al diminuire della distanza. 5 = molto reattivo.
     uint8_t radarSensitivity = 3;
+
+    // Nickname mostrato nella chat BLE (max kChatNicknameMax caratteri).
+    std::string chatNickname;
 };
 
 void begin();
@@ -56,6 +75,10 @@ void setSleepTimeoutSec(uint16_t seconds);
 // Sensibilita' del radar BLE (1..5).
 uint8_t radarSensitivity();
 void setRadarSensitivity(uint8_t level);
+
+// Nickname della chat BLE, sanificato e non vuoto.
+std::string chatNickname();
+void setChatNickname(const std::string& nickname);
 
 // JSON non sensibile, utile per backup della configurazione.
 std::string toJson();

@@ -271,6 +271,7 @@ struct ToggleRow {
 void runModules() {
     const ToggleRow rows[] = {
         {"BLE", "ble", config::Module::Ble},
+        {"Chat", "chat", config::Module::Chat},
         {"WiFi", "wifi", config::Module::Wifi},
         {"Radar", "radar", config::Module::Radar},
         {"Radio", "tv", config::Module::Radio},

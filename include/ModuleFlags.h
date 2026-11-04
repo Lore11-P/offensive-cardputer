@@ -9,6 +9,11 @@
 #define ENABLE_MODULE_BLE 1
 #endif
 
+// Chat BLE tra Cardputer (richiede ENABLE_MODULE_BLE=1).
+#ifndef ENABLE_MODULE_CHAT
+#define ENABLE_MODULE_CHAT 1
+#endif
+
 #ifndef ENABLE_MODULE_WIFI
 #define ENABLE_MODULE_WIFI 1
 #endif

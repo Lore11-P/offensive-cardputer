@@ -22,6 +22,9 @@
 #if ENABLE_MODULE_BLE
 #include "modules/ble/BleSpam.h"
 #endif
+#if ENABLE_MODULE_CHAT && ENABLE_MODULE_BLE
+#include "modules/chat/Chat.h"
+#endif
 #if ENABLE_MODULE_WIFI
 #include "modules/wifi/WifiMenu.h"
 #endif
@@ -67,6 +70,9 @@ void buildAndRunMainMenu() {
 
 #if ENABLE_MODULE_BLE
     menu.addItem("BLE", "ble", guardedModule("BLE", config::Module::Ble, ble::runMenu));
+#endif
+#if ENABLE_MODULE_CHAT && ENABLE_MODULE_BLE
+    menu.addItem("Chat", "chat", guardedModule("Chat", config::Module::Chat, chat::runMenu));
 #endif
 #if ENABLE_MODULE_WIFI
     menu.addItem("WiFi", "wifi", guardedModule("WiFi", config::Module::Wifi, wifi::runMenu));
