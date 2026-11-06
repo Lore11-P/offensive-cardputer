@@ -11,6 +11,7 @@
 #include "Display.h"
 #include "MenuManager.h"
 #include "Navigation.h"
+#include "OtaUpdate.h"
 #include "Storage.h"
 #include "Ui.h"
 #include "WifiSetup.h"
@@ -390,6 +391,7 @@ void run() {
     menu.addItem("Spegnimento auto", "settings", runSleepTimer);
     menu.addItem("Info dispositivo", "scan", showInfo);
     menu.addItem("Rete WiFi", "wifi", [] { wifisetup::runSettings("Impostazioni"); });
+    menu.addItem("Aggiorna firmware", "scan", [] { ota::run("Impostazioni"); });
     menu.addItem("Moduli attivi", "lock", runModules);
     menu.addItem("Salva config su FS", "lock", exportConfig);
     menu.addItem("Importa config", "lock", importConfig);

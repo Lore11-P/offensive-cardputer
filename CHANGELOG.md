@@ -14,6 +14,8 @@ Tutte le modifiche rilevanti del progetto. Formato basato su Keep a Changelog.
   - *Banda 2.4 GHz*: misura reale dei canali Wi-Fi 1–13 con sniffer promiscuo (frame/s per canale, peak hold), canali advertising BLE 37/38/39 sulla stessa scala di frequenza, riparto TDM del tempo radio e nota di coesistenza.
   - *Presenza CSI*: cattura Channel State Information con calibrazione su ambiente vuoto, spike rejector per gli aggiustamenti di AGC e indicatore di movimento (`ENABLE_RADAR_CSI`).
 - Credenziali Wi-Fi in namespace NVS dedicato `cpfw-net`, cancellabili da menu.
+- **Aggiornamento OTA via WiFi** (`include/OtaUpdate.h` + `src/utils/OtaUpdate.cpp`, voce **Impostazioni → Aggiorna firmware**): connette la rete salvata, scarica `flasher/bin/firmware.bin` dal ramo `main` del repository GitHub via HTTPS e lo scrive nella partizione OTA inattiva con `Update.h`. Mostra percentuale e MB scaricati, `` ` `` annulla senza toccare il firmware in esecuzione, al termine riavvia. URL fisso, firmware non firmato: vedi i limiti noti.
+- `partitions.csv`: layout dual-OTA con `app0`/`app1` da 2 MB e `otadata`, LittleFS invariata a `0x410000`. Consente gli update OTA senza rischiare il firmware attivo.
 - Nuova voce **Impostazioni > Rete WiFi**: scanner delle reti (SSID, RSSI, canale, cifratura), scelta dall'elenco, inserimento della sola password, salvataggio in NVS, test di connessione (IP/gateway/RSSI), inserimento manuale per reti nascoste e cancellazione delle credenziali.
 - `utils/WifiSetup` (`include/WifiSetup.h` + `src/utils/WifiSetup.cpp`): unico punto che salva la password Wi-Fi (namespace `cpfw-net`), usato da Impostazioni > Rete WiFi.
 - `utils/TextInput` (`include/TextInput.h` + `src/utils/TextInput.cpp`): editor di testo a schermo condiviso (campi normali, password mascherate, valori numerici), usato dalla configurazione rete e dalla ricerca IR.
@@ -38,6 +40,7 @@ Tutte le modifiche rilevanti del progetto. Formato basato su Keep a Changelog.
 
 ### Modificato
 
+- `partitions.csv`: da un solo slot app da 4 MB a due slot da 2 MB (`app0`/`app1`) per abilitare l'OTA. I device già flashati devono fare un flash USB una tantum del nuovo layout; LittleFS resta a `0x410000`, quindi i dati non si spostano.
 - `SettingsMenu`: elenco dei moduli attivi scrollabile (6 voci su 5 righe visibili) con indicatore di posizione.
 - Il menu principale e il menu Giochi non usano piu' la griglia 3x2: il carosello mostra una voce alla volta con le adiacenti in anteprima.
 - Il menu Telecomandi usa una griglia 3 colonne; marche e file restano liste/griglie per una consultazione piu' rapida.

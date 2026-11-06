@@ -18,6 +18,7 @@ Firmware modulare per **M5Stack Cardputer ADV** (ESP32-S3FN8, 8 MB flash, **senz
 | Wi-Fi | ✅ | Scanner reti, deauth/evil twin/evil portal opzionali |
 | Radar Wi-Fi/BLE | ✅ | Finder BLE hot/cold con HUD stile contatore Geiger, radar PPI, vista banda 2.4 GHz con TDM Wi-Fi/BLE, presenza CSI sperimentale |
 | Web Radio | ✅ | 5 stazioni HTTP MP3 con decoder ESP32-audioI2S, volume, stato; usa il bus I2S dello speaker |
+| Aggiornamento OTA | ✅ | Da WiFi: scarica `firmware.bin` dal ramo `main` del repo GitHub e lo scrive nella partizione inattiva; richiede il layout dual-OTA (`partitions.csv`) |
 | microSD | ✅ | File browser, info spazio, screenshot BMP, backup config e punteggi |
 | Database IR | 🟡 | 307 file .ir, 38 cartelle: 32 marche TV complete, 5 parziali, 3 coperte da Universale; verifica i codici sui tuoi apparecchi |
 | Asset icone 32×32 | ✅ | BMP 24 bit generati, con fallback se assenti |
@@ -44,13 +45,14 @@ Firmware modulare per **M5Stack Cardputer ADV** (ESP32-S3FN8, 8 MB flash, **senz
 - **Spegnimento automatico**: dopo un tempo configurabile di inattività (30 s, 1, 2, 5, 10, 15 o 30 min, oppure disattivato) il dispositivo **abbassa la luminosità** (12/255) e, se non arriva un tasto entro 10 secondi, si spegne. Qualsiasi tasto annulla e ripristina la luminosità. Nelle schermate di sola osservazione (radar, banda, CSI, radio) il timer è sospeso.
 - **Web Radio**: stazioni pubbliche in MP3 su HTTP (`SomaFM Groove Salad/Drone Zone/Lush`, `Radio Paradise`, `FIP`). `;`/`.` regolano il volume, `ENTER` ferma, `` ` `` esce. Il decoder prende il bus I2S dello speaker: durante l'ascolto `M5.Speaker` è chiuso (quindi niente beep del radar) e viene riaperto all'uscita. I pin I2S si leggono a runtime da `M5.Speaker.config()`.
 - **Rete WiFi**: configurazione in **Impostazioni → Rete WiFi**. Scansiona le reti vicine (SSID, RSSI, canale, cifratura, `*` = aperta), fa scegliere la rete dall'elenco, chiede solo la password e la salva; in alternativa permette l'inserimento manuale dell'SSID (reti nascoste), il test di connessione con IP/gateway/RSSI e la cancellazione delle credenziali.
+- **Aggiornamento OTA via WiFi**: **Impostazioni → Aggiorna firmware** connette la rete salvata, scarica `flasher/bin/firmware.bin` dal ramo `main` di [github.com/Lore11-P/offensive-cardputer](https://github.com/Lore11-P/offensive-cardputer) via HTTPS e lo scrive nella partizione OTA inattiva con `Update.h`, mostrando percentuale e dimensione; `` ` `` annulla senza toccare il firmware in esecuzione. Al termine il dispositivo si riavvia sulla nuova build. Per aggiornare il device basta quindi pubblicare un nuovo `flasher/bin/firmware.bin` sul ramo `main`.
 
 ## Hardware
 
 | Voce | Valore |
 |---|---|
 | MCU | ESP32-S3FN8, 240 MHz, 320 KB SRAM |
-| Flash | 8 MB (partizione app 4 MB + LittleFS 3,9 MB) |
+| Flash | 8 MB (2 slot app da 2 MB per OTA + LittleFS 3,9 MB) |
 | Display | 1.14" 240×135 |
 | Tastiera | 56 tasti (frecce: `;` `.` `,` `/`) |
 | IR TX | GPIO 44 |
@@ -127,6 +129,21 @@ python -m platformio run -t upload --upload-port COM5
 
 In caso di problemi, tenere premuto il tasto di boot (G0) e reinserire il cavo USB.
 
+### Aggiornamento OTA via WiFi
+
+`partitions.csv` usa **due slot applicativi da 2 MB** (`app0`/`app1`): `Update.h` scrive sempre lo slot inattivo, quindi un aggiornamento interrotto non danneggia il firmware in esecuzione. Il firmware deve restare sotto i 2 MB.
+
+**Prima installazione (una volta sola, via USB):** i dispositivi che hanno ancora il layout precedente a slot singolo devono essere riflash con `bootloader.bin`, `partitions.bin` e `firmware.bin` aggiornati (web flasher o `flasher\flash.bat`). LittleFS resta allo stesso offset `0x410000`, quindi i dati non cambiano posizione.
+
+Dopo il primo flash USB, gli aggiornamenti si fanno dalla Cardputer:
+
+1. configura la rete una volta da **Impostazioni → Rete WiFi** (credenziali salvate in NVS);
+2. pubblica il nuovo `flasher/bin/firmware.bin` sul ramo `main` del repository;
+3. sulla Cardputer apri **Impostazioni → Aggiorna firmware**, conferma con ENTER e attendi: la schermata mostra percentuale e MB scaricati;
+4. al termine il device si riavvia da solo sulla nuova build. `` ` `` annulla durante il download.
+
+> L'URL è fisso (`raw.githubusercontent.com/.../main/flasher/bin/firmware.bin`). Il traffico è cifrato con TLS ma **il firmware non è firmato**: non c'è verifica crittografica dell'immagine, quindi pubblica solo build che hai compilato tu. Se la tabella partizioni non è quella dual-OTA la scrittura viene rifiutata e il firmware attuale resta intatto.
+
 ## Flash pronto all'uso (senza toolchain)
 
 La cartella `flasher/` contiene:
@@ -180,7 +197,7 @@ cardputer firmware/
 ├── src/
 │   ├── main.cpp
 │   ├── core/                 # display, menu, navigazione, UI
-│   ├── utils/                # storage, configurazione, rete, input testuale
+│   ├── utils/                # storage, configurazione, rete, input testuale, OTA
 │   └── modules/
 │       ├── ble/              # scanner + spam (payload separati)
 │       ├── chat/             # chat BLE broadcast
@@ -245,6 +262,7 @@ Protocolli parsed supportati: `NEC`, `NECext`, `Samsung32`, `LG`, `Sony`/`SIRC12
 - Radar CSI (`ENABLE_RADAR_CSI`): le API `esp_wifi_set_csi_rx_cb/_config/_set_csi` esistono su ESP32-S3 in arduino-esp32 2.0.16 e `CONFIG_ESP32_WIFI_CSI_ENABLED=1` nella sdkconfig precompilata, ma senza un access point che generi traffico arrivano solo i beacon degli AP vicini (10–30 frame/s). La sensibilità è quindi molto inferiore al progetto di riferimento (290–320 pkt/s iniettati). Va verificata su hardware e va ricalibrata a ogni cambio canale.
 - Web Radio: solo stream **HTTP in MP3/AAC** (niente HTTPS: il decoder non ha un client TLS e la RAM è contata) e una stazione alla volta. Durante l'ascolto il bus I2S è del decoder, quindi i beep del radar non suonano; il decoder consuma ~40 KB di heap, quindi conviene non ascoltare con radar/BLE attivi insieme. Se una stazione cambia URL va aggiornata la tabella `kStations` in `src/modules/radio/RadioMenu.cpp`.
 - Chat BLE: i messaggi sono offuscati con AES-128-CBC ma la chiave deriva dai nickname pubblici, quindi non è una cifratura end-to-end robusta: chi conosce mittente e destinatario può decifrare. La verifica di unicità del nickname funziona solo con gli altri dispositivi che hanno la Chat aperta. Funziona solo tra dispositivi compatibili con il protocollo v2 e non garantisce la consegna se il destinatario è fuori portata. L'ingresso in Chat forza l'indirizzo pubblico, quindi non eredita il MAC random del BLE spam.
+- OTA: il firmware scaricato dal repository **non è firmato né verificato** (solo TLS verso l'host), quindi chi può scrivere sul ramo `main` può distribuire una build arbitraria. Richiede il layout dual-OTA: la prima volta serve un flash USB della nuova tabella partizioni. Il download consuma heap per il client TLS: su device con poca memoria libera può fallire senza danni.
 - Il progetto è compilato e verificato a livello di build; il collaudo su hardware reale è a carico dell'utente.
 
 ## Licenza
