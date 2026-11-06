@@ -6,7 +6,7 @@ Tutte le modifiche rilevanti del progetto. Formato basato su Keep a Changelog.
 
 ### Aggiunto
 
-- **Chat BLE** (`src/modules/chat/`, `ENABLE_MODULE_CHAT`): messaggi broadcast tra Cardputer vicini tramite advertising BLE legacy, senza pairing, con nickname configurabile (max 6 caratteri), cronologia degli ultimi 8 messaggi e conteggio dei dispositivi attivi. All'ingresso forza l'indirizzo pubblico per non ereditare il MAC random del BLE spam.
+- **Chat BLE** (`src/modules/chat/`, `ENABLE_MODULE_CHAT`): messaggi broadcast tra Cardputer vicini tramite advertising BLE legacy, senza pairing, con nickname configurabile (max 6 caratteri), destinatario predefinito, payload cifrato AES-128-CBC, filtro per nickname, verifica di unicità del nickname, cronologia degli ultimi 8 messaggi e conteggio dei dispositivi attivi. All'ingresso forza l'indirizzo pubblico per non ereditare il MAC random del BLE spam.
 - Indicatore batteria nella barra superiore: percentuale, colore per livello e stato di carica, visibile in tutte le schermate con header.
 - Modulo **Radar** (`src/modules/radar/`, `ENABLE_MODULE_RADAR`): modulo passivo che ricostruisce per comportamento osservato le funzioni del "Wi-Fi & BLE Radar ADV" closed source.
   - *Find BLE*: inseguimento di un singolo beacon/tag con media mobile esponenziale dell'RSSI, distanza stimata con modello log-distanza, gauge circolare, barra a 16 segmenti con Peak Hold, indicatori `WARMER`/`COLDER`/`HOTSPOT`, tic audio in stile contatore Geiger e timeout di link.
@@ -41,6 +41,7 @@ Tutte le modifiche rilevanti del progetto. Formato basato su Keep a Changelog.
 - `SettingsMenu`: elenco dei moduli attivi scrollabile (6 voci su 5 righe visibili) con indicatore di posizione.
 - Il menu principale e il menu Giochi non usano piu' la griglia 3x2: il carosello mostra una voce alla volta con le adiacenti in anteprima.
 - Il menu Telecomandi usa una griglia 3 colonne; marche e file restano liste/griglie per una consultazione piu' rapida.
+- Chat BLE: protocollo v2 con messaggi da 15 caratteri, chiave derivata da mittente/destinatario e verifica del nickname prima del salvataggio.
 - README e CHANGELOG aggiornati con i nuovi comandi, i giochi, le funzioni IR, il modulo Radar, i flag e i limiti noti.
 
 ### Corretto

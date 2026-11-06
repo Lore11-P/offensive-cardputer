@@ -44,7 +44,8 @@ std::string defaultChatNickname() {
     return buf;
 }
 
-std::string sanitizeChatNickname(const std::string& value) {
+std::string sanitizeChatName(const std::string& value,
+                             const std::string& fallback) {
     std::string out;
     out.reserve(kChatNicknameMax);
     for (char c : value) {
@@ -58,12 +59,17 @@ std::string sanitizeChatNickname(const std::string& value) {
     while (!out.empty() && out.back() == ' ') {
         out.pop_back();
     }
-    return out.empty() ? defaultChatNickname() : out;
+    return out.empty() ? fallback : out;
+}
+
+std::string sanitizeChatNickname(const std::string& value) {
+    return sanitizeChatName(value, defaultChatNickname());
 }
 
 void applyDefaults() {
     g_settings = Settings();
     g_settings.chatNickname = defaultChatNickname();
+    g_settings.chatRecipient = g_settings.chatNickname;
 }
 
 void refreshCompiledModules() {
@@ -117,6 +123,10 @@ void begin() {
         const String storedNickname =
             g_prefs.getString("chat_nick", defaultChatNickname().c_str());
         g_settings.chatNickname = sanitizeChatNickname(storedNickname.c_str());
+        const String storedRecipient =
+            g_prefs.getString("chat_to", g_settings.chatNickname.c_str());
+        g_settings.chatRecipient =
+            sanitizeChatName(storedRecipient.c_str(), g_settings.chatNickname);
         refreshCompiledModules();
     }
 }
@@ -139,6 +149,7 @@ void save() {
     g_prefs.putUShort("sleep_s", g_settings.sleepTimeoutSec);
     g_prefs.putUChar("radar_s", g_settings.radarSensitivity);
     g_prefs.putString("chat_nick", g_settings.chatNickname.c_str());
+    g_prefs.putString("chat_to", g_settings.chatRecipient.c_str());
     g_prefs.putUInt("magic", kConfigMagic);
 }
 
@@ -288,6 +299,16 @@ void setChatNickname(const std::string& nickname) {
     save();
 }
 
+std::string chatRecipient() {
+    return g_settings.chatRecipient;
+}
+
+void setChatRecipient(const std::string& recipient) {
+    g_settings.chatRecipient =
+        sanitizeChatName(recipient, g_settings.chatNickname);
+    save();
+}
+
 std::string toJson() {
     JsonDocument doc;
     doc["version"] = 1;
@@ -308,6 +329,7 @@ std::string toJson() {
 
     JsonObject chat = doc["chat"].to<JsonObject>();
     chat["nickname"] = g_settings.chatNickname;
+    chat["recipient"] = g_settings.chatRecipient;
 
     JsonObject ble = doc["ble"].to<JsonObject>();
     ble["duration_sec"] = g_settings.bleDurationSec;
@@ -357,6 +379,10 @@ bool applyJson(const char* json, size_t len) {
     if (doc["chat"].is<JsonObject>() && doc["chat"]["nickname"].is<const char*>()) {
         g_settings.chatNickname =
             sanitizeChatNickname(doc["chat"]["nickname"].as<std::string>());
+    }
+    if (doc["chat"].is<JsonObject>() && doc["chat"]["recipient"].is<const char*>()) {
+        g_settings.chatRecipient = sanitizeChatName(
+            doc["chat"]["recipient"].as<std::string>(), g_settings.chatNickname);
     }
 
     if (doc["ble"].is<JsonObject>()) {
