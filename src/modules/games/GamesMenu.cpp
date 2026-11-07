@@ -1,6 +1,7 @@
 #include "GamesMenu.h"
 
 #include "Breakout.h"
+#include "Chess.h"
 #include "Config.h"
 #include "Connect4.h"
 #include "Display.h"
@@ -9,6 +10,7 @@
 #include "Game2048.h"
 #include "MenuManager.h"
 #include "Minesweeper.h"
+#include "Pacman.h"
 #include "Pong.h"
 #include "Simon.h"
 #include "Snake.h"
@@ -46,6 +48,11 @@ void runMenu() {
     menu.addItem("Breakout", "games", [] {
         enterGameDisplay();
         runBreakout();
+        exitGameDisplay();
+    });
+    menu.addItem("Pac-Man", "pacman", [] {
+        enterGameDisplay();
+        runPacman();
         exitGameDisplay();
     });
     menu.addItem("Doom Lite", "doom", [] {
@@ -86,6 +93,11 @@ void runMenu() {
     menu.addItem("Connect 4", "connect4", [] {
         enterGameDisplay();
         runConnect4();
+        exitGameDisplay();
+    });
+    menu.addItem("Scacchi", "chess", [] {
+        enterGameDisplay();
+        runChess();
         exitGameDisplay();
     });
     menu.setCarousel();

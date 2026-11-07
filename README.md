@@ -11,7 +11,7 @@ Firmware modulare per **M5Stack Cardputer ADV** (ESP32-S3FN8, 8 MB flash, **senz
 |---|---|---|
 | Menu principale / UI / navigazione | ✅ | Carosello orizzontale a icone con animazione, griglia, breadcrumb e liste scrollabili |
 | Impostazioni | ✅ | Luminosità, rotazione, **spegnimento automatico**, info dispositivo, **rete WiFi** (scansione + password), moduli on/off, export/import JSON, reset |
-| Giochi | ✅ | Tetris, Breakout, Doom Lite, Snake, Pong, 2048, Flappy, Simon, Minesweeper e Connect 4 con record su SD |
+| Giochi | ✅ | Tetris, Breakout, Pac-Man, Doom Lite, Snake, Pong, 2048, Flappy, Simon, Minesweeper, Connect 4 e Scacchi con record su SD |
 | Infrarossi | ✅ | Parser `.ir` Flipper, ricerca per nome, preferiti, ripresa ultimo telecomando, tasti rapidi, scanner Power, TV-B-Gone, jammer opzionale, learn disabilitato |
 | BLE | ✅ | Scanner passivo/attivo, spam Random/Samsung/Google/Windows opzionale |
 | Chat BLE | ✅ | Messaggi cifrati AES e filtrati per destinatario, nickname unico e cronologia locale |
@@ -33,6 +33,7 @@ Firmware modulare per **M5Stack Cardputer ADV** (ESP32-S3FN8, 8 MB flash, **senz
 - **Storage** LittleFS + microSD opzionale (`/sd`), con fallback automatico e file browser.
 - **Configurazione** in NVS, export/import JSON (`/config.json`) senza dati sensibili; backup e screenshot su SD.
 - **Giochi interrompibili** con `` ` `` (ESC fisico), record persistenti su SD e ripristino della rotazione all'uscita.
+- **Scacchi** giocatore contro bot con tre difficolta' scelte a inizio partita, regole complete (arrocco, en passant, promozione, matto, stallo), annullamento dell'ultima coppia di mosse e storico navigabile.
 - **IR**: NEC/NECext, Samsung32, LG, Sony/SIRC, RC5/RC5X, RC6, JVC, Kaseikyo (Panasonic), RCA e comandi raw; preferiti in NVS, scanner Power per marca e anteprima dei telecomandi.
 - **IR UX**: Premi `F` in un telecomando per aggiungere/togliere il preferito. Lo scanner invia il tasto Power di ogni file e permette di salvarlo con `F`, ispirato a Ultimate-Remote.
 - **IR ricerca**: la voce **Cerca** interroga tutto il database per marca o modello (sottostringa, senza distinzione di maiuscole) e mostra i telecomandi trovati, senza navigare cartella per cartella.
@@ -185,7 +186,8 @@ Poi collega la Cardputer via USB e premi **Installa firmware**. Dettagli in `fla
 | `F` | Aggiungi/rimuovi il telecomando dai preferiti (menu comandi IR) |
 | `P` `M` `=`/`+` `-` `C` `X` | Dentro un telecomando: Power, Mute, Volume +, Volume −, Canale +, Canale − |
 | Frecce | Ripeti la sequenza in Simon |
-| `w` `a` `s` `d` | Movimento alternativo in Doom Lite |
+| `w` `a` `s` `d` | Movimento alternativo in Doom Lite e Pac-Man |
+| `H` / `U` | Scacchi: storico delle mosse / annulla l'ultima coppia di mosse |
 
 ## Struttura del progetto
 
@@ -205,7 +207,7 @@ cardputer firmware/
 │       ├── radar/            # finder BLE, PPI, banda 2.4 GHz, presenza CSI
 │       ├── radio/            # web radio MP3 via ESP32-audioI2S
 │       ├── ir/               # telecomandi, preferiti, scanner, TV-B-Gone, jammer
-│       ├── games/            # Tetris, Breakout, Doom, Snake, Pong, 2048, Flappy, Simon, Minesweeper, Connect 4
+│       ├── games/            # Tetris, Breakout, Pac-Man, Doom, Snake, Pong, 2048, Flappy, Simon, Minesweeper, Connect 4, Scacchi
 │       ├── sd/               # file browser, screenshot, backup
 │       └── settings/         # impostazioni e info
 ├── data/
@@ -254,7 +256,7 @@ Protocolli parsed supportati: `NEC`, `NECext`, `Samsung32`, `LG`, `Sony`/`SIRC12
 - Il modulo IR dispone solo del trasmettitore: `ENABLE_IR_LEARN=1` richiede un ricevitore esterno e codice dedicato.
 - Deauth è limitato a 60 secondi per build e va usato solo su reti proprie.
 - Evil Portal non salva nulla su disco; le credenziali restano in RAM, sono mostrate solo come conteggio e vengono cancellate all'uscita.
-- Doom Lite è un raycaster senza texture, con 3 mappe e nemici semplici.
+- Doom Lite è un raycaster con pareti texturizzate a mattoni, illuminazione per distanza e lato, pavimento in prospettiva, nemici animati e suoni; 3 settori con punteggio e record su SD.
 - Nessuna PSRAM: il framebuffer e le risorse sono dimensionati per la SRAM disponibile.
 - Radar: la radio è una sola, quindi Wi-Fi e BLE non possono ascoltare insieme. La vista banda alterna le due finestre (TDM) e mostra il riparto del tempo; durante la finestra BLE il ricevitore promiscuo Wi-Fi è spento.
 - Radar: NimBLE non espone il canale di ricezione di un advertising, quindi l'attività dei canali BLE 37/38/39 è **stimata** dal rate aggregato (ogni advertiser ripete lo stesso PDU sui tre canali); i canali Wi-Fi sono invece misurati davvero, uno per uno.

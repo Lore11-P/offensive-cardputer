@@ -400,6 +400,24 @@ void drawFallbackIcon(const std::string& id, int x, int y, int s) {
         d.fillRect(cx - 4, y + 21, 8, 5, kMuted);
         d.drawLine(cx - 5, y + 10, cx - 1, y + 14, kInk);
         d.drawLine(cx + 5, y + 10, cx + 1, y + 14, kInk);
+    } else if (id == "pacman") {
+        d.fillCircle(cx, cy + 2, r - 3, kNeoYellow);
+        d.fillTriangle(cx, cy + 2, x + s - 2, cy - 4, x + s - 2, cy + 9, kInk);
+        d.fillCircle(cx - 2, cy - 3, 1, kInk);
+    } else if (id == "chess") {
+        d.fillRect(x + 5, y + 6, 22, 22, kPaperLight);
+        for (int row = 0; row < 4; ++row) {
+            for (int col = 0; col < 4; ++col) {
+                if ((row + col) % 2 == 1) {
+                    d.fillRect(x + 5 + col * 5, y + 6 + row * 5, 5, 5, kInk);
+                }
+            }
+        }
+        d.drawRect(x + 5, y + 6, 22, 22, kInk);
+        d.fillCircle(cx, y + 15, 4, kNeoYellow);
+        d.drawCircle(cx, y + 15, 4, kInk);
+        d.fillRect(cx - 4, y + 19, 9, 3, kNeoYellow);
+        d.drawRect(cx - 4, y + 19, 9, 3, kInk);
     } else {
         // Fallback generico: riquadro con iniziale dell'icona.
         d.drawRoundRect(x + 2, y + 2, s - 4, s - 4, 4, kTextDim);

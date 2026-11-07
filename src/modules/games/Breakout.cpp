@@ -9,6 +9,7 @@
 #include "GamesMenu.h"
 #include "ModuleFlags.h"
 #include "Navigation.h"
+#include "Scores.h"
 
 #if ENABLE_MODULE_GAMES
 
@@ -92,6 +93,7 @@ void runBreakout() {
     bool won = false;
     int score = 0;
     int lives = 3;
+    uint32_t best = scores::best("breakout");
     uint32_t lastFrame = millis();
     uint32_t renderedAt = 0;
 
@@ -127,6 +129,9 @@ void runBreakout() {
         const uint32_t now = millis();
 
         if (ev.type == navigation::Event::Back) {
+            if (score > 0) {
+                scores::submit("breakout", static_cast<uint32_t>(score));
+            }
             break;
         }
 
@@ -247,6 +252,8 @@ void runBreakout() {
                     speed = std::min(150.0f, speed + 2.5f);
                     if (aliveBricks() == 0) {
                         won = true;
+                        scores::submit("breakout", static_cast<uint32_t>(score));
+                        best = std::max(best, static_cast<uint32_t>(score));
                     }
                     break;
                 }
@@ -256,6 +263,8 @@ void runBreakout() {
                 --lives;
                 if (lives <= 0) {
                     gameOver = true;
+                    scores::submit("breakout", static_cast<uint32_t>(score));
+                    best = std::max(best, static_cast<uint32_t>(score));
                 } else {
                     resetBall();
                 }
@@ -273,8 +282,10 @@ void runBreakout() {
                           display::kText, 0);
             display::text(96, 3, "VITE " + std::to_string(std::max(lives, 0)),
                           display::kText, 0);
-            display::text(160, 3, "PALLA " + std::to_string(static_cast<int>(speed)),
-                          display::kTextDim, 0);
+            display::text(
+                160, 3,
+                "REC " + std::to_string(std::max(best, static_cast<uint32_t>(score))),
+                display::kInfo, 0);
 
             for (int row = 0; row < kRows; ++row) {
                 for (int col = 0; col < kCols; ++col) {
