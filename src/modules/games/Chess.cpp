@@ -95,18 +95,77 @@ void pushHistory(const Position& before, const Move& mv) {
     moveToText(before, mv, entry.text, sizeof(entry.text));
 }
 
+constexpr int kSpriteSize = 11;
+
+constexpr uint16_t kPieceSprites[6][kSpriteSize] = {
+    {
+        0x0000, 0x0070, 0x00F8, 0x0070, 0x0020, 0x0070,
+        0x00F8, 0x00F8, 0x01FC, 0x01FC, 0x0000,
+    },
+    {
+        0x0000, 0x0154, 0x01FC, 0x01FC, 0x01FC, 0x00F8,
+        0x00F8, 0x00F8, 0x01FC, 0x01FC, 0x0000,
+    },
+    {
+        0x0000, 0x0050, 0x0070, 0x00F8, 0x00DC, 0x01FC,
+        0x02FC, 0x02F8, 0x01FC, 0x01FC, 0x0000,
+    },
+    {
+        0x0000, 0x0020, 0x0070, 0x00F8, 0x01FC, 0x01FC,
+        0x00F8, 0x0070, 0x01FC, 0x01FC, 0x0000,
+    },
+    {
+        0x0000, 0x0124, 0x01DC, 0x01FC, 0x00F8, 0x00F8,
+        0x00F8, 0x00F8, 0x01FC, 0x01FC, 0x0000,
+    },
+    {
+        0x0000, 0x0020, 0x0070, 0x0020, 0x0070, 0x00F8,
+        0x00F8, 0x00F8, 0x01FC, 0x01FC, 0x0000,
+    },
+};
+
+const uint16_t* pieceSprite(char piece) {
+    switch (upperOf(piece)) {
+        case 'P': return kPieceSprites[0];
+        case 'R': return kPieceSprites[1];
+        case 'N': return kPieceSprites[2];
+        case 'B': return kPieceSprites[3];
+        case 'Q': return kPieceSprites[4];
+        case 'K': return kPieceSprites[5];
+        default: return kPieceSprites[0];
+    }
+}
+
 void drawPiece(char piece, int cx, int cy) {
     auto& d = display::g();
     const bool white = isWhitePiece(piece);
-    d.fillCircle(cx, cy, 5, white ? display::kWhite : 0x18E3);
-    d.drawCircle(cx, cy, 5, white ? display::kInk : display::kText);
-    char buf[2] = {upperOf(piece), 0};
-    d.setFont(&fonts::Font0);
-    d.setTextSize(1.0f);
-    d.setTextDatum(0);
-    d.setTextWrap(false);
-    d.setTextColor(white ? display::kInk : display::kWhite);
-    d.drawString(buf, cx - 3, cy - 4);
+    const uint16_t fill = white ? display::kWhite : display::kHeader;
+    const uint16_t ink = white ? display::kInk : display::kWhite;
+    const uint16_t* sprite = pieceSprite(piece);
+    const int x0 = cx - kSpriteSize / 2;
+    const int y0 = cy - kSpriteSize / 2;
+    for (int r = 0; r < kSpriteSize; ++r) {
+        const uint16_t row = sprite[r];
+        for (int c = 0; c < kSpriteSize; ++c) {
+            const bool solid = (row & (1u << c)) != 0;
+            bool edge = false;
+            if (!solid) {
+                if (r > 0 && (sprite[r - 1] & (1u << c))) edge = true;
+                if (r + 1 < kSpriteSize && (sprite[r + 1] & (1u << c))) {
+                    edge = true;
+                }
+                if (c > 0 && (row & (1u << (c - 1)))) edge = true;
+                if (c + 1 < kSpriteSize && (row & (1u << (c + 1)))) {
+                    edge = true;
+                }
+            }
+            if (solid) {
+                d.drawPixel(x0 + c, y0 + r, fill);
+            } else if (edge) {
+                d.drawPixel(x0 + c, y0 + r, ink);
+            }
+        }
+    }
 }
 
 void drawDifficulty(int selected) {

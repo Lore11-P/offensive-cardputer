@@ -47,6 +47,7 @@ Tutte le modifiche rilevanti del progetto. Formato basato su Keep a Changelog.
 
 ### Modificato
 
+- **Pezzi degli scacchi disegnati come sprite** (`src/modules/games/Chess.cpp`): al posto delle lettere dentro un cerchio, ogni pezzo (pedone, torre, cavallo, alfiere, donna, re) usa una sagoma pixel-art 11×11 con contorno automatico, bianca o nera, riconoscibile a colpo d'occhio.
 - **Sospensione al posto del deep sleep** (`src/core/PowerTimer.cpp`): la Cardputer ADV non configurava alcuna sorgente di risveglio, quindi dopo lo spegnimento automatico il dispositivo non si riaccendeva piu'. Ora la sospensione e' software (retroilluminazione spenta, CPU a 80 MHz) e il risveglio avviene al primo tasto della tastiera o G0, senza perdita di stato; GPIO0 non viene usato come unica sorgente per evitare la modalita' download.
 - **Rotazione dei giochi robusta** (`GamesMenu::enterGameDisplay`): non si forza piu' l'indice 1, che su Cardputer ADV puo' corrispondere al portrait. Si provano le quattro rotazioni finche' il framebuffer non e' orizzontale (240x135), mantenendo il ripristino della rotazione dell'utente all'uscita.
 - `partitions.csv`: da un solo slot app da 4 MB a due slot da 2 MB (`app0`/`app1`) per abilitare l'OTA. I device già flashati devono fare un flash USB una tantum del nuovo layout; LittleFS resta a `0x410000`, quindi i dati non si spostano.
