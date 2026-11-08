@@ -340,11 +340,17 @@ void runMenu() {
     menu.addItem("Random (tutti)", "ble", [] {
         runSpam("Random", allPayloads(), true);
     });
+    menu.addItem("iOS Spam", "ble", [] {
+        runSpam("iOS", applePayloads());
+    });
     menu.addItem("Apple (AirPods)", "ble", [] {
         runSpam("Apple", applePayloads());
     });
     menu.addItem("Samsung Galaxy", "ble", [] {
         runSpam("Samsung", samsungPayloads());
+    });
+    menu.addItem("Android Spam", "ble", [] {
+        runSpam("Android", googlePayloads());
     });
     menu.addItem("Google Fast Pair", "ble", [] {
         runSpam("Google", googlePayloads());

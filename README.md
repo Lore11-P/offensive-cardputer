@@ -40,9 +40,9 @@ Firmware modulare per **M5Stack Cardputer ADV** (ESP32-S3FN8, 8 MB flash, **senz
 - **IR ricerca**: la voce **Cerca** interroga tutto il database per marca o modello (sottostringa, senza distinzione di maiuscole) e mostra i telecomandi trovati, senza navigare cartella per cartella.
 - **IR tasti rapidi**: dentro un telecomando `P` = Power, `M` = Mute, `=`/`+` = Volume +, `-` = Volume −, `C` = Canale +, `X` = Canale −. Il tasto sposta la selezione sul comando, lo invia e `ENTER` lo ripete.
 - **IR ripresa**: l'ultimo telecomando aperto compare come prima voce ("Riprendi marca/modello") ed è salvato in NVS.
-- **BLE**: scansione con nome, MAC e RSSI; spam con MAC casuale e modalità Random, Apple, Samsung, Google Fast Pair e Windows SwiftPair.
+- **BLE**: scansione con nome, MAC e RSSI; spam con MAC casuale e modalità Random, iOS (Apple), Apple AirPods, Samsung, Android (Fast Pair), Google Fast Pair e Windows SwiftPair.
 - **Chat BLE**: messaggi brevi (max 15 caratteri) scambiati via advertising BLE legacy, senza pairing, con payload cifrato AES-128-CBC. Ogni messaggio è indirizzato a un nickname: il destinatario lo decritta e lo mostra, gli altri lo ignorano. `ENTER` scrive, `` ` `` esce; il menu Chat permette di cambiare nickname (max 6 caratteri, con verifica di unicità via BLE) e destinatario predefinito, e mostra i dispositivi vicini. La cronologia locale conserva gli ultimi 8 messaggi. All'ingresso forza l'indirizzo pubblico, così il filtro dei propri pacchetti resta corretto anche dopo BLE spam.
-- **Wi-Fi**: scanner con dettagli; deauth con limite di 60 s; evil twin/portal con credenziali **solo in RAM** e cancellate all'uscita.
+- **Wi-Fi**: scanner con dettagli; AP info, avvio access point e spegnimento radio; **WiFi Atks** con beacon spam, deauth target (60 s), deauth flood multi-target e evil twin/portal con credenziali **solo in RAM** e cancellate all'uscita; **Scan Hosts** con tabella ARP e port scan TCP; **NetCut/ARP** con cut, resume, troll e lista VIP persistente; **TCP Listener**, **TCP Client** e **TelNET**; **Channel Analyzer**, **Jam Detect** e **Sniffer 802.11** con salvataggio PCAP su SD (link type 105).
 - **Radar**: modulo passivo (nessuna trasmissione). *Find BLE* insegue un singolo beacon/tag con media mobile dell'RSSI, distanza stimata dal modello log-distanza, gauge, barra a 16 segmenti con Peak Hold e indicatori `WARMER`/`COLDER`/`HOTSPOT`, con **bussola** (gyro BMI270) e freccia verso la direzione stimata. La voce *Sensibilità* (livelli 1–5, salvata in NVS) regola quanto rapidamente il tic accelera con la distanza: 5 = reattivo già a media distanza, 1 = solo da molto vicino; la schermata mostra l'anteprima in ms a −70/−55/−40 dBm. *Radar BLE* mostra tutti i dispositivi come blip su un PPI con sweep continuo, ancorati al mondo tramite la bussola. *Banda 2.4 GHz* misura i canali Wi-Fi 1–13 con lo sniffer promiscuo in modo continuo (cornice che scorre sui canali, fase BLE, picchi) e sovrappone i tre canali advertising BLE 37/38/39 sulla stessa scala di frequenza, dichiarando il riparto TDM del tempo radio. *Presenza CSI* usa il motore Channel State Information dell'ESP32-S3 con calibrazione su ambiente vuoto.
 - **Sospensione automatica**: dopo un tempo configurabile di inattività (30 s, 1, 2, 5, 10, 15 o 30 min, oppure disattivato) il dispositivo **abbassa la luminosità** (12/255) e, se non arriva un tasto entro 10 secondi, sospende schermo e CPU (80 MHz). La Cardputer ADV non ha una sorgente di risveglio per il deep sleep, quindi la sospensione e' software e si riattiva al primo tasto (tastiera o G0), senza perdere lo stato. Durante la sospensione appare la batteria con la scritta **IN RICARICA** se il caricatore e' collegato; lo schermo si spegne dopo 8 secondi se non c'e' ricarica. Nelle schermate di sola osservazione (radar, banda, CSI, radio) il timer è sospeso.
 - **Web Radio**: stazioni pubbliche in MP3 su HTTP (`SomaFM Groove Salad/Drone Zone/Lush`, `Radio Paradise`, `FIP`). `;`/`.` regolano il volume, `ENTER` ferma, `` ` `` esce. Il decoder prende il bus I2S dello speaker: durante l'ascolto `M5.Speaker` è chiuso (quindi niente beep del radar) e viene riaperto all'uscita. I pin I2S si leggono a runtime da `M5.Speaker.config()`.
@@ -54,7 +54,7 @@ Firmware modulare per **M5Stack Cardputer ADV** (ESP32-S3FN8, 8 MB flash, **senz
 | Voce | Valore |
 |---|---|
 | MCU | ESP32-S3FN8, 240 MHz, 320 KB SRAM |
-| Flash | 8 MB (2 slot app da 2 MB per OTA + LittleFS 3,9 MB) |
+| Flash | 8 MB (2 slot app da 2,5 MB per OTA + LittleFS 2,875 MB) |
 | Display | 1.14" 240×135 |
 | Tastiera | 56 tasti (frecce: `;` `.` `,` `/`) |
 | IR TX | GPIO 44 |
@@ -133,9 +133,9 @@ In caso di problemi, tenere premuto il tasto di boot (G0) e reinserire il cavo U
 
 ### Aggiornamento OTA via WiFi
 
-`partitions.csv` usa **due slot applicativi da 2 MB** (`app0`/`app1`): `Update.h` scrive sempre lo slot inattivo, quindi un aggiornamento interrotto non danneggia il firmware in esecuzione. Il firmware deve restare sotto i 2 MB.
+`partitions.csv` usa **due slot applicativi da 2,5 MB** (`app0`/`app1`): `Update.h` scrive sempre lo slot inattivo, quindi un aggiornamento interrotto non danneggia il firmware in esecuzione. Il firmware deve restare sotto i 2,5 MB.
 
-**Prima installazione (una volta sola, via USB):** i dispositivi che hanno ancora il layout precedente a slot singolo devono essere riflash con `bootloader.bin`, `partitions.bin` e `firmware.bin` aggiornati (web flasher o `flasher\flash.bat`). LittleFS resta allo stesso offset `0x410000`, quindi i dati non cambiano posizione.
+**Prima installazione (una volta sola, via USB):** i dispositivi che hanno ancora il layout precedente devono essere riflash con `bootloader.bin`, `partitions.bin`, `firmware.bin` e `littlefs.bin` aggiornati (web flasher o `flasher\flash.bat`). LittleFS ora parte da `0x510000`, quindi il vecchio contenuto a `0x410000` non viene più letto: la nuova immagine LittleFS va scritta nello stesso flash USB (il web flasher lo fa automaticamente).
 
 Dopo il primo flash USB, gli aggiornamenti si fanno dalla Cardputer:
 
@@ -251,7 +251,7 @@ address: 07 00 00 00
 command: 02 00 00 00
 ```
 
-Protocolli parsed supportati: `NEC`, `NECext`, `Samsung32`, `LG`, `Sony`/`SIRC12/15/20`, `RC5`, `RC5X`, `RC6`, `JVC`, `Kaseikyo` (Panasonic) e `RCA`. I comandi `type: raw` con `frequency` e `data` in microsecondi sono inviati con `sendRaw`. I file sono letti da LittleFS e, se assenti, da `/sd/ir/...`. I comandi con protocolli non riconosciuti sono marcati `[n/d]`; dettagli e provenienza sono in `data/ir/SOURCES.txt`. LittleFS è dimensionata a 3,9 MB e i nomi dei file devono restare entro 32 caratteri.
+Protocolli parsed supportati: `NEC`, `NECext`, `Samsung32`, `LG`, `Sony`/`SIRC12/15/20`, `RC5`, `RC5X`, `RC6`, `JVC`, `Kaseikyo` (Panasonic) e `RCA`. I comandi `type: raw` con `frequency` e `data` in microsecondi sono inviati con `sendRaw`. I file sono letti da LittleFS e, se assenti, da `/sd/ir/...`. I comandi con protocolli non riconosciuti sono marcati `[n/d]`; dettagli e provenienza sono in `data/ir/SOURCES.txt`. LittleFS è dimensionata a 2,875 MB e i nomi dei file devono restare entro 32 caratteri.
 
 ## Limiti noti
 
@@ -260,6 +260,7 @@ Protocolli parsed supportati: `NEC`, `NECext`, `Samsung32`, `LG`, `Sony`/`SIRC12
 - Il database IR non contiene codici TV dedicati per Skyworth, OnePlus e Realme: usa la cartella `Universale`. ASUS, Huawei, Majestic, Trevi e Inno-Hit hanno solo codici parziali o per altri dispositivi.
 - Il modulo IR dispone solo del trasmettitore: `ENABLE_IR_LEARN=1` richiede un ricevitore esterno e codice dedicato.
 - Deauth è limitato a 60 secondi per build e va usato solo su reti proprie.
+- Rispetto alla suite Bruce, non sono ancora incluse **WireGuard**, **SSH**, **Responder**, **Brucegotchi**, **WiFi Pass Recovery**, **Bad BLE** e **BLE Keyboard**: richiedono librerie aggiuntive (WireGuard, LibSSH), stack HID BLE non presente in NimBLE 1.4.3 o non sono state portate in questa build. Le funzioni presenti sono comunque compilate solo con `ENABLE_OFFENSIVE=1` e dietro avviso legale.
 - Evil Portal non salva nulla su disco; le credenziali restano in RAM, sono mostrate solo come conteggio e vengono cancellate all'uscita.
 - Doom Lite è un raycaster con pareti texturizzate a mattoni, illuminazione per distanza e lato, pavimento in prospettiva, nemici animati e suoni; 3 settori con punteggio e record su SD.
 - Nessuna PSRAM: il framebuffer e le risorse sono dimensionati per la SRAM disponibile.
@@ -274,13 +275,17 @@ Protocolli parsed supportati: `NEC`, `NECext`, `Samsung32`, `LG`, `Sony`/`SIRC12
 
 ## Licenza
 
-Il codice del firmware è distribuito con licenza **MIT** (vedi `LICENSE`).
-Il database IR proviene da Flipper-IRDB ed è rilasciato sotto **CC0 1.0**;
-l'attribuzione è riportata in `data/ir/SOURCES.txt`. Le librerie di terze
-parti mantengono le rispettive licenze.
+Il codice del firmware è distribuito con licenza **GNU Affero General Public
+License v3.0** (AGPL-3.0, vedi `LICENSE`). Il progetto include funzioni e parti
+di codice adattate da [Bruce](https://github.com/pr3y/Bruce), anch'esso sotto
+AGPL-3.0: chi ridistribuisce o rende disponibile via rete una versione modificata
+deve pubblicare il codice sorgente corrispondente. Il database IR proviene da
+Flipper-IRDB ed è rilasciato sotto **CC0 1.0**; l'attribuzione è riportata in
+`data/ir/SOURCES.txt`. Le librerie di terze parti mantengono le rispettive
+licenze.
 
 ## Crediti
 
-M5Stack M5Cardputer/M5Unified/M5GFX, h2zero NimBLE-Arduino, crankyoldgit IRremoteESP8266, ESPAsyncWebServer/AsyncTCP (esphome), bblanchon ArduinoJson, Espressif ESP-IDF/Arduino core. Database IR: Flipper-IRDB di Lucaslhm, licenza CC0 1.0; dettagli in `data/ir/SOURCES.txt`. Ispirazione per le funzioni IR (ricerca per nome, tasti rapidi, preferiti): [Ultimate-Remote di geo-tp](https://github.com/geo-tp/Ultimate-Remote), progetto separato per Cardputer; qui il codice è indipendente. Rispetta le rispettive licenze.
+M5Stack M5Cardputer/M5Unified/M5GFX, h2zero NimBLE-Arduino, crankyoldgit IRremoteESP8266, ESPAsyncWebServer/AsyncTCP (esphome), bblanchon ArduinoJson, Espressif ESP-IDF/Arduino core. Funzioni e parti di codice WiFi adattate da [Bruce](https://github.com/pr3y/Bruce) (AGPL-3.0), in particolare beacon spam e frame 802.11. Database IR: Flipper-IRDB di Lucaslhm, licenza CC0 1.0; dettagli in `data/ir/SOURCES.txt`. Ispirazione per le funzioni IR (ricerca per nome, tasti rapidi, preferiti): [Ultimate-Remote di geo-tp](https://github.com/geo-tp/Ultimate-Remote), progetto separato per Cardputer; qui il codice è indipendente. Rispetta le rispettive licenze.
 
 Uso previsto: studio, prototipazione e test di sicurezza su dispositivi propri.

@@ -55,7 +55,7 @@ una connessione internet attiva. Il flasher usa gli offset:
 | `0x0` | bootloader |
 | `0x8000` | tabella partizioni |
 | `0x10000` | firmware |
-| `0x410000` | LittleFS 3,9 MB (icone + database IR) |
+| `0x510000` | LittleFS 2,9 MB (icone + database IR) |
 
 ## Ricompilare i binari
 
