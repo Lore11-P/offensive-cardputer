@@ -63,6 +63,13 @@ void wrapText(int x, int y, int maxWidth, const std::vector<std::string>& lines,
 // Barra superiore con titolo, breadcrumb (es. "WiFi > Evil Portal") e
 // indicatore batteria con percentuale e stato di carica.
 void header(const std::string& title, const std::string& parent = "");
+
+// Rilevamento della ricarica. Sui modelli con PMIC usa isCharging(), sugli
+// altri (Cardputer/ADV, lettura ADC) stima la ricarica dalla tensione della
+// batteria: un gradino verso l'alto indica l'inserimento del caricatore, un
+// calo netto lo stacco. Il risultato e' euristico ma sufficiente per l'icona.
+bool chargingLikely();
+void resetChargingDetector();
 void footer(const std::string& text);
 
 // Carica /icons/<icon>.bmp (32x32 BMP 24/32 bit) e lo disegna scalato.

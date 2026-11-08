@@ -9,6 +9,7 @@
 #include "Flappy.h"
 #include "Game2048.h"
 #include "MenuManager.h"
+#include "Minecraft.h"
 #include "Minesweeper.h"
 #include "Pacman.h"
 #include "Pong.h"
@@ -30,7 +31,20 @@ void enterGameDisplay() {
         g_savedRotation = config::rotation();
         g_displayOverridden = true;
     }
-    display::applyRotation(1);
+    // I giochi disegnano in orizzontale. A seconda del modello e del valore
+    // salvato, lo stesso indice puo' corrispondere a portrait o landscape:
+    // si prova prima la rotazione dell'utente, poi 0/1/2/3 finche' il
+    // framebuffer non e' largo (0 e' il landscape standard sul Cardputer ADV).
+    const uint8_t kCandidates[5] = {g_savedRotation, 0, 1, 2, 3};
+    for (uint8_t i = 0; i < 5; ++i) {
+        if (i > 0 && kCandidates[i] == g_savedRotation) {
+            continue;
+        }
+        display::applyRotation(kCandidates[i]);
+        if (display::width() > display::height()) {
+            return;
+        }
+    }
 }
 
 void exitGameDisplay() {
@@ -98,6 +112,11 @@ void runMenu() {
     menu.addItem("Scacchi", "chess", [] {
         enterGameDisplay();
         runChess();
+        exitGameDisplay();
+    });
+    menu.addItem("Minecraft", "minecraft", [] {
+        enterGameDisplay();
+        runMinecraft();
         exitGameDisplay();
     });
     menu.setCarousel();

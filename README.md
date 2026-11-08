@@ -11,7 +11,7 @@ Firmware modulare per **M5Stack Cardputer ADV** (ESP32-S3FN8, 8 MB flash, **senz
 |---|---|---|
 | Menu principale / UI / navigazione | ✅ | Carosello orizzontale a icone con animazione, griglia, breadcrumb e liste scrollabili |
 | Impostazioni | ✅ | Luminosità, rotazione, **spegnimento automatico**, info dispositivo, **rete WiFi** (scansione + password), moduli on/off, export/import JSON, reset |
-| Giochi | ✅ | Tetris, Breakout, Pac-Man, Doom Lite, Snake, Pong, 2048, Flappy, Simon, Minesweeper, Connect 4 e Scacchi con record su SD |
+| Giochi | ✅ | Tetris, Breakout, Pac-Man, Doom Lite, Snake, Pong, 2048, Flappy, Simon, Minesweeper, Connect 4, Scacchi e Minecraft con record su SD |
 | Infrarossi | ✅ | Parser `.ir` Flipper, ricerca per nome, preferiti, ripresa ultimo telecomando, tasti rapidi, scanner Power, TV-B-Gone, jammer opzionale, learn disabilitato |
 | BLE | ✅ | Scanner passivo/attivo, spam Random/Samsung/Google/Windows opzionale |
 | Chat BLE | ✅ | Messaggi cifrati AES e filtrati per destinatario, nickname unico e cronologia locale |
@@ -29,11 +29,12 @@ Firmware modulare per **M5Stack Cardputer ADV** (ESP32-S3FN8, 8 MB flash, **senz
 
 - **Menu gerarchico** con carosello orizzontale animato, card centrale e anteprime laterali; le viste con molti elementi usano griglie o liste con auto-repeat.
 - **Display** 240×135 in landscape, framebuffer 16 bpp (nessun flicker), tema neubrutalista e rotazione configurabile.
-- **Batteria**: indicatore nella barra superiore con percentuale, colore per livello e stato di carica.
+- **Batteria**: indicatore nella barra superiore con percentuale, colore per livello e stato di carica. Sui modelli senza PMIC (Cardputer/ADV) la ricarica viene stimata dalla tensione della batteria, perche' il chip di carica non e' leggibile.
 - **Storage** LittleFS + microSD opzionale (`/sd`), con fallback automatico e file browser.
 - **Configurazione** in NVS, export/import JSON (`/config.json`) senza dati sensibili; backup e screenshot su SD.
 - **Giochi interrompibili** con `` ` `` (ESC fisico), record persistenti su SD e ripristino della rotazione all'uscita.
 - **Scacchi** giocatore contro bot con tre difficolta' scelte a inizio partita, regole complete (arrocco, en passant, promozione, matto, stallo), annullamento dell'ultima coppia di mosse e storico navigabile.
+- **Minecraft Mini** (`src/modules/games/Minecraft.cpp`): sandbox 2D a blocchi con mondo procedurale (colline, caverne, minerali e alberi), scavo e piazzamento, fisica con salto e gravita', hotbar di 4 blocchi e obiettivo completabile: raccogliere 3 diamanti in profondita' e tornare al portale in superficie. Record dei blocchi estratti su SD.
 - **IR**: NEC/NECext, Samsung32, LG, Sony/SIRC, RC5/RC5X, RC6, JVC, Kaseikyo (Panasonic), RCA e comandi raw; preferiti in NVS, scanner Power per marca e anteprima dei telecomandi.
 - **IR UX**: Premi `F` in un telecomando per aggiungere/togliere il preferito. Lo scanner invia il tasto Power di ogni file e permette di salvarlo con `F`, ispirato a Ultimate-Remote.
 - **IR ricerca**: la voce **Cerca** interroga tutto il database per marca o modello (sottostringa, senza distinzione di maiuscole) e mostra i telecomandi trovati, senza navigare cartella per cartella.
@@ -43,7 +44,7 @@ Firmware modulare per **M5Stack Cardputer ADV** (ESP32-S3FN8, 8 MB flash, **senz
 - **Chat BLE**: messaggi brevi (max 15 caratteri) scambiati via advertising BLE legacy, senza pairing, con payload cifrato AES-128-CBC. Ogni messaggio è indirizzato a un nickname: il destinatario lo decritta e lo mostra, gli altri lo ignorano. `ENTER` scrive, `` ` `` esce; il menu Chat permette di cambiare nickname (max 6 caratteri, con verifica di unicità via BLE) e destinatario predefinito, e mostra i dispositivi vicini. La cronologia locale conserva gli ultimi 8 messaggi. All'ingresso forza l'indirizzo pubblico, così il filtro dei propri pacchetti resta corretto anche dopo BLE spam.
 - **Wi-Fi**: scanner con dettagli; deauth con limite di 60 s; evil twin/portal con credenziali **solo in RAM** e cancellate all'uscita.
 - **Radar**: modulo passivo (nessuna trasmissione). *Find BLE* insegue un singolo beacon/tag con media mobile dell'RSSI, distanza stimata dal modello log-distanza, gauge, barra a 16 segmenti con Peak Hold e indicatori `WARMER`/`COLDER`/`HOTSPOT`, con **bussola** (gyro BMI270) e freccia verso la direzione stimata. La voce *Sensibilità* (livelli 1–5, salvata in NVS) regola quanto rapidamente il tic accelera con la distanza: 5 = reattivo già a media distanza, 1 = solo da molto vicino; la schermata mostra l'anteprima in ms a −70/−55/−40 dBm. *Radar BLE* mostra tutti i dispositivi come blip su un PPI con sweep continuo, ancorati al mondo tramite la bussola. *Banda 2.4 GHz* misura i canali Wi-Fi 1–13 con lo sniffer promiscuo in modo continuo (cornice che scorre sui canali, fase BLE, picchi) e sovrappone i tre canali advertising BLE 37/38/39 sulla stessa scala di frequenza, dichiarando il riparto TDM del tempo radio. *Presenza CSI* usa il motore Channel State Information dell'ESP32-S3 con calibrazione su ambiente vuoto.
-- **Spegnimento automatico**: dopo un tempo configurabile di inattività (30 s, 1, 2, 5, 10, 15 o 30 min, oppure disattivato) il dispositivo **abbassa la luminosità** (12/255) e, se non arriva un tasto entro 10 secondi, si spegne. Qualsiasi tasto annulla e ripristina la luminosità. Nelle schermate di sola osservazione (radar, banda, CSI, radio) il timer è sospeso.
+- **Sospensione automatica**: dopo un tempo configurabile di inattività (30 s, 1, 2, 5, 10, 15 o 30 min, oppure disattivato) il dispositivo **abbassa la luminosità** (12/255) e, se non arriva un tasto entro 10 secondi, sospende schermo e CPU (80 MHz). La Cardputer ADV non ha una sorgente di risveglio per il deep sleep, quindi la sospensione e' software e si riattiva al primo tasto (tastiera o G0), senza perdere lo stato. Durante la sospensione appare la batteria con la scritta **IN RICARICA** se il caricatore e' collegato; lo schermo si spegne dopo 8 secondi se non c'e' ricarica. Nelle schermate di sola osservazione (radar, banda, CSI, radio) il timer è sospeso.
 - **Web Radio**: stazioni pubbliche in MP3 su HTTP (`SomaFM Groove Salad/Drone Zone/Lush`, `Radio Paradise`, `FIP`). `;`/`.` regolano il volume, `ENTER` ferma, `` ` `` esce. Il decoder prende il bus I2S dello speaker: durante l'ascolto `M5.Speaker` è chiuso (quindi niente beep del radar) e viene riaperto all'uscita. I pin I2S si leggono a runtime da `M5.Speaker.config()`.
 - **Rete WiFi**: configurazione in **Impostazioni → Rete WiFi**. Scansiona le reti vicine (SSID, RSSI, canale, cifratura, `*` = aperta), fa scegliere la rete dall'elenco, chiede solo la password e la salva; in alternativa permette l'inserimento manuale dell'SSID (reti nascoste), il test di connessione con IP/gateway/RSSI e la cancellazione delle credenziali.
 - **Aggiornamento OTA via WiFi**: **Impostazioni → Aggiorna firmware** connette la rete salvata, scarica `flasher/bin/firmware.bin` dal ramo `main` di [github.com/Lore11-P/offensive-cardputer](https://github.com/Lore11-P/offensive-cardputer) via HTTPS e lo scrive nella partizione OTA inattiva con `Update.h`, mostrando percentuale e dimensione; `` ` `` annulla senza toccare il firmware in esecuzione. Al termine il dispositivo si riavvia sulla nuova build. Per aggiornare il device basta quindi pubblicare un nuovo `flasher/bin/firmware.bin` sul ramo `main`.
@@ -188,6 +189,10 @@ Poi collega la Cardputer via USB e premi **Installa firmware**. Dettagli in `fla
 | Frecce | Ripeti la sequenza in Simon |
 | `w` `a` `s` `d` | Movimento alternativo in Doom Lite e Pac-Man |
 | `H` / `U` | Scacchi: storico delle mosse / annulla l'ultima coppia di mosse |
+| `W` `A` `D` | Minecraft: salta, sinistra, destra |
+| Frecce | Minecraft: sposta il mirino di scavo |
+| ENTER | Minecraft: scava il blocco sotto il mirino |
+| `B` / `1`-`4` | Minecraft: posa il blocco scelto / seleziona lo slot della hotbar |
 
 ## Struttura del progetto
 
@@ -207,7 +212,7 @@ cardputer firmware/
 │       ├── radar/            # finder BLE, PPI, banda 2.4 GHz, presenza CSI
 │       ├── radio/            # web radio MP3 via ESP32-audioI2S
 │       ├── ir/               # telecomandi, preferiti, scanner, TV-B-Gone, jammer
-│       ├── games/            # Tetris, Breakout, Pac-Man, Doom, Snake, Pong, 2048, Flappy, Simon, Minesweeper, Connect 4, Scacchi
+│       ├── games/            # Tetris, Breakout, Pac-Man, Doom, Snake, Pong, 2048, Flappy, Simon, Minesweeper, Connect 4, Scacchi, Minecraft
 │       ├── sd/               # file browser, screenshot, backup
 │       └── settings/         # impostazioni e info
 ├── data/

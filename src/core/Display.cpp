@@ -418,6 +418,15 @@ void drawFallbackIcon(const std::string& id, int x, int y, int s) {
         d.drawCircle(cx, y + 15, 4, kInk);
         d.fillRect(cx - 4, y + 19, 9, 3, kNeoYellow);
         d.drawRect(cx - 4, y + 19, 9, 3, kInk);
+    } else if (id == "minecraft") {
+        d.fillRect(x + 5, y + 8, 22, 19, 0x8A61);
+        d.fillRect(x + 5, y + 8, 22, 6, kNeoGreen);
+        d.drawRect(x + 5, y + 8, 22, 19, kInk);
+        d.drawPixel(x + 9, y + 17, 0x6200);
+        d.drawPixel(x + 22, y + 21, 0x6200);
+        d.drawPixel(x + 15, y + 12, 0x03A0);
+        d.drawPixel(x + 11, y + 14, 0x03A0);
+        d.drawPixel(x + 23, y + 11, 0x03A0);
     } else {
         // Fallback generico: riquadro con iniziale dell'icona.
         d.drawRoundRect(x + 2, y + 2, s - 4, s - 4, 4, kTextDim);
@@ -521,10 +530,74 @@ void wrapText(int x, int y, int maxWidth, const std::vector<std::string>& lines,
     }
 }
 
+namespace {
+
+// Stato del rilevamento euristico della ricarica per i modelli senza PMIC.
+int16_t s_battBaseline = -1;
+uint32_t s_battSampleAt = 0;
+uint8_t s_battRise = 0;
+bool s_battCharging = false;
+
+}  // namespace
+
+void resetChargingDetector() {
+    s_battBaseline = -1;
+    s_battSampleAt = 0;
+    s_battRise = 0;
+    s_battCharging = false;
+}
+
+bool chargingLikely() {
+    if (M5Cardputer.Power.isCharging()) {
+        return true;
+    }
+    const int16_t mv = M5Cardputer.Power.getBatteryVoltage();
+    if (mv <= 0) {
+        return false;
+    }
+    const uint32_t now = millis();
+    if (s_battBaseline < 0) {
+        s_battBaseline = mv;
+        s_battSampleAt = now;
+        return false;
+    }
+    if (now - s_battSampleAt < 2000) {
+        return s_battCharging;
+    }
+    s_battSampleAt = now;
+
+    const int16_t delta = static_cast<int16_t>(mv - s_battBaseline);
+    if (s_battCharging) {
+        // Il caricatore e' stato staccato: la tensione crolla sotto la linea
+        // di base registrata prima della ricarica.
+        if (delta < -15) {
+            s_battCharging = false;
+            s_battRise = 0;
+            s_battBaseline = mv;
+        }
+        return s_battCharging;
+    }
+
+    // Gradino persistente sopra la tensione a riposo: probabile caricatore.
+    if (delta > 15) {
+        if (s_battRise < 3) {
+            ++s_battRise;
+        }
+    } else {
+        s_battRise = 0;
+    }
+    // La linea di base insegue lentamente la tensione a riposo.
+    s_battBaseline = static_cast<int16_t>((s_battBaseline * 7 + mv) / 8);
+    if (s_battRise >= 3) {
+        s_battCharging = true;
+    }
+    return s_battCharging;
+}
+
 void drawBatteryWidget(int right, int y) {
     auto& d = g();
     const int level = static_cast<int>(M5Cardputer.Power.getBatteryLevel());
-    const bool charging = M5Cardputer.Power.isCharging() == m5::Power_Class::is_charging;
+    const bool charging = chargingLikely();
     const int percent = level < 0 ? -1 : std::min(level, 100);
 
     uint16_t color = kTextDim;

@@ -31,7 +31,10 @@ public:
     Hold& operator=(const Hold&) = delete;
 };
 
-// Spegne subito, senza preavviso.
+// Spegne subito, senza preavviso. La Cardputer ADV non ha una sorgente di
+// risveglio per il deep sleep, quindi si usa una sospensione software:
+// retroilluminazione spenta, CPU a 80 MHz e risveglio al primo tasto.
+// Durante la sospensione mostra la batteria e, se possibile, la ricarica.
 void powerOff();
 
 // Secondi di inattivita' configurati (0 = disattivato).

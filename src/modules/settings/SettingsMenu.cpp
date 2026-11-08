@@ -214,8 +214,7 @@ void showInfo() {
             lastRefresh = millis();
             M5Cardputer.update();
             const int level = static_cast<int>(M5Cardputer.Power.getBatteryLevel());
-            const bool charging =
-                M5Cardputer.Power.isCharging() == m5::Power_Class::is_charging;
+            const bool charging = display::chargingLikely();
 
             std::vector<std::string> lines;
             lines.push_back(std::string(">") + fw::kTitle);

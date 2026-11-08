@@ -6,6 +6,9 @@ Tutte le modifiche rilevanti del progetto. Formato basato su Keep a Changelog.
 
 ### Aggiunto
 
+- **Minecraft Mini** (`src/modules/games/Minecraft.cpp` + `Minecraft.h`): sandbox 2D a blocchi con mondo procedurale (profilo collinare, caverne, carbone/ferro/diamanti e alberi), scavo istantaneo e piazzamento dei blocchi, fisica con gravita' e salto, mirino con portata limitata, hotbar di 4 blocchi (`1`-`4`) con quantita', HUD con diamanti/direzione/tempo, obiettivo completabile (3 diamanti e ritorno al portale in superficie), schermata di vittoria con tempo e record dei blocchi estratti su SD. Icona vettoriale di fallback dedicata.
+- **Indicatore di ricarica** anche sui modelli senza PMIC: `display::chargingLikely()` stima la ricarica dal gradino di tensione della batteria (inserimento/stacco del caricatore); la barra superiore, la schermata Info e la sospensione usano questo stato.
+- **Schermata di sospensione** con batteria, percentuale, scritta **IN RICARICA** e fulmine animato quando il caricatore e' collegato. Lo schermo resta acceso a bassa luminosita' durante la ricarica e si spegne dopo 8 s se non c'e' ricarica; si riaccende da solo se il caricatore viene inserito dopo.
 - **Scacchi** (`src/modules/games/Chess.cpp`, `Chess.h` e `ChessLogic.h`): partita contro il bot con tre difficolta' selezionabili a inizio partita (Facile, Medio, Difficile; alpha-beta con limite di nodi per la piu' alta). Regole complete: arrocco (con controllo delle case di transito), en passant, promozione automatica a donna, scacco, scacco matto, stallo, materiale insufficiente e regola delle 50 mosse. Comandi: frecce per muovere il cursore, INVIO per selezionare/muovere, `U` per annullare l'ultima coppia di mosse (giocatore + risposta del bot), `H` per lo storico navigabile con notazione semplificata (es. `e2-e4`, `O-O`, `a7xb8Q`). Vittorie persistenti su SD (`chess`). Icona vettoriale di fallback dedicata.
 - **Pac-Man** (`src/modules/games/Pacman.cpp` + `Pacman.h`): labirinto 19×11 a tile da 10 px, 4 fantasmi con inseguimento greedy e modalità spaventata (200/400/800/1600 punti), pellet (10) e power pellet (50), 3 vite, livelli progressivi con fantasmi sempre più veloci e record su SD. Controllo con frecce o `w`/`a`/`s`/`d`; icona vettoriale di fallback dedicata.
 - Breakout e Doom Lite ora salvano il **record su SD** e lo mostrano nell'HUD, come gli altri giochi: `scores::submit()` a fine partita, alla vittoria e all'uscita.
@@ -27,7 +30,7 @@ Tutte le modifiche rilevanti del progetto. Formato basato su Keep a Changelog.
 - IR: **tasti rapidi** nel telecomando — `P` Power, `M` Mute, `=`/`+` Volume +, `-` Volume −, `C` Canale +, `X` Canale −; il tasto seleziona il comando e lo invia, `ENTER` ripete.
 - IR: **Riprendi** ultimo telecomando aperto come prima voce del menu, salvato in NVS (`ir-fav`/`last`).
 - `MenuManager::selectIndex()` per spostare la selezione da codice (usato dalle scorciatoie IR).
-- **Spegnimento automatico** per inattività (`include/PowerTimer.h` + `src/core/PowerTimer.cpp`): timeout configurabile da Impostazioni (30 s, 1, 2, 5, 10, 15, 30 min o disattivato), preavviso di 10 s con conto alla rovescia annullabile con qualsiasi tasto, poi `M5.Power.powerOff()` con fallback a deep sleep. Il timer è agganciato a `Navigation::poll()` (unico punto), si azzera a ogni tasto e riallinea lo stato della tastiera dopo il preavviso per non generare eventi fantasma. `powertimer::Hold` sospende il timer nelle schermate di monitoraggio (radar, banda, CSI, voli).
+- **Sospensione automatica** per inattività (`include/PowerTimer.h` + `src/core/PowerTimer.cpp`): timeout configurabile da Impostazioni (30 s, 1, 2, 5, 10, 15, 30 min o disattivato), preavviso di 10 s con attenuazione annullabile con qualsiasi tasto, poi sospensione software (retroilluminazione spenta, CPU a 80 MHz) e risveglio al primo tasto. Il timer è agganciato a `Navigation::poll()` (unico punto), si azzera a ogni tasto e riallinea lo stato della tastiera dopo il preavviso per non generare eventi fantasma. `powertimer::Hold` sospende il timer nelle schermate di monitoraggio (radar, banda, CSI, voli).
 - Menu principale, menu Giochi e menu IR a carosello orizzontale animato: card centrale grande, anteprime laterali, indicatori di pagina e navigazione circolare con `,`/`/` o `;`/`.`.
 - Quattro nuovi giochi: Flappy (fisica, tubi, record), Simon (sequenze con quattro pad colorati), Minesweeper (9x7, 10 mine, bandiere, flood fill, vittorie persistenti) e Connect 4 (7x6, IA con mosse vincenti/blocco, vittorie persistenti).
 - Nuove icone vettoriali di fallback per Flappy, Simon, Minesweeper, Connect 4 e Preferiti.
@@ -44,6 +47,8 @@ Tutte le modifiche rilevanti del progetto. Formato basato su Keep a Changelog.
 
 ### Modificato
 
+- **Sospensione al posto del deep sleep** (`src/core/PowerTimer.cpp`): la Cardputer ADV non configurava alcuna sorgente di risveglio, quindi dopo lo spegnimento automatico il dispositivo non si riaccendeva piu'. Ora la sospensione e' software (retroilluminazione spenta, CPU a 80 MHz) e il risveglio avviene al primo tasto della tastiera o G0, senza perdita di stato; GPIO0 non viene usato come unica sorgente per evitare la modalita' download.
+- **Rotazione dei giochi robusta** (`GamesMenu::enterGameDisplay`): non si forza piu' l'indice 1, che su Cardputer ADV puo' corrispondere al portrait. Si provano le quattro rotazioni finche' il framebuffer non e' orizzontale (240x135), mantenendo il ripristino della rotazione dell'utente all'uscita.
 - `partitions.csv`: da un solo slot app da 4 MB a due slot da 2 MB (`app0`/`app1`) per abilitare l'OTA. I device già flashati devono fare un flash USB una tantum del nuovo layout; LittleFS resta a `0x410000`, quindi i dati non si spostano.
 - `SettingsMenu`: elenco dei moduli attivi scrollabile (6 voci su 5 righe visibili) con indicatore di posizione.
 - Il menu principale e il menu Giochi non usano piu' la griglia 3x2: il carosello mostra una voce alla volta con le adiacenti in anteprima.
@@ -53,6 +58,8 @@ Tutte le modifiche rilevanti del progetto. Formato basato su Keep a Changelog.
 
 ### Corretto
 
+- **Giochi in verticale**: all'apertura i giochi potevano apparire ruotati di 90 gradi perche' veniva applicato l'indice 1 indipendentemente dal modello; ora viene scelta una rotazione orizzontale verificando `display::width() > display::height()`.
+- **Dispositivo che non si riaccendeva** dopo lo spegnimento automatico: sostituito il deep sleep senza wake source con la sospensione software descritta sopra.
 - **Crash entrando in Infrarossi e Giochi** (schermata nera e riavvio): era stack overflow del task dei menu, non un bug dei moduli. Il panic lo confermava (`Stack canary watchpoint triggered (loopTask)`). `display::drawIcon` teneva 4352 byte di buffer locali e i menu a carosello con molte icone **senza BMP** (Infrarossi 5 su 6, Giochi 8 su 10) passano dal fallback vettoriale, superando gli 8 KB di stack. Correzioni: buffer di `drawIcon` resi statici (−4 KB di stack per icona) e `ARDUINO_LOOP_STACK_SIZE=16384` (verificato nell'ELF: literal `0x4000`). *Info dispositivo* mostra ora lo **stack residuo minimo** per accorgersi in anticipo di un margine troppo stretto.
 
 ## [1.0.0] - 2026-10-31
