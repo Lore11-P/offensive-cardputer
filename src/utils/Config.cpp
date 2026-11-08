@@ -127,6 +127,7 @@ void begin() {
             g_prefs.getString("chat_to", g_settings.chatNickname.c_str());
         g_settings.chatRecipient =
             sanitizeChatName(storedRecipient.c_str(), g_settings.chatNickname);
+        g_settings.chatNotify = g_prefs.getBool("chat_notify", true);
         refreshCompiledModules();
     }
 }
@@ -150,6 +151,7 @@ void save() {
     g_prefs.putUChar("radar_s", g_settings.radarSensitivity);
     g_prefs.putString("chat_nick", g_settings.chatNickname.c_str());
     g_prefs.putString("chat_to", g_settings.chatRecipient.c_str());
+    g_prefs.putBool("chat_notify", g_settings.chatNotify);
     g_prefs.putUInt("magic", kConfigMagic);
 }
 
@@ -309,6 +311,15 @@ void setChatRecipient(const std::string& recipient) {
     save();
 }
 
+bool chatNotifyEnabled() {
+    return g_settings.chatNotify;
+}
+
+void setChatNotifyEnabled(bool enabled) {
+    g_settings.chatNotify = enabled;
+    save();
+}
+
 std::string toJson() {
     JsonDocument doc;
     doc["version"] = 1;
@@ -330,6 +341,7 @@ std::string toJson() {
     JsonObject chat = doc["chat"].to<JsonObject>();
     chat["nickname"] = g_settings.chatNickname;
     chat["recipient"] = g_settings.chatRecipient;
+    chat["notify"] = g_settings.chatNotify;
 
     JsonObject ble = doc["ble"].to<JsonObject>();
     ble["duration_sec"] = g_settings.bleDurationSec;
@@ -383,6 +395,9 @@ bool applyJson(const char* json, size_t len) {
     if (doc["chat"].is<JsonObject>() && doc["chat"]["recipient"].is<const char*>()) {
         g_settings.chatRecipient = sanitizeChatName(
             doc["chat"]["recipient"].as<std::string>(), g_settings.chatNickname);
+    }
+    if (doc["chat"].is<JsonObject>()) {
+        g_settings.chatNotify = doc["chat"]["notify"] | g_settings.chatNotify;
     }
 
     if (doc["ble"].is<JsonObject>()) {

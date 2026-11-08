@@ -1,6 +1,7 @@
 #include "Chat.h"
 
 #include <Arduino.h>
+#include <M5Cardputer.h>
 #include <NimBLEDevice.h>
 #include <mbedtls/aes.h>
 #include <mbedtls/sha256.h>
@@ -39,9 +40,13 @@ constexpr size_t kPacketLen = 2 + kMessageAppLen;
 constexpr size_t kHistoryMax = 8;
 constexpr uint32_t kPeerTimeoutMs = 15000;
 constexpr uint32_t kNameQueryTimeoutMs = 1500;
+constexpr uint32_t kPresenceIntervalMs = 5000;
+constexpr uint32_t kNotifyDurationMs = 4000;
+constexpr uint32_t kControlHoldMs = 600;
 constexpr uint16_t kAdvInterval = 160;  // 100 ms (unita' da 0,625 ms)
 constexpr uint8_t kControlQuery = 1;
 constexpr uint8_t kControlResponse = 2;
+constexpr uint8_t kControlPresence = 3;
 
 struct ChatMessage {
     std::string sender;
@@ -66,6 +71,10 @@ volatile bool g_chatActive = false;
 volatile bool g_controlResponsePending = false;
 volatile uint32_t g_controlResponseId = 0;
 char g_controlResponseName[kNickLen + 1] = {};
+volatile bool g_notifyBeepPending = false;
+uint32_t g_notifyUntil = 0;
+char g_notifyName[kNickLen + 1] = {};
+uint32_t g_nextPresenceAt = 0;
 
 void ensureBle() {
     if (!NimBLEDevice::getInitialized()) {
@@ -257,7 +266,9 @@ bool parseControlPacket(const std::string& data, uint8_t& type,
     name.assign(reinterpret_cast<const char*>(raw + 4), kNickLen);
     name = printable(trimRight(name));
     queryId = readU32(raw + 4 + kNickLen);
-    return !name.empty() && (type == kControlQuery || type == kControlResponse);
+    return !name.empty() &&
+           (type == kControlQuery || type == kControlResponse ||
+            type == kControlPresence);
 }
 
 std::vector<uint8_t> buildMessagePacket(const std::string& text,
@@ -353,8 +364,28 @@ void endNameQuery() {
     portEXIT_CRITICAL(&g_lock);
 }
 
+bool touchPeerLocked(const std::string& address, uint32_t now) {
+    auto it = g_peers.find(address);
+    if (it != g_peers.end() && now - it->second <= kPeerTimeoutMs) {
+        it->second = now;
+        return false;
+    }
+    g_peers[address] = now;
+    return true;
+}
+
+void notifyPeerLocked(const std::string& name, uint32_t now) {
+    if (!config::chatNotifyEnabled()) {
+        return;
+    }
+    std::snprintf(g_notifyName, sizeof(g_notifyName), "%s", name.c_str());
+    g_notifyUntil = now + kNotifyDurationMs;
+    g_notifyBeepPending = true;
+    g_dirty = true;
+}
+
 void handleControlPacket(uint8_t type, const std::string& name,
-                         uint32_t queryId) {
+                         uint32_t queryId, const std::string& address) {
     if (type == kControlQuery) {
         if (g_chatActive &&
             canonicalName(name) == canonicalName(config::chatNickname())) {
@@ -364,6 +395,24 @@ void handleControlPacket(uint8_t type, const std::string& name,
             g_controlResponseId = queryId;
             g_controlResponsePending = true;
             portEXIT_CRITICAL(&g_lock);
+        }
+        return;
+    }
+
+    if (type == kControlPresence) {
+        if (!g_chatActive) {
+            return;
+        }
+        const uint32_t now = millis();
+        bool fresh = false;
+        portENTER_CRITICAL(&g_lock);
+        fresh = touchPeerLocked(address, now);
+        if (fresh) {
+            notifyPeerLocked(name, now);
+        }
+        portEXIT_CRITICAL(&g_lock);
+        if (fresh) {
+            g_dirty = true;
         }
         return;
     }
@@ -397,6 +446,29 @@ void publishPendingControl() {
     portEXIT_CRITICAL(&g_lock);
 
     publishControl(kControlResponse, name, queryId);
+    g_nextPresenceAt = millis() + kControlHoldMs;
+}
+
+void publishPresence() {
+    if (!config::chatNotifyEnabled()) {
+        return;
+    }
+    publishControl(kControlPresence, config::chatNickname(), 0);
+    g_nextPresenceAt = millis() + kPresenceIntervalMs;
+}
+
+void serviceNotifications() {
+    bool beep = false;
+    portENTER_CRITICAL(&g_lock);
+    if (g_notifyBeepPending) {
+        g_notifyBeepPending = false;
+        beep = true;
+    }
+    portEXIT_CRITICAL(&g_lock);
+
+    if (beep) {
+        M5Cardputer.Speaker.tone(1800, 80);
+    }
 }
 
 class ChatScanCallbacks : public NimBLEAdvertisedDeviceCallbacks {
@@ -416,7 +488,7 @@ public:
         std::string name;
         uint32_t queryId = 0;
         if (parseControlPacket(data, type, name, queryId)) {
-            handleControlPacket(type, name, queryId);
+            handleControlPacket(type, name, queryId, address);
             return;
         }
 
@@ -442,7 +514,10 @@ public:
         const uint32_t now = millis();
         bool duplicate = false;
         portENTER_CRITICAL(&g_lock);
-        g_peers[address] = now;
+        const bool freshPeer = touchPeerLocked(address, now);
+        if (freshPeer) {
+            notifyPeerLocked(sender, now);
+        }
         auto it = g_lastCounter.find(address);
         if (it != g_lastCounter.end() && it->second == counter) {
             duplicate = true;
@@ -487,6 +562,7 @@ bool publishMessage(const std::string& text, const std::string& recipient) {
         logger::warn("Chat BLE: invio fallito");
         return false;
     }
+    g_nextPresenceAt = millis() + kPresenceIntervalMs;
     return true;
 }
 
@@ -495,6 +571,7 @@ void drawChat() {
 
     std::vector<ChatMessage> messages;
     size_t peers = 0;
+    std::string notifyName;
 
     portENTER_CRITICAL(&g_lock);
     messages = g_messages;
@@ -507,17 +584,25 @@ void drawChat() {
             ++it;
         }
     }
+    if (now < g_notifyUntil) {
+        notifyName = g_notifyName;
+    }
     portEXIT_CRITICAL(&g_lock);
 
     display::clear();
     display::header("Chat BLE", "Menu principale");
 
-    std::string status = "Tu: " + config::chatNickname() + " > " +
-                         config::chatRecipient();
-    if (peers > 0) {
-        status += " (" + std::to_string(peers) + ")";
+    if (!notifyName.empty()) {
+        display::text(4, 24, "! " + notifyName + " e' nel raggio",
+                      display::kAccent, 0);
+    } else {
+        std::string status = "Tu: " + config::chatNickname() + " > " +
+                             config::chatRecipient();
+        if (peers > 0) {
+            status += " (" + std::to_string(peers) + ")";
+        }
+        display::text(4, 24, status, display::kTextDim, 0);
     }
-    display::text(4, 24, status, display::kTextDim, 0);
 
     if (messages.empty()) {
         display::textCentered(52, "Nessun messaggio", display::kText, 2);
@@ -728,6 +813,7 @@ void runChat() {
 
     logger::info("Chat BLE: in ascolto come %s", config::chatNickname().c_str());
     g_chatActive = true;
+    g_nextPresenceAt = 0;
 
     navigation::waitRelease();
     bool running = true;
@@ -736,6 +822,13 @@ void runChat() {
         navigation::update();
         const navigation::EventData event = navigation::poll();
         publishPendingControl();
+
+        const uint32_t now = millis();
+        if (config::chatNotifyEnabled() &&
+            static_cast<int32_t>(now - g_nextPresenceAt) >= 0) {
+            publishPresence();
+        }
+        serviceNotifications();
 
         if (event.type == navigation::Event::Select) {
             navigation::waitRelease();
@@ -746,7 +839,6 @@ void runChat() {
             running = false;
         }
 
-        const uint32_t now = millis();
         if (g_dirty || now - lastDraw > 1000) {
             drawChat();
             lastDraw = now;
@@ -773,17 +865,32 @@ void runChat() {
 
 }  // namespace
 
+void toggleNotifications() {
+    const bool enabled = !config::chatNotifyEnabled();
+    config::setChatNotifyEnabled(enabled);
+    ui::message("Notifiche chat",
+                {enabled ? ">Presenza e avvisi attivi."
+                         : ">Presenza e avvisi disattivati.",
+                 enabled ? "Gli altri vedono il tuo nickname."
+                         : "Nessun annuncio: modalita' stealth.",
+                 "L'avviso appare con la Chat aperta."},
+                "Chat");
+}
+
 void runMenu() {
     MenuManager menu("Chat", "Menu principale");
     menu.addItem("Apri chat", "chat", runChat);
     menu.addItem("Nickname", "settings", editNickname);
     menu.addItem("Destinatario", "settings", editRecipient);
+    menu.addItem("Notifiche", "settings", toggleNotifications);
     menu.addItem("Info", "info", [] {
         ui::message("Chat BLE",
                     {">Messaggi cifrati AES via BLE.",
                      "Ogni messaggio e' indirizzato a un",
                      "nickname; gli altri non lo mostrano.",
                      "Max 15 caratteri per messaggio.",
+                     "Con Chat aperta avvisa quando un",
+                     "peer entra nel raggio.",
                      "Nessun pairing: non usare per dati",
                      "davvero sensibili."},
                     "Chat");
