@@ -36,18 +36,8 @@ void runBrightness() {
     bool leftHeld = false;
     bool rightHeld = false;
 
+    uint32_t lastDraw = 0;
     for (;;) {
-        display::clear();
-        display::header("Luminosita", "Impostazioni");
-        display::textCentered(35, std::to_string(brightnessPercent()) + "%", display::kAccent, 4);
-        display::progressBar(28, 66, display::width() - 56, 10,
-                             static_cast<float>(config::brightness()) / 255.0f);
-        display::textCentered(84, "valore " + std::to_string(config::brightness()) + " / 255",
-                              display::kTextDim, 0);
-        display::textCentered(102, ", = -10%    / = +10%", display::kText, 0);
-        display::footer("ENTER/` = salva e torna");
-        display::push();
-
         bool changed = false;
         const int step = 26;
         if (navigation::pressed(',') && millis() >= nextRepeat) {
@@ -69,6 +59,23 @@ void runBrightness() {
             changed = true;
         } else if (!navigation::pressed('/')) {
             rightHeld = false;
+        }
+
+        const uint32_t now = millis();
+        if (changed || lastDraw == 0 || now - lastDraw >= 500) {
+            display::clear();
+            display::header("Luminosita", "Impostazioni");
+            display::textCentered(35, std::to_string(brightnessPercent()) + "%",
+                                  display::kAccent, 4);
+            display::progressBar(28, 66, display::width() - 56, 10,
+                                 static_cast<float>(config::brightness()) / 255.0f);
+            display::textCentered(84,
+                                  "valore " + std::to_string(config::brightness()) + " / 255",
+                                  display::kTextDim, 0);
+            display::textCentered(102, ", = -10%    / = +10%", display::kText, 0);
+            display::footer("ENTER/` = salva e torna");
+            display::push();
+            lastDraw = now;
         }
 
         const navigation::EventData ev = navigation::poll();
@@ -98,16 +105,8 @@ const char* rotationLabel(uint8_t index) {
 void runRotation() {
     navigation::waitRelease();
     uint32_t nextRepeat = 0;
+    uint32_t lastDraw = 0;
     for (;;) {
-        display::clear();
-        display::header("Rotazione", "Impostazioni");
-        display::textCentered(36, rotationLabel(config::rotation()), display::kAccent, 2);
-        display::textCentered(60, "indice display: " + std::to_string(config::rotation()),
-                              display::kTextDim, 0);
-        display::textCentered(88, ", = precedente    / = successiva", display::kText, 0);
-        display::footer("ENTER/` = salva e torna");
-        display::push();
-
         bool changed = false;
         if (navigation::pressed(',') && millis() >= nextRepeat) {
             config::setRotation(static_cast<uint8_t>((config::rotation() + 3) & 3));
@@ -120,6 +119,19 @@ void runRotation() {
             applyDisplay();
             nextRepeat = millis() + 250;
             changed = true;
+        }
+
+        const uint32_t now = millis();
+        if (changed || lastDraw == 0 || now - lastDraw >= 500) {
+            display::clear();
+            display::header("Rotazione", "Impostazioni");
+            display::textCentered(36, rotationLabel(config::rotation()), display::kAccent, 2);
+            display::textCentered(60, "indice display: " + std::to_string(config::rotation()),
+                                  display::kTextDim, 0);
+            display::textCentered(88, ", = precedente    / = successiva", display::kText, 0);
+            display::footer("ENTER/` = salva e torna");
+            display::push();
+            lastDraw = now;
         }
 
         const navigation::EventData ev = navigation::poll();
@@ -159,18 +171,25 @@ void runSleepTimer() {
     constexpr int kCount = sizeof(kOptions) / sizeof(kOptions[0]);
 
     navigation::waitRelease();
+    uint32_t lastDraw = 0;
+    uint16_t lastValue = 0xFFFF;
     for (;;) {
         const uint16_t current = config::sleepTimeoutSec();
-        display::clear();
-        display::header("Spegnimento auto", "Impostazioni");
-        display::textCentered(32, sleepLabel(current), display::kAccent, 2);
-        display::textCentered(56, "Spegne la Cardputer dopo", display::kTextDim, 0);
-        display::textCentered(68, "questo tempo senza tasti.", display::kTextDim, 0);
-        display::textCentered(88, "Un tasto durante il preavviso", display::kMuted, 0);
-        display::textCentered(98, "annulla lo spegnimento.", display::kMuted, 0);
-        display::textCentered(110, ", / = cambia", display::kText, 0);
-        display::footer("ENTER/` = salva e torna");
-        display::push();
+        const uint32_t now = millis();
+        if (current != lastValue || lastDraw == 0 || now - lastDraw >= 500) {
+            display::clear();
+            display::header("Spegnimento auto", "Impostazioni");
+            display::textCentered(32, sleepLabel(current), display::kAccent, 2);
+            display::textCentered(56, "Spegne la Cardputer dopo", display::kTextDim, 0);
+            display::textCentered(68, "questo tempo senza tasti.", display::kTextDim, 0);
+            display::textCentered(88, "Un tasto durante il preavviso", display::kMuted, 0);
+            display::textCentered(98, "annulla lo spegnimento.", display::kMuted, 0);
+            display::textCentered(110, ", / = cambia", display::kText, 0);
+            display::footer("ENTER/` = salva e torna");
+            display::push();
+            lastDraw = now;
+            lastValue = current;
+        }
 
         const navigation::EventData ev = navigation::poll();
         if (ev.type == navigation::Event::Back || ev.type == navigation::Event::Select) {
@@ -224,6 +243,10 @@ void showInfo() {
             lines.push_back("Flash: " + std::to_string(ESP.getFlashChipSize() / (1024 * 1024)) + " MB");
             lines.push_back("MAC: " + macString());
             lines.push_back("Heap libero: " + std::to_string(ESP.getFreeHeap() / 1024) + " KB");
+            lines.push_back(std::string("Framebuffer: ") +
+                            (display::framebufferActive()
+                                 ? std::to_string(display::framebufferBytes() / 1024) + " KB"
+                                 : std::string("diretto (flicker)")));
             // Stack residuo minimo del task dei menu: se scende sotto ~2 KB il
             // firmware e' a rischio di stack overflow (menu con icone fallback).
             lines.push_back("Stack min: " +
@@ -286,57 +309,67 @@ void runModules() {
     navigation::waitRelease();
     int selected = 0;
     int top = 0;
+    uint32_t lastDraw = 0;
+    bool dirty = true;
     for (;;) {
+        const navigation::EventData ev = navigation::poll();
+        if (ev.type == navigation::Event::Up) {
+            selected = (selected + kCount - 1) % kCount;
+            dirty = true;
+        } else if (ev.type == navigation::Event::Down) {
+            selected = (selected + 1) % kCount;
+            dirty = true;
+        } else if (ev.type == navigation::Event::Select) {
+            const config::Module m = rows[selected].module;
+            config::setModuleEnabled(m, !config::moduleEnabled(m));
+            navigation::waitRelease();
+            dirty = true;
+        } else if (ev.type == navigation::Event::Back) {
+            break;
+        }
+
         if (selected < top) {
             top = selected;
         } else if (selected >= top + visible) {
             top = selected - visible + 1;
         }
 
-        display::clear();
-        display::header("Moduli attivi", "Impostazioni");
-        const int w = display::width();
-        for (int row = 0; row < visible; ++row) {
-            const int i = top + row;
-            if (i >= kCount) {
-                break;
+        const uint32_t now = millis();
+        if (dirty || lastDraw == 0 || now - lastDraw >= 500) {
+            display::clear();
+            display::header("Moduli attivi", "Impostazioni");
+            const int w = display::width();
+            for (int row = 0; row < visible; ++row) {
+                const int i = top + row;
+                if (i >= kCount) {
+                    break;
+                }
+                const int y = 23 + row * kRowH;
+                const bool sel = (i == selected);
+                if (sel) {
+                    display::g().fillRoundRect(2, y, w - 6, 19, 3, display::kAccentDark);
+                    display::g().fillRect(2, y + 5, 2, 10, display::kAccent);
+                }
+                display::drawIcon(rows[i].icon, 6, y + 2, 16);
+                display::text(28, y + 3, rows[i].label, display::kText, 2);
+                const bool on = config::moduleEnabled(rows[i].module);
+                const std::string state = on ? "[ON]" : "[OFF]";
+                display::text(w - 42, y + 3, state, on ? display::kAccent : display::kTextDim, 2);
             }
-            const int y = 23 + row * kRowH;
-            const bool sel = (i == selected);
-            if (sel) {
-                display::g().fillRoundRect(2, y, w - 6, 19, 3, display::kAccentDark);
-                display::g().fillRect(2, y + 5, 2, 10, display::kAccent);
+            if (kCount > visible) {
+                const int trackX = w - 3;
+                const int trackY = 22;
+                const int trackH = display::height() - 34;
+                display::g().fillRect(trackX, trackY, 2, trackH, display::kPanel);
+                const int thumbH = std::max(8, trackH * visible / kCount);
+                const int thumbY =
+                    trackY + (trackH - thumbH) * top / std::max(1, kCount - visible);
+                display::g().fillRect(trackX, thumbY, 2, thumbH, display::kAccent);
             }
-            display::drawIcon(rows[i].icon, 6, y + 2, 16);
-            display::text(28, y + 3, rows[i].label, display::kText, 2);
-            const bool on = config::moduleEnabled(rows[i].module);
-            const std::string state = on ? "[ON]" : "[OFF]";
-            display::text(w - 42, y + 3, state, on ? display::kAccent : display::kTextDim, 2);
-        }
-        if (kCount > visible) {
-            const int trackX = w - 3;
-            const int trackY = 22;
-            const int trackH = display::height() - 34;
-            display::g().fillRect(trackX, trackY, 2, trackH, display::kPanel);
-            const int thumbH = std::max(8, trackH * visible / kCount);
-            const int thumbY =
-                trackY + (trackH - thumbH) * top / std::max(1, kCount - visible);
-            display::g().fillRect(trackX, thumbY, 2, thumbH, display::kAccent);
-        }
-        display::footer("; . = seleziona  ENTER = toggle  ` = torna");
-        display::push();
-
-        const navigation::EventData ev = navigation::poll();
-        if (ev.type == navigation::Event::Up) {
-            selected = (selected + kCount - 1) % kCount;
-        } else if (ev.type == navigation::Event::Down) {
-            selected = (selected + 1) % kCount;
-        } else if (ev.type == navigation::Event::Select) {
-            const config::Module m = rows[selected].module;
-            config::setModuleEnabled(m, !config::moduleEnabled(m));
-            navigation::waitRelease();
-        } else if (ev.type == navigation::Event::Back) {
-            break;
+            display::footer("; . = seleziona  ENTER = toggle  ` = torna");
+            display::push();
+            lastDraw = now;
+            dirty = false;
         }
         delay(25);
     }

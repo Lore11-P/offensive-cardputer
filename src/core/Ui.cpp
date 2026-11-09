@@ -46,9 +46,16 @@ void drawScreen(const std::string& title, const std::string& parent,
 void message(const std::string& title, const std::vector<std::string>& lines,
              const std::string& parent, const std::string& hint) {
     navigation::waitRelease();
+    uint32_t lastDraw = 0;
     bool done = false;
     while (!done) {
-        drawScreen(title, parent, lines, hint, 0);
+        // Il contenuto e' statico: si ridisegna solo per aggiornare la
+        // batteria nell'header, non a ogni ciclo (meno flicker/CPU).
+        const uint32_t now = millis();
+        if (lastDraw == 0 || now - lastDraw >= 500) {
+            drawScreen(title, parent, lines, hint, 0);
+            lastDraw = now;
+        }
         const navigation::EventData ev = navigation::poll();
         if (ev.type == navigation::Event::Select || ev.type == navigation::Event::Back ||
             ev.type == navigation::Event::Text) {
@@ -62,8 +69,14 @@ void message(const std::string& title, const std::vector<std::string>& lines,
 bool confirm(const std::string& title, const std::vector<std::string>& lines,
              const std::string& parent) {
     navigation::waitRelease();
+    uint32_t lastDraw = 0;
     for (;;) {
-        drawScreen(title, parent, lines, "ENTER = conferma    ` = annulla", display::kAccent);
+        const uint32_t now = millis();
+        if (lastDraw == 0 || now - lastDraw >= 500) {
+            drawScreen(title, parent, lines, "ENTER = conferma    ` = annulla",
+                       display::kAccent);
+            lastDraw = now;
+        }
         const navigation::EventData ev = navigation::poll();
         if (ev.type == navigation::Event::Select) {
             navigation::waitRelease();
@@ -101,8 +114,13 @@ bool legalWarning(const std::string& activity, const std::vector<std::string>& e
 void waitAnyKey(const std::string& title, const std::string& parent) {
     navigation::waitRelease();
     const std::vector<std::string> lines = {"Premi un tasto per continuare."};
+    uint32_t lastDraw = 0;
     for (;;) {
-        drawScreen(title, parent, lines, "qualsiasi tasto = continua", 0);
+        const uint32_t now = millis();
+        if (lastDraw == 0 || now - lastDraw >= 500) {
+            drawScreen(title, parent, lines, "qualsiasi tasto = continua", 0);
+            lastDraw = now;
+        }
         const navigation::EventData ev = navigation::poll();
         if (ev.type != navigation::Event::None) {
             break;

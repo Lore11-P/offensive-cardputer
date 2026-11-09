@@ -51,6 +51,13 @@ lgfx::LGFXBase& g();
 int width();
 int height();
 
+// True se il framebuffer (sprite) e' attivo. Se e' false la UI disegna
+// direttamente sul display e puo' presentare flicker: succede solo quando
+// l'heap non riesce ad allocare i ~64 KB del buffer.
+bool framebufferActive();
+// Byte occupati dal framebuffer (0 se non allocato).
+uint32_t framebufferBytes();
+
 void clear(uint16_t color = kBackground);
 void push();
 

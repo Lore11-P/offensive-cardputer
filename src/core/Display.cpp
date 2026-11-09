@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <FS.h>
+#include <esp_heap_caps.h>
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -20,6 +21,13 @@ namespace {
 M5Canvas s_sprite(&M5Cardputer.Display);
 bool s_spriteOk = false;
 uint8_t s_rotation = 1;
+
+// Buffer di riserva (non DMA) usato solo se l'allocazione DMA dello sprite
+// fallisce: senza framebuffer la UI ripiegherebbe sul disegno diretto e
+// flickerebbe. Con questa riserva il double buffer resta disponibile.
+uint16_t* s_fallbackBuffer = nullptr;
+bool s_fallbackMode = false;
+uint32_t s_spriteBytes = 0;
 
 constexpr int kIconSize = 32;
 constexpr int kIconCacheCount = 8;
@@ -46,14 +54,55 @@ inline uint16_t toRgb565(uint8_t r, uint8_t g, uint8_t b) {
     return static_cast<uint16_t>(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
 }
 
-bool createSprite() {
+void releaseFallbackBuffer() {
+    if (s_fallbackBuffer != nullptr) {
+        heap_caps_free(s_fallbackBuffer);
+        s_fallbackBuffer = nullptr;
+    }
+    s_fallbackMode = false;
+}
+
+// Crea (o riusa) un framebuffer full-screen 16 bpp per la dimensione data.
+// Prima prova la memoria DMA (pushSprite piu' veloce); se non basta ripiega
+// su heap normale, che non puo' fare DMA ma resta un vero double buffer.
+bool ensureSprite(int w, int h) {
+    if (s_spriteOk && s_sprite.width() == w && s_sprite.height() == h) {
+        return true;
+    }
+
+    s_spriteOk = false;
+    s_spriteBytes = 0;
     s_sprite.deleteSprite();
+    releaseFallbackBuffer();
     s_sprite.setColorDepth(16);
-    const int w = M5Cardputer.Display.width();
-    const int h = M5Cardputer.Display.height();
-    s_spriteOk = (s_sprite.createSprite(w, h) != nullptr);
+
+    if (s_sprite.createSprite(w, h) != nullptr) {
+        s_spriteOk = true;
+        s_spriteBytes = static_cast<uint32_t>(w) * h * 2;
+        return true;
+    }
+
+    const uint32_t heapFree = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+    const uint32_t dmaFree = heap_caps_get_free_size(MALLOC_CAP_DMA);
+
+    const size_t bytes = static_cast<size_t>(w) * h * 2;
+    void* buffer = heap_caps_malloc(bytes, MALLOC_CAP_8BIT);
+    if (buffer != nullptr) {
+        s_fallbackBuffer = static_cast<uint16_t*>(buffer);
+        s_sprite.setBuffer(buffer, w, h, 16);
+        s_spriteOk = (s_sprite.getBuffer() != nullptr);
+        s_fallbackMode = s_spriteOk;
+        if (s_spriteOk) {
+            s_spriteBytes = static_cast<uint32_t>(bytes);
+            logger::warn("Framebuffer DMA non disponibile: uso heap normale (heap %u KB)",
+                         static_cast<unsigned>(heapFree / 1024));
+        }
+    }
+
     if (!s_spriteOk) {
-        logger::warn("Framebuffer non allocato: disegno diretto");
+        logger::warn("Framebuffer non allocato: disegno diretto (heap %u KB, DMA %u KB)",
+                     static_cast<unsigned>(heapFree / 1024),
+                     static_cast<unsigned>(dmaFree / 1024));
     }
     return s_spriteOk;
 }
@@ -442,10 +491,20 @@ void drawFallbackIcon(const std::string& id, int x, int y, int s) {
 }  // namespace
 
 bool begin() {
-    M5Cardputer.Display.setRotation(0);
+    // Parte direttamente in landscape (rotazione 1, il default): creare prima
+    // lo sprite in portrait e poi ricrearlo raddoppiava le allocazioni grosse
+    // all'avvio, con rischio di fallire per frammentazione dell'heap.
+    s_rotation = 1;
+    M5Cardputer.Display.setRotation(s_rotation);
     M5Cardputer.Display.setBrightness(128);
     M5Cardputer.Display.fillScreen(kBlack);
-    const bool ok = createSprite();
+    const bool ok = ensureSprite(M5Cardputer.Display.width(), M5Cardputer.Display.height());
+    logger::info("Framebuffer %ux%u %s (%u KB, heap libero %u KB)",
+                 static_cast<unsigned>(M5Cardputer.Display.width()),
+                 static_cast<unsigned>(M5Cardputer.Display.height()),
+                 !ok ? "diretto" : (s_fallbackMode ? "sprite RAM" : "sprite DMA"),
+                 static_cast<unsigned>(s_spriteBytes / 1024),
+                 static_cast<unsigned>(ESP.getFreeHeap() / 1024));
     if (ok) {
         g().fillScreen(kBackground);
         push();
@@ -454,11 +513,29 @@ bool begin() {
 }
 
 void applyRotation(uint8_t index) {
+    const uint8_t previous = s_rotation;
     s_rotation = index & 0x03;
     M5Cardputer.Display.setRotation(s_rotation);
-    createSprite();
+
+    if (!ensureSprite(M5Cardputer.Display.width(), M5Cardputer.Display.height())) {
+        // Il nuovo framebuffer non e' allocabile: torna alla rotazione
+        // precedente invece di restare senza double buffer (flicker).
+        s_rotation = previous;
+        M5Cardputer.Display.setRotation(s_rotation);
+        ensureSprite(M5Cardputer.Display.width(), M5Cardputer.Display.height());
+        logger::warn("Rotazione annullata: framebuffer non allocabile");
+    }
+
     clear();
     push();
+}
+
+bool framebufferActive() {
+    return s_spriteOk;
+}
+
+uint32_t framebufferBytes() {
+    return s_spriteBytes;
 }
 
 uint8_t rotation() {

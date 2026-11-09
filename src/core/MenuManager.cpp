@@ -315,13 +315,20 @@ void MenuManager::run(bool allowBack) {
                 moveSelection(1);
             }
             next = millis() + 110;
+            return true;
         }
+        return false;
     };
 
     bool running = true;
+    uint32_t lastClock = millis() / 1000;
     while (running) {
         navigation::update();
         const navigation::EventData ev = navigation::poll();
+
+        bool dirty = false;
+        const int selBefore = selected_;
+        const int topBefore = top_;
 
         if (ev.type == navigation::Event::Up) {
             if (mode_ == Mode::Grid) {
@@ -353,22 +360,49 @@ void MenuManager::run(bool allowBack) {
                 items_[selected_].action();
                 navigation::waitRelease();
             }
+            dirty = true;  // il modulo potrebbe aver disegnato sopra
         } else if (ev.type == navigation::Event::Back) {
             if (allowBack) {
                 running = false;
             }
         } else if (ev.type == navigation::Event::Text && textHandler_) {
             textHandler_(ev.ch);
+            dirty = true;
         }
 
-        repeat(upHeld, nextUp, navigation::pressed(';'), 0, -1);
-        repeat(downHeld, nextDown, navigation::pressed('.'), 0, 1);
+        if (repeat(upHeld, nextUp, navigation::pressed(';'), 0, -1)) {
+            dirty = true;
+        }
+        if (repeat(downHeld, nextDown, navigation::pressed('.'), 0, 1)) {
+            dirty = true;
+        }
         if (mode_ == Mode::Grid || mode_ == Mode::Carousel) {
-            repeat(leftHeld, nextLeft, navigation::pressed(','), -1, 0);
-            repeat(rightHeld, nextRight, navigation::pressed('/'), 1, 0);
+            if (repeat(leftHeld, nextLeft, navigation::pressed(','), -1, 0)) {
+                dirty = true;
+            }
+            if (repeat(rightHeld, nextRight, navigation::pressed('/'), 1, 0)) {
+                dirty = true;
+            }
         }
 
-        draw();
+        if (selected_ != selBefore || top_ != topBefore) {
+            dirty = true;
+        }
+        // L'indicatore batteria nell'header cambia lentamente: un frame al
+        // secondo basta. Senza eventi non si ridisegna: meno traffico SPI,
+        // nessun effetto di tearing/flicker nei menu fermi.
+        const uint32_t clock = millis() / 1000;
+        if (clock != lastClock) {
+            lastClock = clock;
+            dirty = true;
+        }
+        if (mode_ == Mode::Carousel && carouselAnim_ > 0) {
+            dirty = true;
+        }
+
+        if (dirty) {
+            draw();
+        }
         delay(16);
     }
 }
@@ -518,6 +552,11 @@ void MenuManager::drawCarousel() {
     const int sideH = 58;
     const int centerY = kHeaderHeight + 8;
     const int sideY = kHeaderHeight + 17;
+    // Decrementa prima di calcolare lo spostamento: cosi' l'ultimo frame
+    // dell'animazione viene disegnato con shift 0 (posizione a riposo).
+    if (carouselAnim_ > 0) {
+        --carouselAnim_;
+    }
     const int shift = carouselAnim_ > 0
                           ? carouselDir_ * (carouselAnim_ * kCarouselSpacing / kCarouselFrames)
                           : 0;
@@ -550,10 +589,6 @@ void MenuManager::drawCarousel() {
     } else if (carouselAnim_ == 0) {
         const std::string page = std::to_string(selected_ + 1) + "/" + std::to_string(total);
         display::textCentered(display::height() - 24, page, display::kMuted, 0);
-    }
-
-    if (carouselAnim_ > 0) {
-        --carouselAnim_;
     }
 }
 
