@@ -149,11 +149,15 @@ void run(const std::string& parent) {
     bool writeFailed = false;
 
     navigation::waitRelease();
+    uint32_t lastDataAt = millis();
     while (written < total) {
         const size_t available = stream->available();
         if (available == 0) {
-            if (!http.connected()) {
-                break;  // connessione chiusa prima della fine
+            // Server che tiene la connessione aperta ma non invia piu' nulla:
+            // senza un timeout il loop resterebbe appeso per sempre (con
+            // powertimer::Hold attivo, quindi senza spegnimento automatico).
+            if (!http.connected() || millis() - lastDataAt > 60000) {
+                break;  // connessione chiusa o download bloccato
             }
             navigation::update();
             if (navigation::poll().type == navigation::Event::Back) {
@@ -163,6 +167,7 @@ void run(const std::string& parent) {
             delay(2);
             continue;
         }
+        lastDataAt = millis();
 
         const size_t toRead = std::min(available, kChunkSize);
         const size_t read = stream->readBytes(buffer, toRead);

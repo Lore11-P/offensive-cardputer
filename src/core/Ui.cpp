@@ -14,11 +14,21 @@ void drawScreen(const std::string& title, const std::string& parent,
     display::clear(display::kPaper);
     display::header(title, parent);
 
+    // Pannello chiaro con regola d'accento: usato dalle schermate di conferma.
+    // Va disegnato prima del testo, altrimenti lo coprirebbe.
+    if (accent) {
+        auto& d = display::g();
+        const int panelH = display::height() - 35;
+        d.fillRect(1, 21, display::width() - 2, panelH, display::kPaperLight);
+        d.drawRect(1, 21, display::width() - 2, panelH, display::kInk);
+        d.fillRect(1, 21, display::width() - 2, 2, accent);
+    }
+
     int y = 27;
     for (const auto& line : lines) {
         const uint16_t color = line.rfind("!", 0) == 0
-                                   ? display::kNeoRed
-                                   : (line.rfind(">", 0) == 0 ? display::kNeoGreen
+                                   ? display::kDanger
+                                   : (line.rfind(">", 0) == 0 ? display::kAccent
                                                               : display::kInk);
         std::string s = line;
         if (!s.empty() && (s[0] == '!' || s[0] == '>')) {
@@ -31,14 +41,6 @@ void drawScreen(const std::string& title, const std::string& parent,
         }
     }
 
-    if (accent) {
-        display::g().fillRect(3, 23, display::width() - 6,
-                              display::height() - 37, display::kInk);
-        display::g().fillRect(1, 21, display::width() - 6,
-                              display::height() - 37, accent);
-        display::g().drawRect(1, 21, display::width() - 6,
-                              display::height() - 37, display::kInk);
-    }
     display::footer(hint);
     display::push();
 }

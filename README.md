@@ -18,6 +18,10 @@ Firmware modulare per **M5Stack Cardputer ADV** (ESP32-S3FN8, 8 MB flash, **senz
 | Wi-Fi | ✅ | Scanner reti, deauth/evil twin/evil portal opzionali |
 | Radar Wi-Fi/BLE | ✅ | Finder BLE hot/cold con HUD stile contatore Geiger, radar PPI, vista banda 2.4 GHz con TDM Wi-Fi/BLE, presenza CSI sperimentale |
 | Web Radio | ✅ | 5 stazioni HTTP MP3 con decoder ESP32-audioI2S, volume, stato; usa il bus I2S dello speaker |
+| Musica | ✅ | Lettore MP3/WAV/FLAC da `/music` sulla microSD: lista brani, pausa, cambio traccia, volume, barra di avanzamento; decoder condiviso con la web radio |
+| Capture | ✅ | Browser PCAP on-device, export hashcat hc22000 (PMKID/EAPOL) e pcap dei soli EAPOL |
+| BLE+ | ✅ | AirTag/FindMy, Flipper finder, enumerazione GATT, skimmer detect, wardriving CSV, cattura BLE (CSV + pcap 251) |
+| BadUSB | ✅ solo env `hid` | Script Ducky/Flipper da `/badusb`, tastiera HID via TinyUSB (nessun mouse) |
 | Aggiornamento OTA | ✅ | Da WiFi: scarica `firmware.bin` dal ramo `main` del repo GitHub e lo scrive nella partizione inattiva; richiede il layout dual-OTA (`partitions.csv`) |
 | microSD | ✅ | File browser, info spazio, screenshot BMP, backup config e punteggi |
 | Database IR | 🟡 | 307 file .ir, 38 cartelle: 32 marche TV complete, 5 parziali, 3 coperte da Universale; verifica i codici sui tuoi apparecchi |
@@ -28,7 +32,7 @@ Firmware modulare per **M5Stack Cardputer ADV** (ESP32-S3FN8, 8 MB flash, **senz
 ## Funzionalità
 
 - **Menu gerarchico** con carosello orizzontale animato, card centrale e anteprime laterali; le viste con molti elementi usano griglie o liste con auto-repeat.
-- **Display** 240×135 in landscape, framebuffer 16 bpp (nessun flicker), tema neubrutalista e rotazione configurabile.
+- **Display** 240×135 in landscape, framebuffer 16 bpp (nessun flicker), tema "Braun-inspired minimalism" con accento rosso Nothing e rotazione configurabile.
 - **Batteria**: indicatore nella barra superiore con percentuale, colore per livello e stato di carica. Sui modelli senza PMIC (Cardputer/ADV) la ricarica viene stimata dalla tensione della batteria, perche' il chip di carica non e' leggibile.
 - **Storage** LittleFS + microSD opzionale (`/sd`), con fallback automatico e file browser.
 - **Configurazione** in NVS, export/import JSON (`/config.json`) senza dati sensibili; backup e screenshot su SD.
@@ -48,6 +52,59 @@ Firmware modulare per **M5Stack Cardputer ADV** (ESP32-S3FN8, 8 MB flash, **senz
 - **Web Radio**: stazioni pubbliche in MP3 su HTTP (`SomaFM Groove Salad/Drone Zone/Lush`, `Radio Paradise`, `FIP`). `;`/`.` regolano il volume, `ENTER` ferma, `` ` `` esce. Il decoder prende il bus I2S dello speaker: durante l'ascolto `M5.Speaker` è chiuso (quindi niente beep del radar) e viene riaperto all'uscita. I pin I2S si leggono a runtime da `M5.Speaker.config()`.
 - **Rete WiFi**: configurazione in **Impostazioni → Rete WiFi**. Scansiona le reti vicine (SSID, RSSI, canale, cifratura, `*` = aperta), fa scegliere la rete dall'elenco, chiede solo la password e la salva; in alternativa permette l'inserimento manuale dell'SSID (reti nascoste), il test di connessione con IP/gateway/RSSI e la cancellazione delle credenziali.
 - **Aggiornamento OTA via WiFi**: **Impostazioni → Aggiorna firmware** connette la rete salvata, scarica `flasher/bin/firmware.bin` dal ramo `main` di [github.com/Lore11-P/offensive-cardputer](https://github.com/Lore11-P/offensive-cardputer) via HTTPS e lo scrive nella partizione OTA inattiva con `Update.h`, mostrando percentuale e dimensione; `` ` `` annulla senza toccare il firmware in esecuzione. Al termine il dispositivo si riavvia sulla nuova build. Per aggiornare il device basta quindi pubblicare un nuovo `flasher/bin/firmware.bin` sul ramo `main`.
+
+## Musica (MP3 locali)
+
+Il menu **Musica** riproduce i file audio nella cartella `/music` della microSD
+(`WAV`, `FLAC`, `M4A`, `AAC`, `OGG`/`OPUS` sono accettati; la SD e' il supporto
+consigliato per la capacita'). Se la SD non e' montata viene usata `/music` su
+LittleFS, utile solo per pochi file di prova.
+
+Tasti nel lettore: `ENTER` pausa/riprendi, `,`/`/` brano precedente/successivo,
+`;`/`.` volume, `` ` `` esce. A fine brano passa da solo al successivo.
+
+Per aggiungere brani copia i file nella cartella `/music` della microSD dal PC: il
+lettore non scarica nulla dalla rete.
+
+## Capture (analisi catture 802.11)
+
+Il menu **Capture** lavora sui file salvati dallo sniffer in `/captures`:
+
+- **Sfoglia**: indice dei frame in streaming (tipo, lunghezza, canale, RSSI) e
+  hex dump del frame selezionato. Non carica il file in RAM; indicizza i primi
+  20000 frame.
+- **Converti in hc22000**: genera `<nome>.hc22000` con le righe `WPA*01`
+  (PMKID) e `WPA*02` (EAPOL 4-way) per hashcat. L'ESSID viene ricavato dai
+  beacon dello stesso file; le sessioni senza SSID note vengono saltate e
+  conteggiate.
+- **Estrai solo EAPOL**: crea `<nome>_eapol.pcap` con i soli frame EAPOL.
+
+Durante lo sniffer l'estrazione avviene anche in tempo reale: a fine sessione
+viene scritto `<nome>.hc22000` accanto al pcap.
+
+## Strumenti BLE+ (menu BLE)
+
+- **AirTag/FindMy**: scansione passiva delle firme Apple; con
+  `ENABLE_OFFENSIVE=1` e conferma esplicita, spoof di un payload AirTag per 30 s.
+- **Flipper finder**: individua Flipper e firmware derivati (nome/OUI) con
+  barra RSSI e inseguimento hot/cold.
+- **GATT enum**: connessione a un dispositivo (uno alla volta, timeout 25 s),
+  elenco di servizi e caratteristiche con proprieta'.
+- **Skimmer detect**: euristica su nomi tipo HC-05/06, RN-4x, Bluno e bridge
+  seriali; segnala i sospetti con il motivo.
+- **Wardriving**: CSV in `/ble` con MAC, nome, OUI, RSSI, tipo; senza GPS.
+- **Cattura BLE**: 30 s in CSV + pcap linktype 251 (AA + PDU, leggibile in
+  Wireshark); canale non disponibile con NimBLE 1.4.3.
+
+## BadUSB (solo env dedicato)
+
+Richiede TinyUSB: `python -m platformio run -e cardputer-adv-hid`. Il device
+enumera come tastiera + seriale (niente mouse). Gli script vanno in `/badusb`
+sulla SD (fallback LittleFS, esempi in `data/badusb`).
+
+Sintassi supportata: `id:`/commenti, `DEFAULT_DELAY`, `DELAY`, `STRING`,
+`ENTER`, `TAB`, `ESC`, `SPACE`, `BACKSPACE`, `DELETE`, `CAPSLOCK`, frecce,
+`CTRL/ALT/SHIFT/GUI` con tasto, caratteri singoli, `REPEAT`.
 
 ## Hardware
 

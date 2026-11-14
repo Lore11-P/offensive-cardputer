@@ -17,10 +17,16 @@ namespace {
 constexpr const char* kPath = "/scores.txt";
 constexpr size_t kMaxBytes = 4096;
 
+// I record vanno sulla SD solo se la SD c'e': altrimenti restano su LittleFS,
+// altrimenti su un dispositivo senza card non verrebbe salvato nulla.
+bool preferSD() {
+    return storage::hasSD();
+}
+
 std::map<std::string, uint32_t> load() {
     std::map<std::string, uint32_t> out;
     std::string text;
-    if (!storage::readText(kPath, text, kMaxBytes, true)) {
+    if (!storage::readText(kPath, text, kMaxBytes, preferSD())) {
         return out;
     }
     std::istringstream stream(text);
@@ -48,7 +54,7 @@ void store(const std::map<std::string, uint32_t>& values) {
         text += std::to_string(item.second);
         text += '\n';
     }
-    storage::writeText(kPath, text, true);
+    storage::writeText(kPath, text, preferSD());
 }
 
 }  // namespace

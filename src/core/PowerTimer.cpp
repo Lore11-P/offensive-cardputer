@@ -65,20 +65,20 @@ void drawSuspendScreen(bool charging, uint32_t seconds) {
     const int bx = (w - kBodyW) / 2;
     const int by = h / 2 - kBodyH / 2 - 6;
     const uint16_t color =
-        charging ? display::kNeoCyan
-                 : (pct >= 0 && pct <= 15 ? display::kNeoRed : display::kNeoGreen);
+        charging ? display::kAccent
+                 : (pct >= 0 && pct <= 15 ? display::kDanger : display::kText);
 
-    d.drawRect(bx, by, kBodyW, kBodyH, display::kPaper);
-    d.fillRect(bx + kBodyW, by + kBodyH / 3, 3, kBodyH / 3, display::kPaper);
+    d.drawRect(bx, by, kBodyW, kBodyH, display::kText);
+    d.fillRect(bx + kBodyW, by + kBodyH / 3, 3, kBodyH / 3, display::kText);
     if (pct > 0) {
         d.fillRect(bx + 3, by + 3, (kBodyW - 6) * pct / 100, kBodyH - 6, color);
     }
     if (charging && seconds % 2 == 0) {
         const int cx = bx + kBodyW / 2;
         d.fillTriangle(cx + 7, by + 4, cx - 6, by + kBodyH / 2 + 2, cx + 1, by + kBodyH / 2 + 2,
-                       display::kNeoYellow);
+                       display::kAccent);
         d.fillTriangle(cx - 7, by + kBodyH - 4, cx + 6, by + kBodyH / 2 - 2, cx - 1,
-                       by + kBodyH / 2 - 2, display::kNeoYellow);
+                       by + kBodyH / 2 - 2, display::kAccent);
     }
 
     char buf[16];
@@ -90,7 +90,7 @@ void drawSuspendScreen(bool charging, uint32_t seconds) {
     centerDirect(d, by + kBodyH + 8, buf, display::kText, 2);
 
     if (charging) {
-        centerDirect(d, h - 34, "IN RICARICA", display::kNeoCyan, 2);
+        centerDirect(d, h - 34, "IN RICARICA", display::kAccent, 2);
     } else {
         centerDirect(d, h - 34, "Premi un tasto per riaccendere", display::kTextDim, 0);
     }

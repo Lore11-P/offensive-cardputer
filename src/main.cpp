@@ -46,6 +46,15 @@
 #if ENABLE_MODULE_RADIO
 #include "modules/radio/RadioMenu.h"
 #endif
+#if ENABLE_MODULE_MUSIC
+#include "modules/music/MusicMenu.h"
+#endif
+#if ENABLE_MODULE_PCAPTOOLS
+#include "modules/pcap/PcapMenu.h"
+#endif
+#if ENABLE_MODULE_BADUSB
+#include "modules/badusb/BadUsbMenu.h"
+#endif
 
 namespace {
 
@@ -82,6 +91,17 @@ void buildAndRunMainMenu() {
 #endif
 #if ENABLE_MODULE_RADIO
     menu.addItem("Radio", "tv", guardedModule("Radio", config::Module::Radio, radio::runMenu));
+#endif
+#if ENABLE_MODULE_MUSIC
+    menu.addItem("Musica", "music", guardedModule("Musica", config::Module::Music, music::runMenu));
+#endif
+#if ENABLE_MODULE_PCAPTOOLS
+    menu.addItem("Capture", "capture",
+                 guardedModule("Capture", config::Module::PcapTools, pcaptools_ui::runMenu));
+#endif
+#if ENABLE_MODULE_BADUSB
+    menu.addItem("BadUSB", "usb",
+                 guardedModule("BadUSB", config::Module::BadUsb, badusb::runMenu));
 #endif
 #if ENABLE_MODULE_IR
     menu.addItem("Infrarossi", "ir", guardedModule("IR", config::Module::Ir, ir::runMenu));

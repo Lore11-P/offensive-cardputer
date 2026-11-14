@@ -277,7 +277,9 @@ navigation::EventData scanWindow(NimBLEScan* scan, uint32_t durationMs,
     if (scan == nullptr) {
         return relevant;
     }
-    scan->start(durationMs, nullptr, false);
+    // NimBLEScan::start() vuole i secondi: la finestra resta comunque limitata
+    // dal deadline qui sotto.
+    scan->start(std::max<uint32_t>(1, durationMs / 1000), nullptr, false);
     const uint32_t deadline = millis() + durationMs + 1500;
     uint32_t lastDraw = 0;
     while (millis() < deadline) {
@@ -644,7 +646,8 @@ void drawFinderFrame(const std::string& name, const std::string& address, int rs
 void runBleFinder() {
     powertimer::Hold hold;  // schermata di monitoraggio: niente spegnimento
     ensureBle();
-    RadarAdvertiseCallbacks callbacks;
+    // static: lo scanner globale conserva il puntatore tra una schermata e l'altra
+    static RadarAdvertiseCallbacks callbacks;
     NimBLEScan* scan = NimBLEDevice::getScan();
     if (scan == nullptr) {
         ui::message("Find BLE", {"!NimBLE non disponibile."}, "Radar");
@@ -953,7 +956,8 @@ void drawPpi(const BleDevice* devices, int count, uint32_t sweepMs) {
 void runBleRadar() {
     powertimer::Hold hold;  // schermata di monitoraggio: niente spegnimento
     ensureBle();
-    RadarAdvertiseCallbacks callbacks;
+    // static: lo scanner globale conserva il puntatore tra una schermata e l'altra
+    static RadarAdvertiseCallbacks callbacks;
     NimBLEScan* scan = NimBLEDevice::getScan();
     if (scan == nullptr) {
         ui::message("Radar BLE", {"!NimBLE non disponibile."}, "Radar");
@@ -1138,7 +1142,8 @@ bool measureBleBand(BandReading& reading) {
     if (scan == nullptr) {
         return false;
     }
-    RadarAdvertiseCallbacks callbacks;
+    // static: lo scanner globale conserva il puntatore tra una schermata e l'altra
+    static RadarAdvertiseCallbacks callbacks;
     g_trackDevices = false;
     g_hasTarget = false;
     g_countAdverts = true;
@@ -1279,7 +1284,8 @@ void runBand() {
     }
     ensureBle();
     NimBLEScan* scan = NimBLEDevice::getScan();
-    RadarAdvertiseCallbacks callbacks;
+    // static: lo scanner globale conserva il puntatore tra una schermata e l'altra
+    static RadarAdvertiseCallbacks callbacks;
     if (scan != nullptr) {
         g_trackDevices = false;
         g_hasTarget = false;
@@ -1323,7 +1329,9 @@ void runBand() {
                     g_advertCount = 0;
                     g_countAdverts = true;
                     if (scan != nullptr) {
-                        scan->start(kBleBandSliceMs, nullptr, false);
+                        // Secondi, non millisecondi; la durata reale e' gestita
+                        // da kBleBandSliceMs nel ciclo.
+                        scan->start(1, nullptr, false);
                     }
                     phaseStart = now;
                 } else {
@@ -1550,7 +1558,10 @@ void runCsi() {
             const int delta = (ev.type == navigation::Event::Right) ? 1 : -1;
             channel = static_cast<uint8_t>(clampInt(static_cast<int>(channel) + delta, 1, 13));
             endCsi();
-            beginCsi(channel);
+            if (!beginCsi(channel)) {
+                ui::message("Presenza CSI", {"!CSI non riattivabile sul canale."}, "Radar");
+                break;
+            }
             calibrating = true;
             calibrationStart = millis();
             baselineSum = 0.0f;
@@ -1561,7 +1572,11 @@ void runCsi() {
         const uint32_t now = millis();
         if (now >= nextSample) {
             nextSample = now + 40;  // 25 Hz
-            const float energy = static_cast<float>(g_csiEnergy);
+            // Se i frame CSI si fermano il valore resta congelato: senza questo
+            // "MOVIMENTO" si blocca su un livello costante non veritiero.
+            const bool stale =
+                (g_csiLastMs == 0) || (now - g_csiLastMs > 1000);
+            const float energy = stale ? 0.0f : static_cast<float>(g_csiEnergy);
             if (energy > 0.0f) {
                 ema = (ema <= 0.0f) ? energy : (ema * 0.85f + energy * 0.15f);
             }

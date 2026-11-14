@@ -1,10 +1,18 @@
-# Changelog
+﻿# Changelog
 
 Tutte le modifiche rilevanti del progetto. Formato basato su Keep a Changelog.
 
 ## [Unreleased]
 
 ### Aggiunto
+
+- **Capture** (`src/modules/pcap`, `include/PcapTools.h`, `ENABLE_MODULE_PCAPTOOLS`): browser PCAP in streaming con hex dump, conversione in **hashcat hc22000** (`WPA*01` PMKID + `WPA*02` EAPOL, ESSID dai beacon, dedup, limiti e statistiche) ed estrazione dei soli frame EAPOL; l'estrazione hc22000 gira anche in tempo reale durante lo sniffer.
+- **BLE+** (`src/modules/bleext`, `ENABLE_MODULE_BLEEXT`): AirTag/FindMy (rilevamento passivo + spoof dietro `ENABLE_OFFENSIVE`), Flipper finder con barra RSSI, enumerazione GATT su task dedicato con timeout, rilevamento euristico skimmer, wardriving CSV e cattura advertising in CSV + pcap linktype 251.
+- **BadUSB** (`src/modules/badusb`, env `cardputer-adv-hid`): parser Ducky/Flipper (`STRING`, `DELAY`, modificatori, tasti speciali, `REPEAT`), esecuzione con avanzamento e abort, script da `/badusb` su SD con esempi in `data/badusb`; richiede TinyUSB (`ARDUINO_USB_MODE=0`) e non emula il mouse.
+
+
+- **Lettore MP3** (`src/modules/music/`, `ENABLE_MODULE_MUSIC`): riproduce MP3/WAV/FLAC/M4A/AAC/OGG da `/music` (microSD, fallback LittleFS) con pausa, brano precedente/successivo, volume a segmenti, barra di avanzamento e passaggio automatico al brano seguente. Il decoder ESP32-audioI2S e il bus I2S sono condivisi con la Web Radio tramite il nuovo `utils/AudioOut` (una sola istanza di `Audio`, speaker rilasciato solo durante la riproduzione).
+
 
 - **Suite WiFi ampliata** (`src/modules/wifi/WifiMenu.cpp`): voci **AP info**, **Avvia AP** (SSID `Cardputer-AP`, WPA2) e **Spegni WiFi**; sottomenu **WiFi Atks** con **Beacon Spam** (SSID falsi su tutti i canali, 60 s), **Deauth target**, **Deauth Flood** (fino a 24 reti in sequenza) ed Evil Twin/Evil Portal; **Channel Analyzer** con barre per canale 1–13; **Jam Detect** con conteggio di deauth/disassoc e allarme; **Sniffer 802.11** con cattura promiscua, salvataggio in `/captures/wifi_capture.pcap` (PCAP link type 105) e canale che scorre. Frame beacon e deauth adattati da [Bruce](https://github.com/pr3y/Bruce) (AGPL-3.0).
 - **Rete**: **Scan Hosts** via tabella ARP lwIP (limita la scansione a /24 se la subnet è più ampia) con **port scan TCP** delle porte più comuni; **TCP Listener** su porta configurabile; **TCP Client** e **TelNET** con console interattiva a schermo (host/porta da tastiera, INVIO invia CR).

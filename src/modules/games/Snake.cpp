@@ -114,7 +114,7 @@ void runSnake() {
                 delay(5);
                 continue;
             }
-            nextTick = now + std::max<uint32_t>(55, 130 - score / 5);
+            nextTick = now + static_cast<uint32_t>(std::max(55, 130 - score / 5));
             dir = pending;
 
             Point head = body.front();
@@ -131,8 +131,9 @@ void runSnake() {
             if (head.x < 0 || head.x >= kCols || head.y < 0 || head.y >= kRows) {
                 dead = true;
             }
-            for (const auto& p : body) {
-                if (same(head, p)) {
+            // La coda si svuota in questo stesso tick: occuparla non e' morte.
+            for (size_t i = 0; i + 1 < body.size(); ++i) {
+                if (same(head, body[i])) {
                     dead = true;
                     break;
                 }

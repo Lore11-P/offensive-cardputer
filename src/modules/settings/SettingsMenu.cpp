@@ -35,15 +35,18 @@ void runBrightness() {
     uint32_t nextRepeat = 0;
     bool leftHeld = false;
     bool rightHeld = false;
+    // Il valore si applica subito al pannello ma si salva in NVS una volta
+    // sola all'uscita: con l'auto-repeat si scriverebbe ~11 volte al secondo.
+    uint8_t local = config::brightness();
 
     uint32_t lastDraw = 0;
     for (;;) {
         bool changed = false;
         const int step = 26;
         if (navigation::pressed(',') && millis() >= nextRepeat) {
-            const int v = static_cast<int>(config::brightness()) - step;
-            config::setBrightness(static_cast<uint8_t>(v < 10 ? 10 : v));
-            M5Cardputer.Display.setBrightness(config::brightness());
+            const int v = static_cast<int>(local) - step;
+            local = static_cast<uint8_t>(v < 10 ? 10 : v);
+            M5Cardputer.Display.setBrightness(local);
             nextRepeat = millis() + (leftHeld ? 90 : 320);
             leftHeld = true;
             changed = true;
@@ -51,9 +54,9 @@ void runBrightness() {
             leftHeld = false;
         }
         if (navigation::pressed('/') && millis() >= nextRepeat) {
-            const int v = static_cast<int>(config::brightness()) + step;
-            config::setBrightness(static_cast<uint8_t>(v > 255 ? 255 : v));
-            M5Cardputer.Display.setBrightness(config::brightness());
+            const int v = static_cast<int>(local) + step;
+            local = static_cast<uint8_t>(v > 255 ? 255 : v);
+            M5Cardputer.Display.setBrightness(local);
             nextRepeat = millis() + (rightHeld ? 90 : 320);
             rightHeld = true;
             changed = true;
@@ -65,12 +68,13 @@ void runBrightness() {
         if (changed || lastDraw == 0 || now - lastDraw >= 500) {
             display::clear();
             display::header("Luminosita", "Impostazioni");
-            display::textCentered(35, std::to_string(brightnessPercent()) + "%",
+            display::textCentered(35,
+                                  std::to_string((static_cast<int>(local) * 100 + 127) / 255) + "%",
                                   display::kAccent, 4);
             display::progressBar(28, 66, display::width() - 56, 10,
-                                 static_cast<float>(config::brightness()) / 255.0f);
+                                 static_cast<float>(local) / 255.0f);
             display::textCentered(84,
-                                  "valore " + std::to_string(config::brightness()) + " / 255",
+                                  "valore " + std::to_string(local) + " / 255",
                                   display::kTextDim, 0);
             display::textCentered(102, ", = -10%    / = +10%", display::kText, 0);
             display::footer("ENTER/` = salva e torna");
@@ -84,6 +88,8 @@ void runBrightness() {
         }
         delay(changed ? 25 : 30);
     }
+    config::setBrightness(local);
+    M5Cardputer.Display.setBrightness(config::brightness());
     navigation::waitRelease();
 }
 
@@ -297,10 +303,16 @@ void runModules() {
         {"Chat", "chat", config::Module::Chat},
         {"WiFi", "wifi", config::Module::Wifi},
         {"Radar", "radar", config::Module::Radar},
-        {"Radio", "tv", config::Module::Radio},
+            {"Radio", "tv", config::Module::Radio},
+            {"Musica", "music", config::Module::Music},
         {"Infrarossi", "ir", config::Module::Ir},
         {"Giochi", "games", config::Module::Games},
-        {"SD", "sd", config::Module::Sd},
+            {"SD", "sd", config::Module::Sd},
+#if ENABLE_MODULE_BADUSB
+            {"BadUSB", "usb", config::Module::BadUsb},
+#endif
+            {"Capture", "capture", config::Module::PcapTools},
+            {"BLE+", "ble", config::Module::BleExt},
     };
     constexpr int kCount = sizeof(rows) / sizeof(rows[0]);
     constexpr int kRowH = 20;

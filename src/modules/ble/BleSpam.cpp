@@ -17,6 +17,9 @@ extern "C" int ble_hs_id_set_rnd(const uint8_t* rnd_addr);
 #include "ModuleFlags.h"
 #include "Navigation.h"
 #include "Ui.h"
+#if ENABLE_MODULE_BLEEXT
+#include "modules/bleext/BleExtMenu.h"
+#endif
 
 #if ENABLE_MODULE_BLE
 
@@ -30,6 +33,8 @@ struct ScanResult {
 };
 
 std::vector<ScanResult> g_results;
+// Serializza onResult() (task NimBLE) con il lettore (task principale).
+SemaphoreHandle_t g_resultsMtx = nullptr;
 
 class ScanCallbacks : public NimBLEAdvertisedDeviceCallbacks {
 public:
@@ -38,27 +43,38 @@ public:
             return;
         }
         const std::string address = device->getAddress().toString();
+        if (g_resultsMtx) {
+            xSemaphoreTake(g_resultsMtx, portMAX_DELAY);
+        }
         for (auto& existing : g_results) {
             if (existing.address == address) {
                 existing.rssi = std::max(existing.rssi, device->getRSSI());
                 if (device->haveName()) {
                     existing.name = device->getName();
                 }
+                if (g_resultsMtx) {
+                    xSemaphoreGive(g_resultsMtx);
+                }
                 return;
             }
         }
-        if (g_results.size() >= 40) {
-            return;
+        if (g_results.size() < 40) {
+            ScanResult result;
+            result.address = address;
+            result.name = device->haveName() ? device->getName() : "(senza nome)";
+            result.rssi = device->getRSSI();
+            g_results.push_back(result);
         }
-        ScanResult result;
-        result.address = address;
-        result.name = device->haveName() ? device->getName() : "(senza nome)";
-        result.rssi = device->getRSSI();
-        g_results.push_back(result);
+        if (g_resultsMtx) {
+            xSemaphoreGive(g_resultsMtx);
+        }
     }
 };
 
 void ensureBle() {
+    if (g_resultsMtx == nullptr) {
+        g_resultsMtx = xSemaphoreCreateMutex();
+    }
     if (!NimBLEDevice::getInitialized()) {
         NimBLEDevice::init("CardputerFW");
     }
@@ -80,8 +96,12 @@ void drawScanProgress(int round, int total, size_t found, bool interrupted) {
 }
 
 void runScanner() {
-    g_results.clear();
     ensureBle();
+    if (g_resultsMtx) {
+        xSemaphoreTake(g_resultsMtx, portMAX_DELAY);
+        g_results.clear();
+        xSemaphoreGive(g_resultsMtx);
+    }
 
     NimBLEScan* scan = NimBLEDevice::getScan();
     if (scan == nullptr) {
@@ -94,6 +114,8 @@ void runScanner() {
     scan->setActiveScan(true);
     scan->setInterval(100);
     scan->setWindow(99);
+    // Nessun risultato trattenuto dallo stack: la lista e' gestita qui sopra.
+    scan->setMaxResults(0);
     scan->stop();  // se una scansione precedente e' rimasta appesa
 
     constexpr int kRounds = 4;
@@ -108,8 +130,15 @@ void runScanner() {
     bool aborted = false;
     navigation::waitRelease();
     for (int round = 0; round < kRounds && !aborted; ++round) {
-        drawScanProgress(round, kRounds, g_results.size(), false);
-        scan->start(kRoundMs, nullptr, false);  // non bloccante: si esce subito
+        size_t found = 0;
+        if (g_resultsMtx) {
+            xSemaphoreTake(g_resultsMtx, portMAX_DELAY);
+            found = g_results.size();
+            xSemaphoreGive(g_resultsMtx);
+        }
+        drawScanProgress(round, kRounds, found, false);
+        // NimBLEScan::start() vuole i secondi, non i millisecondi.
+        scan->start(kRoundMs / 1000, nullptr, false);
         const uint32_t deadline = millis() + kRoundMs + kGraceMs;
         while (scan->isScanning() && millis() < deadline) {
             navigation::update();
@@ -122,18 +151,37 @@ void runScanner() {
         if (scan->isScanning()) {
             scan->stop();  // finestra chiusa a forza
         }
+        if (g_resultsMtx) {
+            xSemaphoreTake(g_resultsMtx, portMAX_DELAY);
+        }
         scan->clearResults();
+        if (g_resultsMtx) {
+            xSemaphoreGive(g_resultsMtx);
+        }
+    }
+
+    // Stacca i callback prima di leggere la lista: nessun callback puo' piu'
+    // toccare g_results e il puntatore allo stack di questa funzione non resta
+    // appeso nello scanner globale.
+    scan->stop();
+    scan->setAdvertisedDeviceCallbacks(nullptr, false);
+
+    std::vector<ScanResult> found;
+    if (g_resultsMtx) {
+        xSemaphoreTake(g_resultsMtx, portMAX_DELAY);
+        found = g_results;
+        xSemaphoreGive(g_resultsMtx);
     }
 
     if (aborted) {
         logger::info("BLE scanner interrotto dall'utente");
     }
     logger::info("BLE scanner: %u dispositivi, stack=%s heap=%u",
-                 static_cast<unsigned>(g_results.size()),
+                 static_cast<unsigned>(found.size()),
                  NimBLEDevice::getInitialized() ? "ok" : "non init",
                  static_cast<unsigned>(ESP.getFreeHeap()));
 
-    if (g_results.empty()) {
+    if (found.empty()) {
         ui::message("BLE Scanner",
                     {aborted ? "!Scansione interrotta." : "!Nessun dispositivo rilevato.",
                      "Verifica che il BLE sia attivo nelle vicinanze.",
@@ -142,13 +190,13 @@ void runScanner() {
         return;
     }
 
-    std::sort(g_results.begin(), g_results.end(),
+    std::sort(found.begin(), found.end(),
               [](const ScanResult& a, const ScanResult& b) {
                   return a.rssi > b.rssi;
               });
 
     MenuManager menu("Dispositivi BLE", "BLE");
-    for (const auto& result : g_results) {
+    for (const auto& result : found) {
         std::string name = result.name;
         if (name.size() > 18) {
             name = name.substr(0, 18) + "~";
@@ -216,6 +264,9 @@ void runSpam(const std::string& label,
     advertising->stop();
     NimBLEDevice::setOwnAddrType(BLE_OWN_ADDR_RANDOM, false);
     advertising->setAdvertisementType(BLE_GAP_CONN_MODE_NON);
+    // Il singleton e' condiviso: senza questo il tipo di PDU dipende da quale
+    // modulo e' stato eseguito prima (Chat lo imposta a false).
+    advertising->setScanResponse(false);
 
     const uint16_t intervalMs =
         static_cast<uint16_t>(std::max<uint16_t>(config::bleIntervalMs(), 20));
@@ -264,8 +315,11 @@ void runSpam(const std::string& label,
             data.addData(std::string(reinterpret_cast<const char*>(payload->data),
                                      payload->size));
             advertising->setAdvertisementData(data);
-            advertising->start(0);
-            ++packets;
+            if (advertising->start(0)) {
+                ++packets;
+            } else {
+                logger::warn("BLE advertising: start() fallito");
+            }
             nextPacket = now + intervalMs;
         }
 
@@ -335,6 +389,13 @@ std::vector<const BlePayload*> allPayloads() {
 void runMenu() {
     MenuManager menu("BLE", "Menu principale");
     menu.addItem("Scanner BLE", "scan", [] { runScanner(); });
+#if ENABLE_MODULE_BLEEXT
+    // Il toggle in Impostazioni deve avere effetto anche qui.
+    if (config::moduleEnabled(config::Module::BleExt)) {
+        menu.addSeparator("Strumenti");
+        menu.addItem("BLE+", "ble", [] { bleext::runMenu(); });
+    }
+#endif
 #if ENABLE_OFFENSIVE
     menu.addSeparator("SPAM (solo test autorizzati)");
     menu.addItem("Random (tutti)", "ble", [] {

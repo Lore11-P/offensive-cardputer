@@ -134,6 +134,14 @@ bool scanNetworks(std::vector<Network>& networks, const std::string& parent) {
         navigation::update();
         if (navigation::poll().type == navigation::Event::Back) {
             WiFi.scanDelete();
+            WiFi.mode(WIFI_OFF);
+            return false;
+        }
+        // Se il driver non esce mai da RUNNING la UI resterebbe appesa.
+        if (millis() - started > 20000) {
+            WiFi.scanDelete();
+            WiFi.mode(WIFI_OFF);
+            ui::message("Reti WiFi", {"!Scansione troppo lenta.", "Riprova."}, parent);
             return false;
         }
         if (millis() - lastDraw > 120) {
@@ -346,9 +354,11 @@ bool scanAndConnect(const std::string& parent) {
     if (network.auth != WIFI_AUTH_OPEN && !promptPassword(network.ssid, password)) {
         return false;
     }
-    saveCredentials(network.ssid, password);
 
     if (connect(network.ssid, password, parent)) {
+        // Salva solo a connessione riuscita: una password sbagliata non deve
+        // sovrascrivere credenziali che funzionavano.
+        saveCredentials(network.ssid, password);
         std::string ip = WiFi.localIP().toString().c_str();
         ui::message("WiFi", {">Connesso a " + shortened(network.ssid, 20), "IP: " + ip,
                              "Credenziali salvate."},
@@ -441,8 +451,8 @@ void enterManualNetwork(const std::string& parent) {
         ui::message("Rete manuale", {"!SSID vuoto."}, parent);
         return;
     }
-    saveCredentials(fields[0].value, fields[1].value);
     if (connect(fields[0].value, fields[1].value, parent)) {
+        saveCredentials(fields[0].value, fields[1].value);
         ui::message("WiFi", {">Connesso.", "IP: " + std::string(WiFi.localIP().toString().c_str())},
                     parent);
     } else {

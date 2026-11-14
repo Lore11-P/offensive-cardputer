@@ -98,10 +98,17 @@ void showFile(const std::string& path) {
     }
 
     std::vector<std::string> lines;
+    constexpr size_t kMaxLines = 1024;  // limite di memoria: nessuna PSRAM
     const size_t maxChars = static_cast<size_t>(std::max(16, display::width() - 8) / 6);
     for (const auto& raw : splitLines(text)) {
         for (auto& part : wrapLine(raw, maxChars)) {
             lines.push_back(std::move(part));
+            if (lines.size() >= kMaxLines) {
+                break;
+            }
+        }
+        if (lines.size() >= kMaxLines) {
+            break;
         }
     }
     if (lines.empty()) {
@@ -153,9 +160,21 @@ void browse(const std::string& path) {
                     "SD");
         return;
     }
+    // Ogni livello annidato tiene vivi un MenuManager e le sue lambda sul
+    // loopTask (16 KB): un albero profondo lo farebbe esaurire.
+    static int depth = 0;
+    if (depth >= 8) {
+        ui::message("Sfoglia SD", {"!Cartelle troppo annidate."}, "SD");
+        return;
+    }
 
-    const std::vector<storage::Entry> entries = storage::listEntries(path, true);
+    std::vector<storage::Entry> entries = storage::listEntries(path, true);
+    const bool truncated = entries.size() > 200;
+    if (truncated) {
+        entries.resize(200);
+    }
     MenuManager menu("Sfoglia", path == "/" ? "SD" : path);
+    ++depth;
     for (const auto& entry : entries) {
         const std::string child = joinPath(path, entry.name);
         if (entry.isDir) {
@@ -165,8 +184,9 @@ void browse(const std::string& path) {
         }
     }
     menu.setGrid(3);
-    menu.setHint("`=indietro  ;.,/=nav  ENTER=apri");
+    menu.setHint(truncated ? "solo 200 voci  `=indietro" : "`=indietro  ;.,/=nav  ENTER=apri");
     menu.run(true);
+    --depth;
 }
 
 void showInfo() {
@@ -202,9 +222,11 @@ void takeScreenshot() {
         return;
     }
     storage::mkdir("/screenshots", true);
+    // millis() riparte da zero a ogni avvio: senza un suffisso casuale uno
+    // screenshot nuovo poteva sovrascrivere quello di una sessione precedente.
     char path[64];
-    std::snprintf(path, sizeof(path), "/screenshots/shot_%lu.bmp",
-                  static_cast<unsigned long>(millis()));
+    std::snprintf(path, sizeof(path), "/screenshots/shot_%08lX.bmp",
+                  static_cast<unsigned long>(esp_random()));
     const bool ok = display::saveScreenshot(path);
     ui::message("Screenshot", {ok ? ">Immagine salvata:" : "!Salvataggio fallito",
                                ok ? std::string(path) : "Controlla la microSD."},

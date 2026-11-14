@@ -1,4 +1,4 @@
-﻿.pio/
+.pio/
 .vscode/
 *.log
 .DS_Store
@@ -10,3 +10,7 @@ include/secrets.h
 *.pem
 *.key
 
+
+
+# Brani musicali locali (non versionati)
+*.mp3

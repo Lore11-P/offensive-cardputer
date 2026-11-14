@@ -233,6 +233,9 @@ void run2048() {
             navigation::update();
             const navigation::EventData ev = navigation::poll();
             if (ev.type == navigation::Event::Back) {
+                if (!submitted && score > 0) {
+                    scores::submit("2048", score);
+                }
                 return;
             }
 

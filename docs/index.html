@@ -3,26 +3,28 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="theme-color" content="#FFE7D6">
+<meta name="theme-color" content="#E8E6DF">
 <meta name="description" content="Installa CardputerFirmware (build offensiva) su M5Stack Cardputer ADV direttamente dal browser, senza toolchain e senza driver.">
 <title>CardputerFirmware Offensive - Flash dal browser</title>
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Space+Grotesk:wght@400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
 <style>
   :root {
-    --paper: #ffe7d6;
-    --paper-2: #fff7ee;
-    --ink: #111111;
-    --muted: #5a5a5a;
-    --yellow: #ffe600;
-    --cyan: #38e8ff;
-    --pink: #ff5cc8;
-    --green: #4ce66b;
-    --orange: #ffa51f;
-    --red: #ff3b30;
-    --shadow: 6px 6px 0 var(--ink);
+    --paper: #e8e6df;
+    --paper-2: #f5f3ee;
+    --ink: #1a1a1a;
+    --muted: #6f6d67;
+    --accent: #d71920;
+    --yellow: #d71920;
+    --cyan: #d8d5cd;
+    --pink: #d71920;
+    --green: #5e7350;
+    --orange: #b36b00;
+    --red: #b23a2e;
+    --line: #cfccc4;
+    --shadow: none;
   }
 
   * { box-sizing: border-box; }
@@ -790,6 +792,125 @@
     .stat strong { font-size: 12px; }
     .stat-label { font-size: 8px; }
     .device { transform: none; }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Braun-inspired minimalism x Nothing: carta calda, filetti sottili,  */
+  /* un solo rosso d'accento. Rimuove ombre nette e colori al neon.      */
+  /* ------------------------------------------------------------------ */
+  body::before { background-image: none; }
+  body::after { display: none; }
+  [class] {
+    box-shadow: none !important;
+    border-width: 1px !important;
+  }
+  h1, .brand-text, .section-head h2, .stat strong, .section-num,
+  .step-card .num, .step-card h3, .feature h3, .warning h3,
+  .warning-icon, .scribble, .brand-mark {
+    font-family: "Space Grotesk", system-ui, sans-serif;
+    font-weight: 700;
+  }
+  h1 { letter-spacing: -.045em; line-height: .92; }
+  h1 .hl {
+    background: var(--accent);
+    color: var(--paper-2);
+    padding: 0 .06em .04em;
+  }
+  .hl, .device, .sticker, .scribble { transform: none !important; }
+  .eyebrow {
+    background: transparent;
+    color: var(--ink);
+  }
+  .eyebrow .dot {
+    width: 7px;
+    height: 7px;
+    border: 0;
+    background: var(--accent);
+  }
+  .lede strong {
+    padding: 0;
+    background: transparent;
+    border-bottom: 1px solid var(--accent);
+  }
+  .nav .nav-github { background: var(--ink); color: var(--paper-2); }
+  .nav .nav-github:hover { background: var(--accent); color: var(--paper-2); }
+  .step-card:nth-child(1), .step-card:nth-child(2),
+  .step-card:nth-child(3), .step-card:nth-child(4),
+  .feature:nth-child(1), .feature:nth-child(2), .feature:nth-child(3),
+  .feature:nth-child(4), .feature:nth-child(5), .feature:nth-child(6),
+  .feature:nth-child(7), .feature:nth-child(8) { background: var(--paper-2); }
+  .step-card { border-top: 2px solid var(--ink) !important; }
+  .step-card .num { color: var(--accent); }
+  .warning {
+    background: var(--paper-2);
+    border-left: 4px solid var(--accent) !important;
+  }
+  .warning-icon { background: var(--accent); color: var(--paper-2); }
+  .device { border: 1px solid var(--ink); }
+  .device-top {
+    background: var(--ink);
+    color: var(--paper-2);
+    border-bottom: 1px solid var(--ink);
+  }
+  .led { border: 0; background: var(--accent); }
+  .screen {
+    background: var(--paper);
+    color: var(--ink);
+    border: 1px solid var(--ink);
+  }
+  .screen-head { color: var(--muted); border-bottom: 1px solid var(--line); }
+  .screen-item { border: 1px solid var(--line); color: var(--ink); }
+  .screen-item.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--paper-2);
+  }
+  .screen-foot { color: var(--muted); border-top: 1px solid var(--line); }
+  .keyboard span { background: var(--paper-2); }
+  .keyboard span:nth-child(3n),
+  .keyboard span:nth-child(4n) { background: var(--paper-2); }
+  .keyboard span:nth-child(7n) { background: var(--accent); }
+  .sticker { background: var(--paper-2); }
+  .sticker-a { color: var(--accent); }
+  .sticker-b { background: var(--ink); color: var(--paper-2); }
+  .scribble {
+    color: var(--muted);
+    opacity: .5;
+    font-size: 16px;
+    letter-spacing: .12em;
+  }
+  .terminal {
+    background: #141414;
+    color: var(--paper);
+    border: 1px solid var(--ink);
+  }
+  .terminal-bar { background: #1f1f1f; border-bottom: 1px solid #333333; }
+  .terminal-bar span { color: #9a9891; }
+  .terminal-bar i { border: 0; }
+  .terminal-bar i:nth-child(1) { background: var(--accent); }
+  .terminal-bar i:nth-child(2) { background: var(--orange); }
+  .terminal-bar i:nth-child(3) { background: var(--green); }
+  .t-dim { color: #8c8a83; }
+  .t-ok { color: #9ab08d; }
+  .t-warn { color: #d9a35a; }
+  .section { border-top: 1px solid var(--line); }
+  .ticker {
+    border-top: 1px solid var(--ink);
+    border-bottom: 1px solid var(--ink);
+  }
+  .footer { border-top: 1px solid var(--ink); }
+  .footer a { color: var(--paper-2); }
+  .footer a:hover { color: var(--accent); }
+  .btn:hover, .btn:active { transform: none !important; }
+  esp-web-install-button::part(button) {
+    border-radius: 0;
+    box-shadow: none !important;
+  }
+  esp-web-install-button::part(button):hover { transform: none; }
+  .flash-meta a:hover { background: var(--paper-2); }
+  .slot-msg {
+    background: var(--paper-2);
+    border-left: 3px solid var(--accent) !important;
   }
 </style>
 </head>

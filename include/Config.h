@@ -22,6 +22,10 @@ enum class Module : uint8_t {
     Radar,
     Radio,
     Chat,
+    Music,
+    BadUsb,
+    PcapTools,
+    BleExt,
     Count
 };
 

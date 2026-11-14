@@ -17,6 +17,7 @@
 #include "MenuManager.h"
 #include "ModuleFlags.h"
 #include "Navigation.h"
+#include "PowerTimer.h"
 #include "Storage.h"
 #include "TextInput.h"
 #include "Ui.h"
@@ -190,6 +191,12 @@ FavoriteResult toggleFavorite(const std::string& path) {
         saveFavorites(favorites);
         return FavoriteResult::Removed;
     }
+    // I preferiti di file non piu' presenti non devono occupare slot.
+    favorites.erase(std::remove_if(favorites.begin(), favorites.end(),
+                                   [](const std::string& p) {
+                                       return !storage::exists(p);
+                                   }),
+                    favorites.end());
     if (favorites.size() >= kMaxFavorites) {
         return FavoriteResult::Full;
     }
@@ -357,14 +364,16 @@ void parseRawValues(const std::string& value, std::vector<uint16_t>& out) {
     std::replace(cleaned.begin(), cleaned.end(), ',', ' ');
     std::istringstream stream(cleaned);
     std::string token;
-    while (stream >> token && out.size() < 512) {
+    while (stream >> token && out.size() < 1024) {
         char* end = nullptr;
         const long parsed = std::strtol(token.c_str(), &end, 10);
         if (end == token.c_str()) {
             continue;
         }
-        if (parsed > 0 && parsed < 65536) {
-            out.push_back(static_cast<uint16_t>(parsed));
+        // Un valore fuori range va saturato, non scartato: toglierlo
+        // sbilancerebbe la parita' mark/space e corromperebbe tutta la cornice.
+        if (parsed > 0) {
+            out.push_back(static_cast<uint16_t>(std::min<long>(parsed, 65535)));
         }
     }
 }
@@ -397,8 +406,13 @@ Protocol protocolFromName(const std::string& name, uint16_t& bits) {
         }
         return Protocol::Sony;
     }
-    if (id == "RC5" || id == "RC5X") {
+    if (id == "RC5") {
         bits = 13;
+        return Protocol::Rc5;
+    }
+    if (id == "RC5X") {
+        // RC5X usa un bit di comando in piu' (14 bit totali).
+        bits = 14;
         return Protocol::Rc5;
     }
     if (id == "RC6") {
@@ -539,10 +553,17 @@ bool sendProtocol(Protocol protocol, uint32_t address, uint32_t command,
             return true;
         }
         case Protocol::Rc5: {
-            const uint16_t data = g_sender.encodeRC5(
-                static_cast<uint8_t>(address & 0xFF),
-                static_cast<uint8_t>(command & 0xFF));
-            g_sender.sendRC5(data, 13, repeat);
+            if (bits >= 14) {
+                const uint16_t data = g_sender.encodeRC5X(
+                    static_cast<uint8_t>(address & 0x7F),
+                    static_cast<uint8_t>(command & 0x7F));
+                g_sender.sendRC5(data, 14, repeat);
+            } else {
+                const uint16_t data = g_sender.encodeRC5(
+                    static_cast<uint8_t>(address & 0xFF),
+                    static_cast<uint8_t>(command & 0xFF));
+                g_sender.sendRC5(data, 13, repeat);
+            }
             return true;
         }
         case Protocol::Rc6: {
@@ -760,6 +781,9 @@ void runScanner(const std::string& brand) {
     }
 
     ensureSender();
+    // Lo scanner manda un comando ogni pochi secondi: senza Hold il timeout di
+    // inattivita' spegnerebbe il dispositivo a meta' scansione.
+    powertimer::Hold hold;
     navigation::waitRelease();
 
     int index = 0;
@@ -1014,6 +1038,8 @@ void drawTvBg(const char* brand, int index, int total, int cycle) {
 }
 
 void runTvBg() {
+    // Sessione di monitoraggio: il timer di spegnimento non deve interromperla.
+    powertimer::Hold hold;
     if (!ui::confirm("TV-B-Gone",
                      {"Spegne televisori nelle vicinanze.",
                       "Usalo solo su dispositivi tuoi o con permesso."},
@@ -1054,6 +1080,7 @@ void runTvBg() {
 
 void runJammer() {
 #if ENABLE_OFFENSIVE
+    powertimer::Hold hold;
     if (!ui::legalWarning("Jammer IR",
                           {"Disturba i ricevitori infrarossi vicini.",
                            "Attivita' consentita solo in ambiente isolato",

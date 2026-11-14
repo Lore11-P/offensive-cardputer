@@ -10,31 +10,34 @@
 //  - icone BMP 32x32 caricate da LittleFS (fallback disegnato a runtime)
 namespace display {
 
-// Palette RGB565 del tema.
+// Palette RGB565 del tema "Braun-inspired minimalism" con accento Nothing:
+// superfici calde off-white, inchiostro antracite e un unico rosso d'accento.
+// Le schermate scure (giochi, sospensione) usano la stessa scala di grigi.
 constexpr uint16_t kBlack = 0x0000;
 constexpr uint16_t kWhite = 0xFFFF;
-constexpr uint16_t kBackground = 0x0861;  // blu notte
-constexpr uint16_t kPanel = 0x10E4;       // pannello
-constexpr uint16_t kHeader = 0x18E3;      // barra titolo
-constexpr uint16_t kAccent = 0x07E0;      // verde terminale
-constexpr uint16_t kAccentDark = 0x0340;
-constexpr uint16_t kText = 0xE7E7;
-constexpr uint16_t kTextDim = 0x8C71;
-constexpr uint16_t kWarning = 0xFD20;     // arancio
-constexpr uint16_t kDanger = 0xF800;      // rosso
-constexpr uint16_t kInfo = 0x05BF;        // azzurro
+constexpr uint16_t kBackground = 0x10A2;  // antracite
+constexpr uint16_t kPanel = 0x2945;       // superficie scura rialzata
+constexpr uint16_t kHeader = 0x2104;      // barra scura (giochi)
+constexpr uint16_t kAccent = 0xD0C4;      // rosso Nothing
+constexpr uint16_t kAccentDark = 0x9882;
+constexpr uint16_t kText = 0xEF5C;        // bianco caldo
+constexpr uint16_t kTextDim = 0x9CD2;
+constexpr uint16_t kWarning = 0xB340;     // ocra
+constexpr uint16_t kDanger = 0xB1C5;      // rosso mattone
+constexpr uint16_t kInfo = 0x4B4F;        // blu acciaio
 
-// Tema neubrutalista per menu e schermate di servizio.
-constexpr uint16_t kPaper = 0xFF9A;       // crema
-constexpr uint16_t kPaperLight = 0xFFFF;  // bianco
-constexpr uint16_t kInk = 0x0000;         // nero
-constexpr uint16_t kMuted = 0x5AEB;       // grigio scuro
-constexpr uint16_t kNeoYellow = 0xFFE0;
-constexpr uint16_t kNeoCyan = 0x07FF;
-constexpr uint16_t kNeoPink = 0xF81F;
-constexpr uint16_t kNeoGreen = 0x07E0;
-constexpr uint16_t kNeoOrange = 0xFD20;
-constexpr uint16_t kNeoRed = 0xF800;
+// Superfici chiare del tema (Braun): carta calda e inchiostro.
+constexpr uint16_t kPaper = 0xEF3B;       // greige
+constexpr uint16_t kPaperLight = 0xF79D;  // avorio
+constexpr uint16_t kInk = 0x18C3;         // antracite
+constexpr uint16_t kMuted = 0x8C50;       // grigio caldo
+// Nomi storici del vecchio tema, rimappati sulla palette minimale.
+constexpr uint16_t kNeoYellow = kAccent;  // selezione / accento
+constexpr uint16_t kNeoCyan = kInfo;
+constexpr uint16_t kNeoPink = 0x89C8;     // rosa spento
+constexpr uint16_t kNeoGreen = 0x5B8A;    // verde oliva
+constexpr uint16_t kNeoOrange = kWarning;
+constexpr uint16_t kNeoRed = kDanger;
 
 // Inizializza display e framebuffer. Ritorna false se lo sprite non e'
 // allocabile (in tal caso si disegna direttamente sul display).

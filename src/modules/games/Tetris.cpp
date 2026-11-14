@@ -332,6 +332,10 @@ void runTetris() {
         const uint32_t now = millis();
 
         if (ev.type == navigation::Event::Back) {
+            // Uscire a meta' partita non deve buttare via il punteggio.
+            if (score > 0) {
+                scores::submit("tetris", static_cast<uint32_t>(score));
+            }
             break;
         }
 

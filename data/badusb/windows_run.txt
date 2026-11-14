@@ -1,0 +1,8 @@
+# BadUSB - esempio: apre la finestra Esegui di Windows con GUI + R.
+# Non digita comandi: la richiude subito con ESC.
+REM Usa lo script solo su un computer tuo.
+
+DELAY 600
+GUI r
+DELAY 900
+ESC

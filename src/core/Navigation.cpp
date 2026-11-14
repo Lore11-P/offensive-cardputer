@@ -13,6 +13,8 @@ namespace {
 std::vector<char> s_lastWord;
 bool s_lastEnter = false;
 bool s_lastBack = false;
+// Caratteri nuovi non ancora consegnati: un poll restituisce un solo evento.
+std::vector<char> s_pending;
 
 bool contains(const std::vector<char>& word, char c) {
     return std::find(word.begin(), word.end(), c) != word.end();
@@ -36,9 +38,11 @@ std::vector<char> freshChars(const std::vector<char>& now, const std::vector<cha
 
 void begin() {
     M5Cardputer.update();
-    s_lastWord = M5Cardputer.Keyboard.keysState().word;
-    s_lastEnter = M5Cardputer.Keyboard.keysState().enter;
-    s_lastBack = contains(s_lastWord, '`') || contains(s_lastWord, 0x1B);
+    auto& state = M5Cardputer.Keyboard.keysState();
+    s_lastWord = state.word;
+    s_lastEnter = state.enter;
+    s_lastBack = contains(s_lastWord, '`') || state.del;
+    s_pending.clear();
 }
 
 void update() {
@@ -53,21 +57,23 @@ EventData poll() {
     powertimer::tick();
 
     EventData ev;
-    if (!M5Cardputer.Keyboard.isChange()) {
-        return ev;
-    }
 
-    // Qualsiasi variazione della tastiera conta come attivita' dell'utente.
-    powertimer::activity();
-
+    // Nota: non ci si puo' basare su Keyboard.isChange(), che confronta solo il
+    // numero di tasti premuti. Se tra due poll un tasto viene rilasciato e un
+    // altro premuto il conteggio resta identico e l'evento andrebbe perso.
     auto& state = M5Cardputer.Keyboard.keysState();
     const std::vector<char>& word = state.word;
     const bool enter = state.enter;
-    const bool back = contains(word, '`') || contains(word, 0x1B);
+    const bool back = contains(word, '`') || state.del;
 
     const bool newEnter = enter && !s_lastEnter;
     const bool newBack = back && !s_lastBack;
     const std::vector<char> fresh = freshChars(word, s_lastWord);
+
+    // Qualsiasi variazione reale della tastiera conta come attivita' utente.
+    if (newEnter || newBack || !fresh.empty()) {
+        powertimer::activity();
+    }
 
     if (newBack) {
         ev.type = Event::Back;
@@ -82,8 +88,16 @@ EventData poll() {
     } else if (contains(fresh, '/')) {
         ev.type = Event::Right;
     } else if (!fresh.empty()) {
+        // Piu' caratteri nello stesso poll: accodali e consegnane uno per volta.
+        for (char c : fresh) {
+            s_pending.push_back(c);
+        }
+    }
+
+    if (ev.type == Event::None && !s_pending.empty()) {
         ev.type = Event::Text;
-        ev.ch = fresh.front();
+        ev.ch = s_pending.front();
+        s_pending.erase(s_pending.begin());
     }
 
     s_lastWord = word;
@@ -120,7 +134,8 @@ void waitRelease() {
     auto& state = M5Cardputer.Keyboard.keysState();
     s_lastWord = state.word;
     s_lastEnter = state.enter;
-    s_lastBack = contains(s_lastWord, '`') || contains(s_lastWord, 0x1B);
+    s_lastBack = contains(s_lastWord, '`') || state.del;
+    s_pending.clear();
 }
 
 }  // namespace navigation

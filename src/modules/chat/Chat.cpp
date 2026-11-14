@@ -19,6 +19,7 @@
 #include "MenuManager.h"
 #include "ModuleFlags.h"
 #include "Navigation.h"
+#include "PowerTimer.h"
 #include "TextInput.h"
 #include "Ui.h"
 
@@ -785,6 +786,7 @@ void runChat() {
     g_selfAddress = NimBLEDevice::getAddress().toString();
     g_counter = static_cast<uint16_t>(esp_random());
     g_peers.clear();
+    g_lastCounter.clear();
     g_dirty = true;
 
     if (scan->isScanning()) {
@@ -816,6 +818,8 @@ void runChat() {
     g_nextPresenceAt = 0;
 
     navigation::waitRelease();
+    // Schermata di monitoraggio: niente spegnimento automatico a meta' chat.
+    powertimer::Hold hold;
     bool running = true;
     uint32_t lastDraw = 0;
     while (running) {
@@ -827,6 +831,13 @@ void runChat() {
         if (config::chatNotifyEnabled() &&
             static_cast<int32_t>(now - g_nextPresenceAt) >= 0) {
             publishPresence();
+        } else if (!config::chatNotifyEnabled() &&
+                   static_cast<int32_t>(now - g_nextPresenceAt) >= 0 &&
+                   advertising->isAdvertising()) {
+            // In modalita' stealth nessun annuncio rinnova l'advertising: senza
+            // questo il testo dell'ultimo messaggio resterebbe in onda a 100 ms
+            // fino all'uscita dalla chat.
+            advertising->stop();
         }
         serviceNotifications();
 

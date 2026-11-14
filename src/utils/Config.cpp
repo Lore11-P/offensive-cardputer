@@ -76,7 +76,8 @@ void refreshCompiledModules() {
     // Un modulo non compilato non deve mai risultare attivo a runtime.
     const Module modules[] = {Module::Ble,   Module::Wifi, Module::Ir,  Module::Games,
                               Module::Settings, Module::Sd, Module::Radar, Module::Radio,
-                              Module::Chat};
+                              Module::Chat, Module::Music, Module::BadUsb, Module::PcapTools,
+                              Module::BleExt};
     for (Module m : modules) {
         if (!moduleCompiled(m)) {
             uint16_t bit = 0;
@@ -203,6 +204,14 @@ bool moduleCompiled(Module module) {
             return ENABLE_MODULE_RADIO;
         case Module::Chat:
             return ENABLE_MODULE_CHAT && ENABLE_MODULE_BLE;
+        case Module::Music:
+            return ENABLE_MODULE_MUSIC;
+        case Module::BadUsb:
+            return ENABLE_MODULE_BADUSB;
+        case Module::PcapTools:
+            return ENABLE_MODULE_PCAPTOOLS;
+        case Module::BleExt:
+            return ENABLE_MODULE_BLEEXT && ENABLE_MODULE_BLE;
         default:
             return false;
     }
@@ -337,6 +346,10 @@ std::string toJson() {
     modules["radar"] = moduleEnabled(Module::Radar);
     modules["radio"] = moduleEnabled(Module::Radio);
     modules["chat"] = moduleEnabled(Module::Chat);
+    modules["music"] = moduleEnabled(Module::Music);
+    modules["badusb"] = moduleEnabled(Module::BadUsb);
+    modules["pcaptools"] = moduleEnabled(Module::PcapTools);
+    modules["bleext"] = moduleEnabled(Module::BleExt);
 
     JsonObject chat = doc["chat"].to<JsonObject>();
     chat["nickname"] = g_settings.chatNickname;
@@ -373,8 +386,10 @@ bool applyJson(const char* json, size_t len) {
 
     g_settings.brightness = clampBrightness(doc["brightness"] | g_settings.brightness);
     g_settings.rotation = clampRotation(doc["rotation"] | g_settings.rotation);
-    g_settings.sleepTimeoutSec = static_cast<uint16_t>(
-        doc["sleep_timeout_sec"] | g_settings.sleepTimeoutSec);
+    // Passa dal setter: aggancia il valore al set di timeout ammessi, come fa
+    // la UI (un JSON con 65000 non deve restare in NVS).
+    setSleepTimeoutSec(static_cast<uint16_t>(
+        doc["sleep_timeout_sec"] | g_settings.sleepTimeoutSec));
 
     if (doc["modules"].is<JsonObject>()) {
         JsonObject modules = doc["modules"].as<JsonObject>();
@@ -382,10 +397,19 @@ bool applyJson(const char* json, size_t len) {
         if (modules["wifi"].is<bool>()) setModuleEnabled(Module::Wifi, modules["wifi"].as<bool>());
         if (modules["ir"].is<bool>()) setModuleEnabled(Module::Ir, modules["ir"].as<bool>());
         if (modules["games"].is<bool>()) setModuleEnabled(Module::Games, modules["games"].as<bool>());
+        if (modules["settings"].is<bool>())
+            setModuleEnabled(Module::Settings, modules["settings"].as<bool>());
         if (modules["sd"].is<bool>()) setModuleEnabled(Module::Sd, modules["sd"].as<bool>());
         if (modules["radar"].is<bool>()) setModuleEnabled(Module::Radar, modules["radar"].as<bool>());
         if (modules["radio"].is<bool>()) setModuleEnabled(Module::Radio, modules["radio"].as<bool>());
         if (modules["chat"].is<bool>()) setModuleEnabled(Module::Chat, modules["chat"].as<bool>());
+        if (modules["music"].is<bool>()) setModuleEnabled(Module::Music, modules["music"].as<bool>());
+        if (modules["badusb"].is<bool>())
+            setModuleEnabled(Module::BadUsb, modules["badusb"].as<bool>());
+        if (modules["pcaptools"].is<bool>())
+            setModuleEnabled(Module::PcapTools, modules["pcaptools"].as<bool>());
+        if (modules["bleext"].is<bool>())
+            setModuleEnabled(Module::BleExt, modules["bleext"].as<bool>());
     }
 
     if (doc["chat"].is<JsonObject>() && doc["chat"]["nickname"].is<const char*>()) {

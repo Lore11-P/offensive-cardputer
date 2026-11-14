@@ -1,14 +1,10 @@
 // ============================================================================
 //  Web Radio - ascolto di stazioni internet (MP3/AAC via HTTP)
 //
-//  Decoder: ESP32-audioI2S (schreibfaul1). Il decoder prende possesso del bus
-//  I2S dello speaker, quindi durante l'ascolto M5.Speaker viene chiuso
-//  (Speaker.end()) e riaperto all'uscita: niente beep del radar mentre suona
-//  la radio, e nessun conflitto sul peripherale.
-//
-//  I pin I2S non sono cablati a mano: si leggono a runtime da
-//  M5.Speaker.config() (pin_bck / pin_ws / pin_data_out), cosi' il modulo
-//  segue la board invece di indovinare.
+//  Decoder: ESP32-audioI2S (schreibfaul1), condiviso con il lettore MP3
+//  attraverso utils/AudioOut. Il decoder prende possesso del bus I2S dello
+//  speaker, quindi durante l'ascolto M5.Speaker viene chiuso (Speaker.end())
+//  e riaperto all'uscita: niente beep del radar mentre suona la radio.
 //
 //  Gli stream sono HTTP (non HTTPS): il decoder non ha un client TLS adatto e
 //  la RAM e' contata. Se una stazione smette di funzionare basta cambiare
@@ -18,13 +14,13 @@
 #include "RadioMenu.h"
 
 #include <Arduino.h>
-#include <Audio.h>
 #include <M5Cardputer.h>
 
 #include <algorithm>
 #include <string>
 #include <vector>
 
+#include "AudioOut.h"
 #include "Display.h"
 #include "Logger.h"
 #include "MenuManager.h"
@@ -55,11 +51,6 @@ constexpr Station kStations[] = {
 };
 constexpr int kStationCount = static_cast<int>(sizeof(kStations) / sizeof(kStations[0]));
 
-Audio g_audio;
-int g_volume = 12;  // scala del decoder: 0..21
-bool g_speakerReleased = false;
-bool g_decoderConfigured = false;
-
 std::string shortened(const std::string& text, size_t maxLen) {
     if (text.size() <= maxLen || maxLen < 2) {
         return text;
@@ -67,45 +58,12 @@ std::string shortened(const std::string& text, size_t maxLen) {
     return text.substr(0, maxLen - 1) + "~";
 }
 
-void releaseSpeaker() {
-    if (g_speakerReleased) {
-        return;
-    }
-    M5Cardputer.Speaker.stop();
-    M5Cardputer.Speaker.end();  // libera il bus I2S per il decoder
-    g_speakerReleased = true;
-    logger::info("Radio: I2S passato al decoder");
-}
-
-void restoreSpeaker() {
-    if (!g_speakerReleased) {
-        return;
-    }
-    M5Cardputer.Speaker.begin();  // riprende l'I2S per i beep dell'interfaccia
-    g_speakerReleased = false;
-    g_decoderConfigured = false;
-    logger::info("Radio: I2S restituito a M5Unified");
-}
-
-void configureDecoder() {
-    if (g_decoderConfigured) {
-        return;
-    }
-    releaseSpeaker();
-    const auto cfg = M5Cardputer.Speaker.config();
-    g_audio.setPinout(cfg.pin_bck, cfg.pin_ws, cfg.pin_data_out);
-    g_audio.setVolume(static_cast<uint8_t>(g_volume));
-    g_decoderConfigured = true;
-    logger::info("Radio: I2S bck=%d ws=%d dout=%d", static_cast<int>(cfg.pin_bck),
-                 static_cast<int>(cfg.pin_ws), static_cast<int>(cfg.pin_data_out));
-}
-
 void drawPlayer(int stationIndex) {
     display::clear();
     display::header("Web Radio", "Radio");
 
     const Station& station = kStations[stationIndex];
-    const bool running = g_audio.isRunning();
+    const bool running = audioout::decoder().isRunning();
 
     display::textCentered(24, shortened(station.name, 26),
                           running ? display::kAccent : display::kWarning, 2);
@@ -113,8 +71,8 @@ void drawPlayer(int stationIndex) {
                           running ? display::kText : display::kTextDim, 0);
 
     // Bitrate e frequenza di campionamento, quando disponibili.
-    const int bitrate = g_audio.getBitRate();
-    const int rate = g_audio.getSampleRate();
+    const int bitrate = static_cast<int>(audioout::decoder().getBitRate());
+    const int rate = static_cast<int>(audioout::decoder().getSampleRate());
     if (bitrate > 0) {
         display::textCentered(56, std::to_string(bitrate) + " kbit/s" +
                                       (rate > 0 ? "  " + std::to_string(rate) + " Hz" : ""),
@@ -127,14 +85,15 @@ void drawPlayer(int stationIndex) {
     constexpr int kBarY = 76;
     constexpr int kSegW = 9;
     constexpr int kSegH = 10;
+    const int volume = audioout::volume();
     for (int i = 0; i < kSegments; ++i) {
         const int x = kBarX + i * kSegW;
-        const bool lit = i < g_volume;
+        const bool lit = i < volume;
         const uint16_t color = lit ? (i > 16 ? display::kDanger : display::kNeoGreen)
                                    : display::kPanel;
         display::g().fillRect(x, kBarY, kSegW - 2, kSegH, color);
     }
-    display::textCentered(90, "volume " + std::to_string(g_volume) + "/21", display::kText, 0);
+    display::textCentered(90, "volume " + std::to_string(volume) + "/21", display::kText, 0);
 
     display::text(6, 108, shortened(station.url, 38), display::kTextDim, 0);
     display::footer(";.=volume  ENTER=stop  `=esci");
@@ -152,14 +111,14 @@ void playStation(int stationIndex) {
         return;
     }
 
-    configureDecoder();
-    g_audio.setVolume(static_cast<uint8_t>(g_volume));
-    if (!g_audio.connecttohost(kStations[stationIndex].url)) {
+    audioout::beginPlayback();
+    audioout::setVolume(audioout::volume());
+    if (!audioout::decoder().connecttohost(kStations[stationIndex].url)) {
         ui::message("Web Radio",
                     {"!Connessione al flusso fallita.", kStations[stationIndex].url,
                      "La stazione potrebbe essere offline."},
                     "Radio");
-        restoreSpeaker();
+        audioout::endPlayback();
         return;
     }
 
@@ -167,6 +126,7 @@ void playStation(int stationIndex) {
     powertimer::Hold hold;
     logger::info("Radio: %s", kStations[stationIndex].name);
 
+    const uint32_t startedMs = millis();
     uint32_t lastDraw = 0;
     navigation::waitRelease();
     for (;;) {
@@ -176,16 +136,24 @@ void playStation(int stationIndex) {
             break;
         }
         if (ev.type == navigation::Event::Up) {
-            g_volume = std::min(21, g_volume + 1);
-            g_audio.setVolume(static_cast<uint8_t>(g_volume));
+            audioout::setVolume(audioout::volume() + 1);
             lastDraw = 0;
         } else if (ev.type == navigation::Event::Down) {
-            g_volume = std::max(0, g_volume - 1);
-            g_audio.setVolume(static_cast<uint8_t>(g_volume));
+            audioout::setVolume(audioout::volume() - 1);
             lastDraw = 0;
         }
 
-        g_audio.loop();  // pompa lo stream: va chiamato spesso
+        audioout::pump();  // pompa lo stream: va chiamato spesso
+
+        // Il decoder spegne isRunning() se il flusso cade (404, rete assente):
+        // senza questo controllo la schermata direbbe "in riproduzione" per
+        // sempre.
+        if (!audioout::decoder().isRunning() && millis() - startedMs > 8000) {
+            ui::message("Web Radio",
+                        {"!Flusso interrotto.", kStations[stationIndex].url},
+                        "Radio");
+            break;
+        }
 
         if (millis() - lastDraw > 200) {
             lastDraw = millis();
@@ -194,8 +162,7 @@ void playStation(int stationIndex) {
         delay(2);
     }
 
-    g_audio.stopSong();
-    restoreSpeaker();
+    audioout::endPlayback();
     logger::info("Radio: fermata dall'utente");
 }
 
@@ -210,9 +177,10 @@ void runMenu() {
     menu.addSeparator("Ascolto");
     menu.addItem("Ferma / stato", "lock", [] {
         ui::message("Web Radio",
-                    {g_speakerReleased ? ">Decoder attivo" : ">Speaker libero",
-                     "Volume: " + std::to_string(g_volume) + "/21",
-                     "Le stazioni sono in HTTP MP3."},
+                    {audioout::decoder().isRunning() ? ">Decoder attivo" : ">Decoder fermo",
+                     "Volume: " + std::to_string(audioout::volume()) + "/21",
+                     "Le stazioni sono in HTTP MP3.",
+                     "Gli MP3 locali sono nel menu Musica."},
                     "Radio");
     });
     menu.addItem("WiFi", "wifi", [] { wifisetup::runSettings("Radio"); });

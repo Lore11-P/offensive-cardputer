@@ -52,37 +52,29 @@ std::string ellipsize(const std::string& text, int maxWidth) {
     return out + "..";
 }
 
-uint16_t accentFor(int index) {
-    static const uint16_t kColors[] = {
-        display::kNeoCyan,
-        display::kNeoPink,
-        display::kNeoGreen,
-        display::kNeoOrange,
-    };
-    return kColors[static_cast<size_t>(index) % (sizeof(kColors) / sizeof(kColors[0]))];
-}
-
-void drawCard(int x, int y, int w, int h, uint16_t fill, bool shadow) {
+void drawCard(int x, int y, int w, int h, uint16_t fill, bool selected) {
     auto& d = display::g();
-    if (shadow) {
-        d.fillRect(x + 3, y + 3, w, h, display::kInk);
-    }
     d.fillRect(x, y, w, h, fill);
-    d.drawRect(x, y, w, h, display::kInk);
-    d.drawRect(x + 1, y + 1, w - 2, h - 2, display::kInk);
+    if (selected) {
+        // Selezione affidata a un doppio filetto d'accento, non a un riempimento
+        // colorato: il resto della card resta carta neutra.
+        d.drawRect(x, y, w, h, display::kAccent);
+        d.drawRect(x + 1, y + 1, w - 2, h - 2, display::kAccent);
+    } else {
+        d.drawRect(x, y, w, h, display::kInk);
+    }
 }
 
 void drawCarouselCard(const MenuItem& item, int x, int y, int w, int h, bool center, int index) {
-    drawCard(x, y, w, h, center ? display::kNeoYellow : display::kPaperLight, center);
-    auto& d = display::g();
-    d.fillRect(x + 2, y + 2, w - 4, center ? 5 : 4, accentFor(index));
-    d.drawFastHLine(x + 2, y + (center ? 7 : 6), w - 4, display::kInk);
+    (void)index;
+    drawCard(x, y, w, h, center ? display::kPaperLight : display::kPaper, center);
 
     const int iconSize = center ? 32 : 22;
     display::drawIcon(item.icon, x + (w - iconSize) / 2, y + (center ? 11 : 8), iconSize);
 
     std::string label = toUpper(item.label);
     label = ellipsize(label, w - 6);
+    auto& d = display::g();
     d.setFont(&fonts::Font0);
     const int textW = d.textWidth(label.c_str());
     display::text(x + (w - textW) / 2, y + h - 10, label,
@@ -434,7 +426,7 @@ void MenuManager::draw() {
             std::snprintf(pageText, sizeof(pageText), "%d/%d",
                           selected_ / size + 1, pages);
             display::text(display::width() - 26, display::height() - 10,
-                          pageText, display::kNeoYellow, 0);
+                          pageText, display::kMuted, 0);
         }
     }
 
@@ -468,7 +460,7 @@ void MenuManager::drawList() {
 
         const bool selected = (idx == selected_);
         drawCard(2, y + 1, w - 6, kRowHeight - 3,
-                 selected ? display::kNeoYellow : display::kPaperLight, selected);
+                 selected ? display::kPaperLight : display::kPaper, selected);
 
         const uint16_t fg = item.enabled ? display::kInk : display::kMuted;
         display::drawIcon(item.icon, 7, y + 2, kIconSize);
@@ -480,11 +472,11 @@ void MenuManager::drawList() {
         const int trackX = w - 4;
         const int trackTop = bodyTop + 1;
         const int trackH = visibleRows_ * kRowHeight - 2;
-        display::g().fillRect(trackX, trackTop, 3, trackH, display::kInk);
+        display::g().fillRect(trackX, trackTop, 2, trackH, display::kMuted);
         const int thumbH = std::max(8, trackH * visibleRows_ / total);
         const int thumbY =
             trackTop + (trackH - thumbH) * top_ / std::max(1, total - visibleRows_);
-        display::g().fillRect(trackX, thumbY, 3, thumbH, display::kNeoYellow);
+        display::g().fillRect(trackX, thumbY, 2, thumbH, display::kAccent);
     }
 }
 
@@ -518,13 +510,11 @@ void MenuManager::drawGrid() {
         const bool selected = (idx == selected_);
 
         drawCard(x, y, tileW, tileH,
-                 selected ? display::kNeoYellow : display::kPaperLight, selected);
-
-        display::g().fillRect(x + 2, y + 2, tileW - 4, 4, accentFor(idx));
-        display::g().drawFastHLine(x + 2, y + 6, tileW - 4, display::kInk);
+                 selected ? display::kPaperLight : display::kPaper, selected);
 
         const int iconSize = std::max(12, std::min(kGridIcon, tileH - 20));
-        display::drawIcon(item.icon, x + (tileW - iconSize) / 2, y + 8, iconSize);
+        display::drawIcon(item.icon, x + (tileW - iconSize) / 2, y + (tileH - iconSize) / 2 - 4,
+                          iconSize);
 
         std::string label = toUpper(item.label);
         label = ellipsize(label, tileW - 6);
@@ -584,7 +574,7 @@ void MenuManager::drawCarousel() {
         const int startX = (w - (total - 1) * spacing) / 2;
         for (int i = 0; i < total; ++i) {
             display::g().fillCircle(startX + i * spacing, display::height() - 17, 2,
-                                    i == selected_ ? display::kNeoPink : display::kMuted);
+                                    i == selected_ ? display::kAccent : display::kMuted);
         }
     } else if (carouselAnim_ == 0) {
         const std::string page = std::to_string(selected_ + 1) + "/" + std::to_string(total);

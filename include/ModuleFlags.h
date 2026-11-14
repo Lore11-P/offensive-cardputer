@@ -44,6 +44,27 @@
 #define ENABLE_MODULE_RADIO 1
 #endif
 
+// Lettore MP3 locale dalla microSD (stesso decoder della web radio).
+#ifndef ENABLE_MODULE_MUSIC
+#define ENABLE_MODULE_MUSIC 1
+#endif
+
+// BadUSB / HID injection: richiede lo stack TinyUSB (ARDUINO_USB_MODE=0),
+// quindi e' attivo solo nell'env dedicato cardputer-adv-hid.
+#ifndef ENABLE_MODULE_BADUSB
+#define ENABLE_MODULE_BADUSB 0
+#endif
+
+// Browser/analisi catture 802.11: PCAP on-device, export hc22000 ed EAPOL.
+#ifndef ENABLE_MODULE_PCAPTOOLS
+#define ENABLE_MODULE_PCAPTOOLS 1
+#endif
+
+// Strumenti BLE: AirTag, Flipper finder, GATT, skimmer, wardriving, cattura.
+#ifndef ENABLE_MODULE_BLEEXT
+#define ENABLE_MODULE_BLEEXT 1
+#endif
+
 // Presenza via Wi-Fi CSI: sperimentale, richiede traffico 802.11 reale.
 // Le API esp_wifi_set_csi* esistono su ESP32-S3 in arduino-esp32 2.0.x
 // (CONFIG_ESP32_WIFI_CSI_ENABLED=1), ma la sensibilita' dipende dai frame

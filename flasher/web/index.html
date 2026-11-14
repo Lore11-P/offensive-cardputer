@@ -6,21 +6,21 @@
 <title>CardputerFirmware v1.0 - Flasher</title>
 <style>
   :root {
-    --bg: #0b1116;
-    --panel: #141d24;
-    --panel2: #1b2731;
-    --line: #2a3a47;
-    --text: #e6edf3;
-    --muted: #8fa3b4;
-    --accent: #00d68f;
-    --warn: #ffb020;
-    --danger: #ff4d4d;
+    --bg: #e8e6df;
+    --panel: #f5f3ee;
+    --panel2: #e8e6df;
+    --line: #cfccc4;
+    --text: #1a1a1a;
+    --muted: #6f6d67;
+    --accent: #d71920;
+    --warn: #b36b00;
+    --danger: #b23a2e;
   }
   * { box-sizing: border-box; }
   body {
     margin: 0;
     font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    background: radial-gradient(circle at 50% 0%, #10222b 0%, var(--bg) 60%);
+    background: var(--bg);
     color: var(--text);
     min-height: 100vh;
     display: flex;
@@ -33,37 +33,37 @@
     max-width: 620px;
     background: var(--panel);
     border: 1px solid var(--line);
-    border-radius: 16px;
+    border-radius: 4px;
     padding: 28px;
-    box-shadow: 0 20px 60px rgba(0,0,0,.45);
   }
   h1 { margin: 0 0 4px; font-size: 26px; letter-spacing: .2px; }
   h1 span { color: var(--accent); }
   .sub { color: var(--muted); margin: 0 0 20px; font-size: 14px; }
   .warning {
-    background: #2a1f12;
-    border: 1px solid #6b4a1d;
-    color: #ffd591;
-    border-radius: 10px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--accent);
+    color: var(--text);
+    border-radius: 2px;
     padding: 12px 14px;
     font-size: 13px;
     line-height: 1.5;
     margin-bottom: 20px;
   }
-  .warning strong { color: var(--warn); }
+  .warning strong { color: var(--accent); }
   .device {
     display: flex;
     gap: 14px;
     align-items: center;
     background: var(--panel2);
     border: 1px solid var(--line);
-    border-radius: 12px;
+    border-radius: 2px;
     padding: 16px;
     margin-bottom: 20px;
   }
   .device .dot {
-    width: 42px; height: 42px; border-radius: 10px;
-    background: linear-gradient(145deg, #00d68f, #007a52);
+    width: 42px; height: 42px; border-radius: 50%;
+    background: var(--accent);
     flex: 0 0 auto;
   }
   .device h2 { margin: 0 0 3px; font-size: 16px; }
@@ -71,22 +71,22 @@
   esp-web-install-button { display: block; }
   esp-web-install-button::part(button) {
     width: 100%;
-    border: 0;
-    border-radius: 10px;
+    border: 1px solid var(--accent);
+    border-radius: 2px;
     padding: 14px 18px;
     background: var(--accent);
-    color: #052014;
+    color: var(--panel);
     font-weight: 700;
     font-size: 16px;
     cursor: pointer;
   }
-  esp-web-install-button::part(button):hover { filter: brightness(1.08); }
+  esp-web-install-button::part(button):hover { background: #b21319; }
   .steps { margin: 20px 0 0; padding-left: 20px; color: var(--muted); font-size: 13px; line-height: 1.8; }
   .steps b { color: var(--text); }
   .footer { margin-top: 22px; color: var(--muted); font-size: 12px; border-top: 1px solid var(--line); padding-top: 14px; }
   .footer a { color: var(--accent); text-decoration: none; }
-  code { background: #0e171d; border: 1px solid var(--line); padding: 1px 5px; border-radius: 5px; }
-  .badge { display: inline-block; font-size: 11px; color: var(--accent); border: 1px solid #1d5c46; background: #0d241c; padding: 2px 8px; border-radius: 999px; margin-left: 8px; vertical-align: middle; }
+  code { background: var(--bg); border: 1px solid var(--line); padding: 1px 5px; border-radius: 2px; }
+  .badge { display: inline-block; font-size: 11px; color: var(--accent); border: 1px solid var(--accent); background: transparent; padding: 2px 8px; border-radius: 999px; margin-left: 8px; vertical-align: middle; }
 </style>
 </head>
 <body>
@@ -104,7 +104,7 @@
   <div class="device">
     <div class="dot"></div>
     <div>
-      <h2>CardputerFirmware v1.0.0 <span class="badge" style="color:#ffb020;border-color:#6b4a1d;background:#2a1f12;">offensiva</span></h2>
+      <h2>CardputerFirmware v1.0.0 <span class="badge" style="color:#b36b00;border-color:#b36b00;background:transparent;">offensiva</span></h2>
       <p>Firmware modulare: BLE, Wi-Fi, 307 telecomandi IR, giochi, file browser SD e impostazioni. Funzioni offensive abilitate per test autorizzati.</p>
     </div>
   </div>

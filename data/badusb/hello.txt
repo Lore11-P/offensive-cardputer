@@ -1,0 +1,12 @@
+# BadUSB - esempio innocuo: scrive due righe e preme INVIO.
+# Copia il file nella microSD in /badusb (oppure in LittleFS).
+REM Nessuna azione di sistema: solo testo digitato nel campo attivo.
+
+DELAY 400
+DEFAULT_DELAY 25
+
+STRING Ciao dalla Cardputer!
+ENTER
+DELAY 250
+STRING Questo e' uno script di esempio.
+ENTER

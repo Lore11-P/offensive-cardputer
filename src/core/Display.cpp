@@ -476,8 +476,44 @@ void drawFallbackIcon(const std::string& id, int x, int y, int s) {
         d.drawPixel(x + 15, y + 12, 0x03A0);
         d.drawPixel(x + 11, y + 14, 0x03A0);
         d.drawPixel(x + 23, y + 11, 0x03A0);
+    } else if (id == "usb") {
+        // Tridente USB stilizzato.
+        const uint16_t c = kInfo;
+        d.fillCircle(cx, y + s - 6, 2, c);
+        d.drawLine(cx, y + s - 8, cx, y + 5, c);
+        d.fillTriangle(cx - 2, y + 5, cx + 2, y + 5, cx, y + 1, c);
+        d.drawLine(cx, y + 14, cx - 6, y + 10, c);
+        d.fillRect(cx - 8, y + 7, 4, 4, c);
+        d.drawLine(cx, y + 18, cx + 6, y + 14, c);
+        d.fillCircle(cx + 7, y + 13, 2, c);
+    } else if (id == "capture") {
+        // Elenco di frame con un'antenna.
+        const uint16_t c = kAccent;
+        d.drawRect(x + 3, y + 5, 14, s - 10, c);
+        d.drawLine(x + 6, y + 10, x + 14, y + 10, c);
+        d.drawLine(x + 6, y + 15, x + 14, y + 15, c);
+        d.drawLine(x + 6, y + 20, x + 11, y + 20, c);
+        d.drawArc(x + s - 7, y + s / 2, 3, 5, 250, 290, kInfo);
+        d.drawArc(x + s - 7, y + s / 2, 6, 9, 250, 290, kInfo);
+        d.fillCircle(x + s - 7, y + s / 2, 2, kInfo);
+    } else if (id == "download") {
+        // Freccia verso il basso sopra un vassoio.
+        const uint16_t c = kInfo;
+        d.drawLine(cx, y + 5, cx, y + s - 13, c);
+        d.drawLine(cx, y + s - 13, cx - 5, y + s - 18, c);
+        d.drawLine(cx, y + s - 13, cx + 5, y + s - 18, c);
+        d.drawLine(x + 4, y + s - 8, x + s - 4, y + s - 8, c);
+        d.drawLine(x + 4, y + s - 8, x + 4, y + s - 5, c);
+        d.drawLine(x + s - 4, y + s - 8, x + s - 4, y + s - 5, c);
+    } else if (id == "music") {
+        // Doppia nota: due teste piene, due gambi e la traversa.
+        const uint16_t c = kAccent;
+        d.fillCircle(x + 10, y + s - 10, 4, c);
+        d.fillCircle(x + s - 10, y + s - 13, 4, c);
+        d.fillRect(x + 13, y + 7, 2, s - 17, c);
+        d.fillRect(x + s - 7, y + 4, 2, s - 17, c);
+        d.fillRect(x + 13, y + 7, s - 20, 3, c);
     } else {
-        // Fallback generico: riquadro con iniziale dell'icona.
         d.drawRoundRect(x + 2, y + 2, s - 4, s - 4, 4, kTextDim);
         const char initial = id.empty() ? '?' : static_cast<char>(toupper(id[0]));
         char buf[2] = {initial, 0};
@@ -625,7 +661,9 @@ void resetChargingDetector() {
 }
 
 bool chargingLikely() {
-    if (M5Cardputer.Power.isCharging()) {
+    // Solo lo stato esplicito "in carica" e' affidabile: su Cardputer/ADV
+    // isCharging() ritorna charge_unknown, che come bool sarebbe sempre vero.
+    if (M5Cardputer.Power.isCharging() == m5::Power_Class::is_charging) {
         return true;
     }
     const int16_t mv = M5Cardputer.Power.getBatteryVoltage();
@@ -683,13 +721,13 @@ void drawBatteryWidget(int right, int y) {
         std::snprintf(label, sizeof(label), "--%%");
     } else {
         std::snprintf(label, sizeof(label), "%d%%", percent);
-        color = percent <= 15 ? kNeoRed : (percent <= 35 ? kNeoOrange : kNeoGreen);
+        color = percent <= 15 ? kDanger : (percent <= 35 ? kWarning : kInk);
     }
 
     d.setFont(&fonts::Font0);
     d.setTextSize(1.0f);
     d.setTextDatum(0);
-    d.setTextColor(charging ? kNeoCyan : kPaper);
+    d.setTextColor(charging ? kAccent : kInk);
     const int textW = d.textWidth(label);
 
     constexpr int kBodyW = 17;
@@ -697,8 +735,8 @@ void drawBatteryWidget(int right, int y) {
     const int bodyX = right - (kBodyW + 2);
     const int bodyY = y;
     d.drawString(label, bodyX - 4 - textW, y);
-    d.drawRect(bodyX, bodyY, kBodyW, kBodyH, kPaper);
-    d.fillRect(bodyX + kBodyW, bodyY + 3, 2, 3, kPaper);
+    d.drawRect(bodyX, bodyY, kBodyW, kBodyH, kInk);
+    d.fillRect(bodyX + kBodyW, bodyY + 3, 2, 3, kInk);
 
     if (percent > 0) {
         const int fillW = (kBodyW - 4) * percent / 100;
@@ -708,23 +746,25 @@ void drawBatteryWidget(int right, int y) {
     }
     if (charging) {
         const int cx = bodyX + kBodyW / 2;
-        d.drawLine(cx + 1, bodyY + 1, cx - 2, bodyY + 5, kNeoYellow);
-        d.drawLine(cx - 2, bodyY + 5, cx + 2, bodyY + 5, kNeoYellow);
-        d.drawLine(cx + 2, bodyY + 5, cx - 1, bodyY + 8, kNeoYellow);
+        d.drawLine(cx + 1, bodyY + 1, cx - 2, bodyY + 5, kAccent);
+        d.drawLine(cx - 2, bodyY + 5, cx + 2, bodyY + 5, kAccent);
+        d.drawLine(cx + 2, bodyY + 5, cx - 1, bodyY + 8, kAccent);
     }
 }
 
 void header(const std::string& title, const std::string& parent) {
     auto& d = g();
-    d.fillRect(0, 0, width(), 21, kInk);
-    d.fillRect(0, 20, width(), 2, kNeoYellow);
-    d.fillRect(3, 4, 4, 12, kNeoCyan);
+    // Superficie chiara e regola sottile: niente barra a blocchi colorati.
+    d.fillRect(0, 0, width(), 21, kPaper);
+    d.drawFastHLine(0, 20, width(), kInk);
+    // Punto d'accento "Nothing" prima del titolo.
+    d.fillCircle(7, 10, 2, kAccent);
 
     std::string full = parent.empty() ? title : (parent + " > " + title);
 
     // L'indicatore batteria occupa ~50 px a destra: titolo scelto e troncato
     // in base allo spazio rimasto, anche in portrait.
-    constexpr int kTitleX = 10;
+    constexpr int kTitleX = 14;
     constexpr int kBatteryReserve = 50;
     const int maxTitleW = width() - kTitleX - kBatteryReserve - 4;
     d.setFont(&fonts::Font2);
@@ -740,16 +780,17 @@ void header(const std::string& title, const std::string& parent) {
         }
         full += ellipsis;
     }
-    text(kTitleX, 3, full, kPaper, font);
+    text(kTitleX, 3, full, kInk, font);
     drawBatteryWidget(width() - 3, 6);
 }
 
 void footer(const std::string& hint) {
     auto& d = g();
     const int h = height();
-    d.fillRect(0, h - 12, width(), 12, kInk);
-    d.fillRect(0, h - 12, width(), 2, kNeoYellow);
-    text(3, h - 10, hint, kPaper, 0);
+    // Stessa logica dell'header: carta, regola sottile e testo attenuato.
+    d.fillRect(0, h - 12, width(), 12, kPaper);
+    d.drawFastHLine(0, h - 12, width(), kInk);
+    text(3, h - 10, hint, kMuted, 0);
 }
 
 void drawIcon(const std::string& icon, int x, int y, int size) {
@@ -778,12 +819,14 @@ void drawIcon(const std::string& icon, int x, int y, int size) {
 void splash() {
     clear(kPaper);
     auto& d = g();
-    d.fillRect(0, 0, width(), 5, kInk);
-    d.fillRect(0, 30, width(), 4, kNeoYellow);
+    // Impostazione editoriale: regole sottili, tanto spazio bianco e un solo
+    // punto rosso d'accento (ispirazione Braun + Nothing).
+    d.fillRect(0, 0, width(), 2, kInk);
+    d.fillCircle(width() / 2, 30, 3, kAccent);
     textCentered(44, fw::kTitle, kInk, 4);
-    textCentered(68, "M5Stack Cardputer ADV", kInk, 2);
+    textCentered(68, "M5Stack Cardputer ADV", kMuted, 2);
     textCentered(86, "ESP32-S3 | firmware multi-funzione", kMuted, 0);
-    progressBar(40, 108, width() - 80, 8, 1.0f, kNeoGreen);
+    progressBar(40, 108, width() - 80, 6, 1.0f, kAccent);
     textCentered(height() - 18, std::string("build ") + fw::kBuildDate, kMuted, 0);
     push();
     delay(900);
