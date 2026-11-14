@@ -11,7 +11,7 @@ Firmware modulare per **M5Stack Cardputer ADV** (ESP32-S3FN8, 8 MB flash, **senz
 |---|---|---|
 | Menu principale / UI / navigazione | ✅ | Carosello orizzontale a icone con animazione, griglia, breadcrumb e liste scrollabili |
 | Impostazioni | ✅ | Luminosità, rotazione, **spegnimento automatico**, info dispositivo, **rete WiFi** (scansione + password), moduli on/off, export/import JSON, reset |
-| Giochi | ✅ | Tetris, Breakout, Pac-Man, Doom Lite, Snake, Pong, 2048, Flappy, Simon, Minesweeper, Connect 4, Scacchi e Minecraft con record su SD |
+| Giochi | ✅ | Tetris, Breakout, Pac-Man, Doom Lite, Snake, Pong, 2048, Flappy, Simon, Minesweeper, Connect 4, Scacchi e Minecraft 3D (gli altri giochi con record su SD) |
 | Infrarossi | ✅ | Parser `.ir` Flipper, ricerca per nome, preferiti, ripresa ultimo telecomando, tasti rapidi, scanner Power, TV-B-Gone, jammer opzionale, learn disabilitato |
 | BLE | ✅ | Scanner passivo/attivo, spam Random/Samsung/Google/Windows opzionale |
 | Chat BLE | ✅ | Messaggi cifrati AES e filtrati per destinatario, notifiche di presenza, nickname unico e cronologia locale |
@@ -38,7 +38,7 @@ Firmware modulare per **M5Stack Cardputer ADV** (ESP32-S3FN8, 8 MB flash, **senz
 - **Configurazione** in NVS, export/import JSON (`/config.json`) senza dati sensibili; backup e screenshot su SD.
 - **Giochi interrompibili** con `` ` `` (ESC fisico), record persistenti su SD e ripristino della rotazione all'uscita.
 - **Scacchi** giocatore contro bot con tre difficolta' scelte a inizio partita, regole complete (arrocco, en passant, promozione, matto, stallo), annullamento dell'ultima coppia di mosse e storico navigabile.
-- **Minecraft Mini** (`src/modules/games/Minecraft.cpp`): sandbox 2D a blocchi con mondo procedurale (colline, caverne, minerali e alberi), scavo e piazzamento, fisica con salto e gravita', hotbar di 4 blocchi e obiettivo completabile: raccogliere 3 diamanti in profondita' e tornare al portale in superficie. Record dei blocchi estratti su SD.
+- **Minecraft 3D** (`src/modules/games/Minecraft.cpp`): sandbox in prima persona su heightmap procedurale (isola con colline, spiagge, pietra e alberi). Render 3D via raycast per colonna con shading, nebbia e scacchiera dei blocchi; movimento W/A/S/D, sguardo con le frecce e piazzamento del blocco puntato con ENTER. Nessun obiettivo e nessun punteggio: solo movimento e costruzione.
 - **IR**: NEC/NECext, Samsung32, LG, Sony/SIRC, RC5/RC5X, RC6, JVC, Kaseikyo (Panasonic), RCA e comandi raw; preferiti in NVS, scanner Power per marca e anteprima dei telecomandi.
 - **IR UX**: Premi `F` in un telecomando per aggiungere/togliere il preferito. Lo scanner invia il tasto Power di ogni file e permette di salvarlo con `F`, ispirato a Ultimate-Remote.
 - **IR ricerca**: la voce **Cerca** interroga tutto il database per marca o modello (sottostringa, senza distinzione di maiuscole) e mostra i telecomandi trovati, senza navigare cartella per cartella.
@@ -246,10 +246,10 @@ Poi collega la Cardputer via USB e premi **Installa firmware**. Dettagli in `fla
 | Frecce | Ripeti la sequenza in Simon |
 | `w` `a` `s` `d` | Movimento alternativo in Doom Lite e Pac-Man |
 | `H` / `U` | Scacchi: storico delle mosse / annulla l'ultima coppia di mosse |
-| `W` `A` `D` | Minecraft: salta, sinistra, destra |
-| Frecce | Minecraft: sposta il mirino di scavo |
-| ENTER | Minecraft: scava il blocco sotto il mirino |
-| `B` / `1`-`4` | Minecraft: posa il blocco scelto / seleziona lo slot della hotbar |
+| `W` `A` `S` `D` | Minecraft 3D: avanti, sinistra, indietro, destra |
+| Frecce | Minecraft 3D: guarda in alto/basso e gira |
+| ENTER / `B` | Minecraft 3D: posa il blocco puntato |
+| `1`-`4` | Minecraft 3D: scegli erba, pietra, legno o sabbia |
 
 ## Struttura del progetto
 

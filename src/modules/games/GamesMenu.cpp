@@ -114,7 +114,7 @@ void runMenu() {
         runChess();
         exitGameDisplay();
     });
-    menu.addItem("Minecraft", "minecraft", [] {
+    menu.addItem("Minecraft 3D", "minecraft", [] {
         enterGameDisplay();
         runMinecraft();
         exitGameDisplay();
