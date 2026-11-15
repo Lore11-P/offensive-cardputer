@@ -24,7 +24,7 @@ Firmware modulare per **M5Stack Cardputer ADV** (ESP32-S3FN8, 8 MB flash, **senz
 | BadUSB | ✅ solo env `hid` | Script Ducky/Flipper da `/badusb`, tastiera HID via TinyUSB (nessun mouse) |
 | Aggiornamento OTA | ✅ | Da WiFi: scarica `firmware.bin` dal ramo `main` del repo GitHub e lo scrive nella partizione inattiva; richiede il layout dual-OTA (`partitions.csv`) |
 | microSD | ✅ | File browser, info spazio, screenshot BMP, backup config e punteggi |
-| Database IR | 🟡 | 307 file .ir, 38 cartelle: 32 marche TV complete, 5 parziali, 3 coperte da Universale; verifica i codici sui tuoi apparecchi |
+| Database IR | 🟡 | 309 file .ir, 38 cartelle: 32 marche TV complete, 5 parziali, 3 coperte da Universale; verifica i codici sui tuoi apparecchi |
 | Asset icone 32×32 | ✅ | BMP 24 bit generati, con fallback se assenti |
 | Test automatici host | ⬜ | Predisposta la cartella `test/`, nessun test incluso |
 | Verifica su hardware reale | ⬜ | Compilazione e filesystem verificati; test su device da fare |
@@ -274,7 +274,7 @@ cardputer firmware/
 │       └── settings/         # impostazioni e info
 ├── data/
 │   ├── icons/                # icone BMP 32x32
-│   └── ir/<marca>/           # 307 file .ir, 38 cartelle
+│   └── ir/<marca>/           # 309 file .ir, 38 cartelle
 ├── flasher/                  # script + binari + flasher web
 └── test/                     # predisposto per test host
 ```
