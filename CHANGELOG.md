@@ -4,6 +4,8 @@ Tutte le modifiche rilevanti del progetto. Formato basato su Keep a Changelog.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-15
+
 ### Aggiunto
 
 - **Capture** (`src/modules/pcap`, `include/PcapTools.h`, `ENABLE_MODULE_PCAPTOOLS`): browser PCAP in streaming con hex dump, conversione in **hashcat hc22000** (`WPA*01` PMKID + `WPA*02` EAPOL, ESSID dai beacon, dedup, limiti e statistiche) ed estrazione dei soli frame EAPOL; l'estrazione hc22000 gira anche in tempo reale durante lo sniffer.

@@ -80,7 +80,7 @@ Write-Host "Scrittura firmware CardputerFirmware v1.0..." -ForegroundColor Cyan
     0x0 (Join-Path $bin "bootloader.bin") `
     0x8000 (Join-Path $bin "partitions.bin") `
     0x10000 (Join-Path $bin "firmware.bin") `
-    0x410000 (Join-Path $bin "littlefs.bin")
+    0x510000 (Join-Path $bin "littlefs.bin")
 
 if ($LASTEXITCODE -ne 0) {
     throw "Scrittura non riuscita. Controlla la porta USB e riprova."

@@ -671,6 +671,10 @@
   .feature:nth-child(6) { background: var(--yellow); }
   .feature:nth-child(7) { background: var(--cyan); }
   .feature:nth-child(8) { background: var(--pink); }
+  .feature:nth-child(9) { background: var(--green); }
+  .feature:nth-child(10) { background: var(--paper-2); }
+  .feature:nth-child(11) { background: var(--yellow); }
+  .feature:nth-child(12) { background: var(--cyan); }
   .feature h3 {
     margin: 0;
     font-family: "Archivo Black", sans-serif;
@@ -838,7 +842,8 @@
   .step-card:nth-child(3), .step-card:nth-child(4),
   .feature:nth-child(1), .feature:nth-child(2), .feature:nth-child(3),
   .feature:nth-child(4), .feature:nth-child(5), .feature:nth-child(6),
-  .feature:nth-child(7), .feature:nth-child(8) { background: var(--paper-2); }
+  .feature:nth-child(7), .feature:nth-child(8), .feature:nth-child(9),
+  .feature:nth-child(10), .feature:nth-child(11), .feature:nth-child(12) { background: var(--paper-2); }
   .step-card { border-top: 2px solid var(--ink) !important; }
   .step-card .num { color: var(--accent); }
   .warning {
@@ -946,8 +951,8 @@
       </div>
       <div class="stats" aria-label="Informazioni firmware">
         <div class="stat">
-          <span class="stat-label">RELEASE</span>
-          <strong data-release-tag>v1.0.0-offensive</strong>
+          <span class="stat-label">VERSIONE</span>
+          <strong>v1.1.0</strong>
         </div>
         <div class="stat">
           <span class="stat-label">TARGET</span>
@@ -1027,9 +1032,9 @@
         </esp-web-install-button>
 
         <div class="flash-meta">
-          <a data-asset="firmware.bin" href="https://github.com/Lore11-P/offensive-cardputer/releases/latest" target="_blank" rel="noopener">firmware.bin</a>
-          <a data-asset="littlefs.bin" href="https://github.com/Lore11-P/offensive-cardputer/releases/latest" target="_blank" rel="noopener">littlefs.bin</a>
-          <a href="https://github.com/Lore11-P/offensive-cardputer/releases/latest" target="_blank" rel="noopener">RELEASE &nearr;</a>
+          <a href="https://raw.githubusercontent.com/Lore11-P/offensive-cardputer/main/flasher/bin/firmware.bin" target="_blank" rel="noopener">firmware.bin</a>
+          <a href="https://raw.githubusercontent.com/Lore11-P/offensive-cardputer/main/flasher/bin/littlefs.bin" target="_blank" rel="noopener">littlefs.bin</a>
+          <a href="https://github.com/Lore11-P/offensive-cardputer/tree/main/flasher/bin" target="_blank" rel="noopener">BINARI &nearr;</a>
         </div>
 
         <p class="micro">
@@ -1046,7 +1051,7 @@
 <span class="t-dim">$</span> write bootloader <span class="t-dim">@ 0x0</span>
 <span class="t-dim">$</span> write partitions <span class="t-dim">@ 0x8000</span>
 <span class="t-dim">$</span> write firmware   <span class="t-dim">@ 0x10000</span>
-<span class="t-dim">$</span> write littlefs   <span class="t-dim">@ 0x410000</span>
+<span class="t-dim">$</span> write littlefs   <span class="t-dim">@ 0x510000</span>
 <span class="t-warn">!</span> non scollegare il cavo
 <span class="t-ok">DONE</span> reboot &rarr; menu</pre>
       </div>
@@ -1088,7 +1093,7 @@
     <div class="section-head">
       <span class="section-num">03</span>
       <h2>COSA C'&Egrave;<br>DENTRO.</h2>
-      <p>La build offensiva: deauth Wi-Fi, evil twin/portal, BLE spam e jammer IR attivi, oltre a scanner, radar, web radio, telecomandi IR, giochi e microSD.</p>
+      <p>La build offensiva: deauth Wi-Fi, evil twin/portal, BLE spam, jammer IR, Capture PCAP con hashcat, BadUSB e BLE+, oltre a scanner, radar, web radio, telecomandi IR, giochi, musica e microSD.</p>
     </div>
 
     <div class="features-grid">
@@ -1109,12 +1114,28 @@
         <p>Disturbo IR opzionale accanto a scanner Power e TV-B-Gone.</p>
       </article>
       <article class="feature">
+        <h3>CAPTURE</h3>
+        <p>PCAP in streaming, estrazione EAPOL e conversione hc22000 per hashcat.</p>
+      </article>
+      <article class="feature">
+        <h3>BLE+</h3>
+        <p>AirTag, Flipper finder, GATT, skimmer, wardriving e cattura advertising.</p>
+      </article>
+      <article class="feature">
+        <h3>BADUSB</h3>
+        <p>Script Ducky/Flipper da microSD con avanzamento e abort.</p>
+      </article>
+      <article class="feature">
+        <h3>MUSICA</h3>
+        <p>MP3, WAV, FLAC e AAC da microSD o LittleFS con coda e volume.</p>
+      </article>
+      <article class="feature">
         <h3>RADAR</h3>
         <p>Finder BLE hot/cold, PPI e vista banda 2.4 GHz.</p>
       </article>
       <article class="feature">
         <h3>IR REMOTE</h3>
-        <p>307 file .ir, ricerca, preferiti e tasti rapidi.</p>
+        <p>309 file .ir, ricerca, preferiti e tasti rapidi.</p>
       </article>
       <article class="feature">
         <h3>GAMES</h3>
@@ -1151,12 +1172,12 @@
 <footer class="footer">
   <div class="footer-inner">
     <p>
-      CardputerFirmware v1.0 &middot; build offensiva &middot; licenza MIT<br>
-      Ultima release: <span data-release-tag>v1.0.0-offensive</span> &middot; <span data-release-date>2 nov 2026</span>
+      CardputerFirmware v1.1 &middot; build offensiva &middot; licenza MIT<br>
+      Ultima build: <strong>v1.1.0</strong> &middot; <span>15 nov 2026</span>
     </p>
     <div class="footer-links">
       <a href="https://github.com/Lore11-P/offensive-cardputer" target="_blank" rel="noopener">GITHUB &nearr;</a>
-      <a href="https://github.com/Lore11-P/offensive-cardputer/releases/latest" target="_blank" rel="noopener">RELEASE &nearr;</a>
+      <a href="https://github.com/Lore11-P/offensive-cardputer/tree/main/flasher/bin" target="_blank" rel="noopener">BINARI &nearr;</a>
       <a href="https://esphome.github.io/esp-web-tools/" target="_blank" rel="noopener">ESP WEB TOOLS &nearr;</a>
     </div>
   </div>
@@ -1182,38 +1203,6 @@
       }
     }
 
-    var repo = "Lore11-P/offensive-cardputer";
-    var releaseApi = "https://api.github.com/repos/" + repo + "/releases/latest";
-    var fallbackRelease = "https://github.com/" + repo + "/releases/latest";
-
-    fetch(releaseApi, { headers: { Accept: "application/vnd.github+json" } })
-      .then(function (response) {
-        if (!response.ok) throw new Error("release " + response.status);
-        return response.json();
-      })
-      .then(function (release) {
-        document.querySelectorAll("[data-release-tag]").forEach(function (node) {
-          node.textContent = release.tag_name || "v1.0.0-offensive";
-        });
-        var date = release.published_at ? new Date(release.published_at) : null;
-        if (date && !isNaN(date.getTime())) {
-          var formatted = date.toLocaleDateString("it-IT", { day: "2-digit", month: "short", year: "numeric" });
-          document.querySelectorAll("[data-release-date]").forEach(function (node) {
-            node.textContent = formatted;
-          });
-        }
-        (release.assets || []).forEach(function (asset) {
-          document.querySelectorAll('[data-asset="' + asset.name + '"]').forEach(function (link) {
-            link.href = asset.browser_download_url;
-            link.title = asset.name + " - " + (asset.size / 1024 / 1024).toFixed(1) + " MB";
-          });
-        });
-      })
-      .catch(function () {
-        document.querySelectorAll('[data-asset]').forEach(function (link) {
-          link.href = fallbackRelease;
-        });
-      });
   })();
 </script>
 </body>
