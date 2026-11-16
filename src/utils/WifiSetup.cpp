@@ -5,12 +5,15 @@
 #include <WiFi.h>
 
 #include <algorithm>
+#include <cmath>
+#include <cstdio>
 #include <string>
 #include <vector>
 
 #include "Display.h"
 #include "Logger.h"
 #include "Navigation.h"
+#include "Orbit.h"
 #include "TextInput.h"
 #include "Ui.h"
 
@@ -102,18 +105,50 @@ bool hasCredentials() {
 
 namespace {
 
-// --- Scansione -------------------------------------------------------------
-void drawScanProgress(uint32_t elapsedMs, const std::string& parent) {
-    display::clear();
-    display::header("Reti WiFi", parent);
-    const int dots = static_cast<int>(elapsedMs / 350) % 4;
-    display::textCentered(42, "Ricerca reti in corso" + std::string(static_cast<size_t>(dots), '.'),
-                          display::kAccent, 2);
-    display::progressBar(20, 66, 200, 8, static_cast<float>(elapsedMs) / 6000.0f,
-                         display::kInfo);
-    display::textCentered(84, "Attendi qualche secondo", display::kTextDim, 0);
+// --- Schermate di attesa ---------------------------------------------------
+// Anello di progresso con icona al centro e telemetria a destra: la stessa
+// strumentazione del resto dell'interfaccia Orbit.
+void drawWaitScreen(const char* title, const char* parent, const char* heading,
+                    const std::string& subject, float fraction, uint32_t elapsedMs,
+                    const char* note, const char* icon) {
+    display::clear(display::C(display::T_bg));
+    orbit::sky(0, 0, display::width(), display::height(), 0x5EA1);
+    display::header(title, parent);
+
+    const int cx = 62;
+    const int cy = 76;
+    display::progressRing(cx, cy, 29, fraction, display::C(display::T_sec));
+    // Satellite che percorre l'anello: da' il senso di ricerca in corso.
+    const float a = static_cast<float>(elapsedMs) / 900.0f;
+    orbit::satellite(cx + static_cast<int>(cosf(a) * 39.0f) - 4,
+                     cy + static_cast<int>(sinf(a) * 39.0f) - 4, 8,
+                     display::C(display::T_hi), display::C(display::T_sec));
+    display::drawOrbitIcon(icon, cx - 8, cy - 8, 16);
+
+    const int rightX = 108;
+    display::text(rightX, 34, heading, display::C(display::T_dim), 0);
+    char secs[12];
+    std::snprintf(secs, sizeof(secs), "%.1fs", static_cast<double>(elapsedMs) / 1000.0);
+    display::text(rightX, 44, secs, display::C(display::T_hi), 4);
+    display::text(rightX, 66, subject, display::C(display::T_text), 0);
+    display::text(rightX, 78, "BANDA 2.4 GHz", display::C(display::T_dim), 0);
+
+    char pct[8];
+    std::snprintf(pct, sizeof(pct), "%d%%", static_cast<int>(fraction * 100.0f));
+    display::text(rightX, 90, pct, display::C(display::T_sec), 0);
+    display::progressBar(rightX + 28, 92, display::width() - rightX - 40, 5, fraction,
+                         display::C(display::T_sec));
+    if (note && *note) {
+        display::text(rightX, 106, note, display::C(display::T_dim), 0);
+    }
     display::footer("` = annulla");
     display::push();
+}
+
+void drawScanProgress(uint32_t elapsedMs, const std::string& parent) {
+    const float fraction = std::min(1.0f, static_cast<float>(elapsedMs) / 6000.0f);
+    drawWaitScreen("Reti WiFi", parent.c_str(), "SCANSIONE", "RICERCA RETI", fraction,
+                   elapsedMs, "scansione in corso", "wifi");
 }
 
 }  // namespace
@@ -279,16 +314,10 @@ bool promptPassword(const std::string& ssid, std::string& password) {
 }
 
 void drawConnectProgress(const std::string& ssid, uint32_t elapsedMs, const std::string& parent) {
-    display::clear();
-    display::header("WiFi", parent);
-    display::textCentered(40, "Connessione a", display::kTextDim, 0);
-    display::textCentered(54, shortened(ssid, 24), display::kAccent, 2);
-    display::progressBar(20, 78, 200, 8,
-                         static_cast<float>(elapsedMs) / static_cast<float>(kConnectTimeoutMs),
-                         display::kInfo);
-    display::textCentered(92, "se fallisce, controlla la password", display::kTextDim, 0);
-    display::footer("` = annulla");
-    display::push();
+    const float fraction =
+        std::min(1.0f, static_cast<float>(elapsedMs) / static_cast<float>(kConnectTimeoutMs));
+    drawWaitScreen("WiFi", parent.c_str(), "CONNESSIONE", shortened(ssid, 18), fraction,
+                   elapsedMs, "controlla la password", "key");
 }
 
 }  // namespace

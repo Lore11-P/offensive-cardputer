@@ -15,6 +15,7 @@
 #include "Display.h"
 #include "Logger.h"
 #include "Navigation.h"
+#include "Orbit.h"
 #include "PowerTimer.h"
 #include "Ui.h"
 #include "WifiSetup.h"
@@ -32,12 +33,20 @@ constexpr uint32_t kDrawIntervalMs = 120;
 
 void drawProgress(const std::string& status, float fraction, const std::string& detail,
                   const std::string& parent) {
-    display::clear();
+    display::clear(display::C(display::T_bg));
+    orbit::sky(0, 0, display::width(), display::height(), 0x0A17);
     display::header("Aggiornamento", parent);
-    display::textCentered(38, status, display::kAccent, 2);
-    display::progressBar(20, 62, display::width() - 40, 10, fraction, display::kInfo);
+
+    char pct[8];
+    std::snprintf(pct, sizeof(pct), "%d%%", static_cast<int>(fraction * 100.0f));
+    display::text(12, 32, "CARICAMENTO FIRMWARE", display::C(display::T_dim), 0);
+    display::text(display::width() - 12 - display::textWidth(pct, 4), 30, pct,
+                  display::C(display::T_hi), 4);
+
+    // Traiettoria di volo: il razzo avanza con il download.
+    display::trajectory(14, 52, display::width() - 28, 40, fraction, status);
     if (!detail.empty()) {
-        display::textCentered(82, detail, display::kTextDim, 0);
+        display::text(14, 106, detail, display::C(display::T_dim), 0);
     }
     display::footer("` = annulla");
     display::push();

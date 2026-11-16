@@ -1,4 +1,4 @@
-#include "Tetris.h"
+﻿#include "Tetris.h"
 
 #include <Arduino.h>
 
@@ -35,15 +35,24 @@ constexpr uint16_t kBaseShapes[kPieceCount] = {
     0x0074,  // L
 };
 
-constexpr uint16_t kColors[kPieceCount] = {
-    display::kInfo,    // I ciano
-    display::kWarning, // O giallo
-    0xA81F,            // T viola
-    display::kAccent,  // S verde
-    display::kDanger,  // Z rosso
-    0x2D7F,            // J blu
-    0xFC60,            // L arancio
-};
+inline uint16_t pieceColor(int type) {
+    switch (type % kPieceCount) {
+        case 0:
+            return display::kInfo;
+        case 1:
+            return display::kWarning;
+        case 2:
+            return 0xA81F;
+        case 3:
+            return display::kAccent;
+        case 4:
+            return display::kDanger;
+        case 5:
+            return 0x2D7F;
+        default:
+            return 0xFC60;
+    }
+}
 
 struct Piece {
     int type = 0;
@@ -202,7 +211,7 @@ void drawNext(const Piece& next, int x, int y, int cell) {
         for (int px = 0; px < 4; ++px) {
             if (mask & (1u << (py * 4 + px))) {
                 drawBlock(x + px * cell, y + py * cell, cell - 1,
-                          kColors[next.type]);
+                          pieceColor(next.type));
             }
         }
     }
@@ -224,7 +233,7 @@ void drawBoard(const Piece& piece, uint32_t score, uint32_t lines, int level,
         for (int x = 0; x < kBoardW; ++x) {
             if (g_board[y][x] != 0) {
                 drawBlock(kBoardX + x * kCell, kBoardY + y * kCell, kCell - 1,
-                          kColors[g_board[y][x] - 1]);
+                          pieceColor(g_board[y][x] - 1));
             }
         }
     }
@@ -254,7 +263,7 @@ void drawBoard(const Piece& piece, uint32_t score, uint32_t lines, int level,
                 const int by = piece.y + y;
                 if (by >= 0 && by < kBoardH && bx >= 0 && bx < kBoardW) {
                     drawBlock(kBoardX + bx * kCell, kBoardY + by * kCell,
-                              kCell - 1, kColors[piece.type]);
+                              kCell - 1, pieceColor(piece.type));
                 }
             }
         }

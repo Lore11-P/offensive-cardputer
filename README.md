@@ -32,7 +32,7 @@ Firmware modulare per **M5Stack Cardputer ADV** (ESP32-S3FN8, 8 MB flash, **senz
 ## Funzionalità
 
 - **Menu gerarchico** con carosello orizzontale animato, card centrale e anteprime laterali; le viste con molti elementi usano griglie o liste con auto-repeat.
-- **Display** 240×135 in landscape, framebuffer 16 bpp (nessun flicker), tema "Braun-inspired minimalism" con accento rosso Nothing e rotazione configurabile.
+- **Display** 240×135 in landscape, framebuffer 16 bpp (nessun flicker), interfaccia "Orbit" con sette palette selezionabili (Nova, Aurora, Solar, Ice, Volt, Mono, Paper), font pixel 5x7 disegnato dal codice e grafica procedurale (pianeti, razzi, radar); rotazione configurabile.
 - **Batteria**: indicatore nella barra superiore con percentuale, colore per livello e stato di carica. Sui modelli senza PMIC (Cardputer/ADV) la ricarica viene stimata dalla tensione della batteria, perche' il chip di carica non e' leggibile.
 - **Storage** LittleFS + microSD opzionale (`/sd`), con fallback automatico e file browser.
 - **Configurazione** in NVS, export/import JSON (`/config.json`) senza dati sensibili; backup e screenshot su SD.

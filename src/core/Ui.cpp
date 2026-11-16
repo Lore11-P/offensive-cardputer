@@ -5,41 +5,62 @@
 
 #include "Display.h"
 #include "Navigation.h"
+#include "Orbit.h"
 
 namespace ui {
 
 void drawScreen(const std::string& title, const std::string& parent,
                 const std::vector<std::string>& lines, const std::string& hint,
                 uint16_t accent) {
-    display::clear(display::kPaper);
+    display::clear(display::C(display::T_bg));
     display::header(title, parent);
 
-    // Pannello chiaro con regola d'accento: usato dalle schermate di conferma.
-    // Va disegnato prima del testo, altrimenti lo coprirebbe.
-    if (accent) {
-        auto& d = display::g();
-        const int panelH = display::height() - 35;
-        d.fillRect(1, 21, display::width() - 2, panelH, display::kPaperLight);
-        d.drawRect(1, 21, display::width() - 2, panelH, display::kInk);
-        d.fillRect(1, 21, display::width() - 2, 2, accent);
-    }
+    auto& d = display::g();
+    const int panelY = 24;
+    const int panelH = display::height() - panelY - 15;
 
-    int y = 27;
+    // Pannello strumentazione: cornice, tacche e striscia d'allarme.
+    d.fillRect(3, panelY, display::width() - 6, panelH, display::C(display::T_bg2));
+    d.drawRect(3, panelY, display::width() - 6, panelH, display::C(display::T_line));
+    d.fillRect(3, panelY, display::width() - 6, 1, accent ? accent : display::C(display::T_sec));
+
+    // Tacche di scala sul bordo destro.
+    for (int y = panelY + 4; y < panelY + panelH - 2; y += 5) {
+        d.drawFastHLine(display::width() - 8, y, 3, display::C(display::T_line2));
+    }
+    // Angoli.
+    d.drawFastHLine(3, panelY, 6, accent ? accent : display::C(display::T_acc));
+    d.drawFastVLine(3, panelY, 6, accent ? accent : display::C(display::T_acc));
+
+    // Riga di telemetria in fondo al pannello (riservata prima del testo).
+    const int teleY = panelY + panelH - 8;
+    const int sepY = teleY - 3;
+
+    int y = panelY + 6;
     for (const auto& line : lines) {
-        const uint16_t color = line.rfind("!", 0) == 0
-                                   ? display::kDanger
-                                   : (line.rfind(">", 0) == 0 ? display::kAccent
-                                                              : display::kInk);
-        std::string s = line;
-        if (!s.empty() && (s[0] == '!' || s[0] == '>')) {
-            s.erase(0, 1);
-        }
-        display::text(5, y, s, color, 0);
-        y += 11;
-        if (y > display::height() - 20) {
+        if (y + 8 > sepY) {
             break;
         }
+        uint16_t color = display::C(display::T_text);
+        std::string s = line;
+        if (!s.empty() && s[0] == '!') {
+            color = display::C(display::T_err);
+            s.erase(0, 1);
+            // Barra d'allarme a sinistra.
+            d.fillRect(5, y + 1, 2, 6, display::C(display::T_err));
+        } else if (!s.empty() && s[0] == '>') {
+            color = display::C(display::T_acc);
+            s.erase(0, 1);
+            d.fillRect(5, y + 1, 2, 6, display::C(display::T_acc));
+        }
+        display::text(11, y, s, color, 0);
+        y += 10;
     }
+
+    d.drawFastHLine(6, sepY, display::width() - 14, display::C(display::T_line2));
+    orbit::signalBars(8, teleY, 3, display::C(display::T_ok), display::C(display::T_line2));
+    display::text(22, teleY, "LINK OK", display::C(display::T_dim), 0);
+    display::text(display::width() - 30, teleY, "SYS", display::C(display::T_dim), 0);
 
     display::footer(hint);
     display::push();
@@ -51,8 +72,6 @@ void message(const std::string& title, const std::vector<std::string>& lines,
     uint32_t lastDraw = 0;
     bool done = false;
     while (!done) {
-        // Il contenuto e' statico: si ridisegna solo per aggiornare la
-        // batteria nell'header, non a ogni ciclo (meno flicker/CPU).
         const uint32_t now = millis();
         if (lastDraw == 0 || now - lastDraw >= 500) {
             drawScreen(title, parent, lines, hint, 0);
@@ -76,7 +95,7 @@ bool confirm(const std::string& title, const std::vector<std::string>& lines,
         const uint32_t now = millis();
         if (lastDraw == 0 || now - lastDraw >= 500) {
             drawScreen(title, parent, lines, "ENTER = conferma    ` = annulla",
-                       display::kAccent);
+                       display::C(display::T_acc));
             lastDraw = now;
         }
         const navigation::EventData ev = navigation::poll();
@@ -105,7 +124,6 @@ bool legalWarning(const std::string& activity, const std::vector<std::string>& e
         lines.push_back(e);
     }
     lines.emplace_back(">Leggi il disclaimer nel README.");
-    // Se ci sono troppe righe, compatta le ultime.
     if (lines.size() > 8) {
         lines.resize(8);
         lines.back() = ">Vedi README per il disclaimer.";

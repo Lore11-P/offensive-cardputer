@@ -1,43 +1,105 @@
 #pragma once
 
 #include <M5Cardputer.h>
+#include <stdint.h>
 #include <string>
 #include <vector>
 
-// Piccolo layer grafico sopra M5GFX:
+#include "OrbitPalette.h"
+
+// Layer grafico "Orbit": sala di controllo in miniatura.
 //  - sprite 16bpp come double buffer (nessun flicker)
-//  - header/breadcrumb e footer standard
-//  - icone BMP 32x32 caricate da LittleFS (fallback disegnato a runtime)
+//  - sette palette orbitali selezionabili a runtime
+//  - font pixel 5x7 disegnato dal codice (nessun font di sistema)
+//  - header/footer telemetrici, icone procedurali, titoli animati
 namespace display {
 
-// Palette RGB565 del tema "Braun-inspired minimalism" con accento Nothing:
-// superfici calde off-white, inchiostro antracite e un unico rosso d'accento.
-// Le schermate scure (giochi, sospensione) usano la stessa scala di grigi.
-constexpr uint16_t kBlack = 0x0000;
-constexpr uint16_t kWhite = 0xFFFF;
-constexpr uint16_t kBackground = 0x10A2;  // antracite
-constexpr uint16_t kPanel = 0x2945;       // superficie scura rialzata
-constexpr uint16_t kHeader = 0x2104;      // barra scura (giochi)
-constexpr uint16_t kAccent = 0xD0C4;      // rosso Nothing
-constexpr uint16_t kAccentDark = 0x9882;
-constexpr uint16_t kText = 0xEF5C;        // bianco caldo
-constexpr uint16_t kTextDim = 0x9CD2;
-constexpr uint16_t kWarning = 0xB340;     // ocra
-constexpr uint16_t kDanger = 0xB1C5;      // rosso mattone
-constexpr uint16_t kInfo = 0x4B4F;        // blu acciaio
+// Token della palette Orbit (stessi nomi del launcher di riferimento).
+enum Tok : uint8_t {
+    T_bg,
+    T_bg2,
+    T_bg3,
+    T_line,
+    T_line2,
+    T_dim,
+    T_text,
+    T_hi,
+    T_acc,
+    T_accD,
+    T_accL,
+    T_sec,
+    T_secD,
+    T_onAcc,
+    T_ok,
+    T_warn,
+    T_err,
+    T_sky0,
+    T_sky1,
+    T_sky2,
+    T_pl0,
+    T_pl1,
+    T_pl2,
+    T_pl3,
+    T_pl4,
+    T_atm,
+    T_city,
+    T_star,
+    T_accM,
+    T_secM,
+    T_lineM,
+    T_textM,
+    T_black,
+    T_gold,
+    T_goldD,
+    T_goldL,
+    T_flame0,
+    T_flame1,
+    T_flame2,
+    T_flame3,
+    T_ink,
+    T_secL,
+    T_errD,
+    T_errL,
+    T_okL,
+    T_okD,
+    T_COUNT
+};
 
-// Superfici chiare del tema (Braun): carta calda e inchiostro.
-constexpr uint16_t kPaper = 0xEF3B;       // greige
-constexpr uint16_t kPaperLight = 0xF79D;  // avorio
-constexpr uint16_t kInk = 0x18C3;         // antracite
-constexpr uint16_t kMuted = 0x8C50;       // grigio caldo
-// Nomi storici del vecchio tema, rimappati sulla palette minimale.
-constexpr uint16_t kNeoYellow = kAccent;  // selezione / accento
-constexpr uint16_t kNeoCyan = kInfo;
-constexpr uint16_t kNeoPink = 0x89C8;     // rosa spento
-constexpr uint16_t kNeoGreen = 0x5B8A;    // verde oliva
-constexpr uint16_t kNeoOrange = kWarning;
-constexpr uint16_t kNeoRed = kDanger;
+extern uint16_t pal[orbit_palette::kTokenCount];
+inline uint16_t C(Tok t) { return pal[t]; }
+
+// Nomi storici della palette, ora rimappati sul tema attivo: tutto il
+// firmware esistente cambia atmosfera senza essere toccato.
+extern uint16_t kBlack;
+extern uint16_t kWhite;
+extern uint16_t kBackground;
+extern uint16_t kPanel;
+extern uint16_t kHeader;
+extern uint16_t kAccent;
+extern uint16_t kAccentDark;
+extern uint16_t kText;
+extern uint16_t kTextDim;
+extern uint16_t kWarning;
+extern uint16_t kDanger;
+extern uint16_t kInfo;
+extern uint16_t kPaper;
+extern uint16_t kPaperLight;
+extern uint16_t kInk;
+extern uint16_t kMuted;
+extern uint16_t kNeoYellow;
+extern uint16_t kNeoCyan;
+extern uint16_t kNeoPink;
+extern uint16_t kNeoGreen;
+extern uint16_t kNeoOrange;
+extern uint16_t kNeoRed;
+
+constexpr uint8_t kThemeCount = orbit_palette::kThemeCount;
+void setTheme(uint8_t id);
+uint8_t themeId();
+const char* themeName(uint8_t id);
+const char* themeNote(uint8_t id);
+// Colore di un token in una palette specifica (anteprime, selettore temi).
+uint16_t themeColor(uint8_t id, Tok token);
 
 // Inizializza display e framebuffer. Ritorna false se lo sprite non e'
 // allocabile (in tal caso si disegna direttamente sul display).
@@ -54,9 +116,7 @@ lgfx::LGFXBase& g();
 int width();
 int height();
 
-// True se il framebuffer (sprite) e' attivo. Se e' false la UI disegna
-// direttamente sul display e puo' presentare flicker: succede solo quando
-// l'heap non riesce ad allocare i ~64 KB del buffer.
+// True se il framebuffer (sprite) e' attivo.
 bool framebufferActive();
 // Byte occupati dal framebuffer (0 se non allocato).
 uint32_t framebufferBytes();
@@ -64,35 +124,43 @@ uint32_t framebufferBytes();
 void clear(uint16_t color = kBackground);
 void push();
 
-// Testo con font built-in: 0 = Font0 (6x8), 2 = Font2 (8x14), 4 = Font4.
+// Testo con font pixel disegnato dal codice:
+//   0 = micro 5x7 (advance 6), 2 = body (advance 7), 4 = headline (scala 2x)
 void text(int x, int y, const std::string& s, uint16_t color, uint8_t font = 2);
 void textCentered(int y, const std::string& s, uint16_t color, uint8_t font = 2);
 void wrapText(int x, int y, int maxWidth, const std::vector<std::string>& lines, uint16_t color,
               uint8_t font = 2, int lineHeight = 12);
+int textWidth(const std::string& s, uint8_t font = 2);
+int textHeight(uint8_t font = 2);
 
-// Barra superiore con titolo, breadcrumb (es. "WiFi > Evil Portal") e
-// indicatore batteria con percentuale e stato di carica.
+// Barra superiore telemetrica: titolo, breadcrumb, segnale e batteria.
 void header(const std::string& title, const std::string& parent = "");
 
-// Rilevamento della ricarica. Sui modelli con PMIC usa isCharging(), sugli
-// altri (Cardputer/ADV, lettura ADC) stima la ricarica dalla tensione della
-// batteria: un gradino verso l'alto indica l'inserimento del caricatore, un
-// calo netto lo stacco. Il risultato e' euristico ma sufficiente per l'icona.
+// Rilevamento della ricarica (euristico sui modelli senza PMIC).
 bool chargingLikely();
 void resetChargingDetector();
-void footer(const std::string& text);
 
-// Carica /icons/<icon>.bmp (32x32 BMP 24/32 bit) e lo disegna scalato.
-// Se il file non esiste, disegna un'icona vettoriale di fallback.
+// Barra inferiore: keycap + telemetria di stato. `trailing` (es. "P2/3")
+// viene allineato a destra al posto del LED di stato.
+void footer(const std::string& hint, const std::string& trailing = "");
+
+// Icona procedurale in stile Orbit (nessun asset preimpostato). Per gli id
+// non ancora disegnati ripiega sul BMP in /icons e poi su un glifo neutro.
 void drawIcon(const std::string& icon, int x, int y, int size);
+// Variante esplicita: solo disegno procedurale. false se l'id e' sconosciuto.
+bool drawOrbitIcon(const std::string& icon, int x, int y, int size, uint16_t tint = 0);
 
-// Schermata di avvio.
+// Schermata di avvio: titolo orbitale + rampa, countdown e decollo.
 void splash();
 
 // Feedback radio/IR.
 void led(bool on, int x, int y, uint16_t color = kDanger);
 
 void progressBar(int x, int y, int w, int h, float fraction, uint16_t color = kAccent);
+// Anello di progresso telemetrico (0..1) con tacche e valore centrale.
+void progressRing(int cx, int cy, int radius, float fraction, uint16_t color = kAccent);
+// Traiettoria di ascesa: curva puntinata con razzo in punta e percentuale.
+void trajectory(int x, int y, int w, int h, float fraction, const std::string& label = "");
 
 // Salva il framebuffer corrente come BMP 24 bit (tipicamente sulla SD).
 bool saveScreenshot(const std::string& path);

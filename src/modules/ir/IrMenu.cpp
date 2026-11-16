@@ -832,10 +832,8 @@ void runScanner(const std::string& brand) {
                           std::to_string(remotes.size()),
                       display::kMuted, 0);
         std::string shownModel = model;
-        auto& d = display::g();
-        d.setFont(&fonts::Font2);
         while (shownModel.size() > 4 &&
-               d.textWidth((shownModel + "..").c_str()) > display::width() - 12) {
+               display::textWidth(shownModel + "..", 2) > display::width() - 12) {
             shownModel.pop_back();
         }
         display::text(6, 38, shownModel, display::kInk, 2);

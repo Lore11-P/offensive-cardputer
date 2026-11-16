@@ -109,6 +109,8 @@ void begin() {
     } else {
         g_settings.brightness = clampBrightness(g_prefs.getUChar("bright", 128));
         g_settings.rotation = clampRotation(g_prefs.getUChar("rot", 1));
+        g_settings.theme = static_cast<uint8_t>(
+            std::min(6, static_cast<int>(g_prefs.getUChar("theme", 0))));
         g_settings.modules = g_prefs.getUShort("mods", 0xFFFF);
         g_settings.bleDurationSec =
             clampU16(g_prefs.getUShort("ble_dur", 30), 5, 300);
@@ -143,6 +145,7 @@ void save() {
     }
     g_prefs.putUChar("bright", g_settings.brightness);
     g_prefs.putUChar("rot", g_settings.rotation);
+    g_prefs.putUChar("theme", g_settings.theme);
     g_prefs.putUShort("mods", g_settings.modules);
     g_prefs.putUShort("ble_dur", g_settings.bleDurationSec);
     g_prefs.putUShort("ble_itv", g_settings.bleIntervalMs);
@@ -181,6 +184,15 @@ uint8_t rotation() {
 
 void setRotation(uint8_t index) {
     g_settings.rotation = clampRotation(index);
+    save();
+}
+
+uint8_t theme() {
+    return g_settings.theme;
+}
+
+void setTheme(uint8_t index) {
+    g_settings.theme = static_cast<uint8_t>(std::min(6, static_cast<int>(index)));
     save();
 }
 
@@ -334,6 +346,7 @@ std::string toJson() {
     doc["version"] = 1;
     doc["brightness"] = g_settings.brightness;
     doc["rotation"] = g_settings.rotation;
+    doc["theme"] = g_settings.theme;
     doc["sleep_timeout_sec"] = g_settings.sleepTimeoutSec;
 
     JsonObject modules = doc["modules"].to<JsonObject>();
@@ -386,6 +399,8 @@ bool applyJson(const char* json, size_t len) {
 
     g_settings.brightness = clampBrightness(doc["brightness"] | g_settings.brightness);
     g_settings.rotation = clampRotation(doc["rotation"] | g_settings.rotation);
+    g_settings.theme = static_cast<uint8_t>(
+        std::min(6, static_cast<int>(doc["theme"] | g_settings.theme)));
     // Passa dal setter: aggancia il valore al set di timeout ammessi, come fa
     // la UI (un JSON con 65000 non deve restare in NVS).
     setSleepTimeoutSec(static_cast<uint16_t>(

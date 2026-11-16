@@ -11,6 +11,7 @@
 #include "Display.h"
 #include "MenuManager.h"
 #include "Navigation.h"
+#include "Orbit.h"
 #include "OtaUpdate.h"
 #include "Storage.h"
 #include "Ui.h"
@@ -297,6 +298,82 @@ struct ToggleRow {
     config::Module module;
 };
 
+void runTheme() {
+    navigation::waitRelease();
+    uint8_t local = config::theme();
+    display::setTheme(local);
+    uint32_t nextRepeat = 0;
+    uint32_t lastDraw = 0;
+    uint8_t lastShown = 0xFF;
+    for (;;) {
+        bool changed = false;
+        if (navigation::pressed(',') && millis() >= nextRepeat) {
+            local = static_cast<uint8_t>((local + display::kThemeCount - 1) % display::kThemeCount);
+            display::setTheme(local);
+            nextRepeat = millis() + 260;
+            changed = true;
+        }
+        if (navigation::pressed('/') && millis() >= nextRepeat) {
+            local = static_cast<uint8_t>((local + 1) % display::kThemeCount);
+            display::setTheme(local);
+            nextRepeat = millis() + 260;
+            changed = true;
+        }
+
+        const uint32_t now = millis();
+        if (changed || lastShown != local || lastDraw == 0 || now - lastDraw >= 900) {
+            display::clear(display::C(display::T_bg));
+            orbit::sky(0, 0, display::width(), display::height(), 0x7E7A);
+            display::header("Tema colore", "Impostazioni");
+
+            // Anteprima: pianeta + razzo in orbita, come nella home.
+            const int cx = 196;
+            const int cy = 56;
+            orbit::orbitPath(cx, cy, 34, 12, display::C(display::T_line2), display::C(display::T_line), 0);
+            orbit::planet(cx, cy, 16, -0.6f, -0.5f, true);
+            orbit::rocket(cx + 26, cy - 8, 9, 0.9f, true, static_cast<uint8_t>(now / 90));
+
+            display::text(10, 34, "PALETTE", display::C(display::T_dim), 0);
+            display::text(10, 44, display::themeName(local), display::C(display::T_hi), 4);
+            display::text(10, 64, display::themeNote(local), display::C(display::T_text), 0);
+
+            // Barra dei sette temi: quattro bande per palette.
+            auto& d = display::g();
+            for (int i = 0; i < display::kThemeCount; ++i) {
+                const int bx = 10 + i * 30;
+                const bool sel = (i == local);
+                d.fillRect(bx, 80, 26, 2, display::themeColor(i, display::T_acc));
+                d.fillRect(bx, 82, 26, 2, display::themeColor(i, display::T_bg));
+                d.fillRect(bx, 84, 26, 2, display::themeColor(i, display::T_sec));
+                d.fillRect(bx, 86, 26, 2, display::themeColor(i, display::T_text));
+                d.drawRect(bx, 80, 26, 8,
+                           sel ? display::C(display::T_hi) : display::C(display::T_line));
+                if (sel) {
+                    d.drawRect(bx - 1, 79, 28, 10, display::C(display::T_acc));
+                }
+            }
+
+            display::text(10, 96, "indice " + std::to_string(local + 1) + " / " +
+                                      std::to_string(display::kThemeCount),
+                          display::C(display::T_dim), 0);
+            display::text(10, 106, ", / = cambia palette", display::C(display::T_text), 0);
+            display::footer("ENTER/` = salva e torna");
+            display::push();
+            lastDraw = now;
+            lastShown = local;
+        }
+
+        const navigation::EventData ev = navigation::poll();
+        if (ev.type == navigation::Event::Back || ev.type == navigation::Event::Select) {
+            break;
+        }
+        delay(changed ? 30 : 40);
+    }
+    display::setTheme(local);
+    config::setTheme(local);
+    navigation::waitRelease();
+}
+
 void runModules() {
     const ToggleRow rows[] = {
         {"BLE", "ble", config::Module::Ble},
@@ -431,7 +508,8 @@ void resetDefaults() {
 void run() {
     MenuManager menu("Impostazioni", "Menu principale");
     menu.addItem("Luminosita", "settings", runBrightness);
-    menu.addItem("Rotazione", "settings", runRotation);
+    menu.addItem("Rotazione", "rotate", runRotation);
+    menu.addItem("Tema colore", "planet", runTheme);
     menu.addItem("Spegnimento auto", "settings", runSleepTimer);
     menu.addItem("Info dispositivo", "scan", showInfo);
     menu.addItem("Rete WiFi", "wifi", [] { wifisetup::runSettings("Impostazioni"); });

@@ -356,15 +356,7 @@ void drawSegmentBar(int x, int y, int w, int h, int segments, float fraction, fl
 // Testo centrato su un asse verticale arbitrario (usato dentro i gauge).
 void textCenteredAt(int centerX, int y, const std::string& text, uint16_t color,
                     uint8_t font = 0) {
-    auto& d = display::g();
-    const lgfx::IFont* typeface = &fonts::Font2;
-    if (font == 0) {
-        typeface = &fonts::Font0;
-    } else if (font == 4) {
-        typeface = &fonts::Font4;
-    }
-    d.setFont(typeface);
-    const int width = d.textWidth(text.c_str());
+    const int width = display::textWidth(text, font);
     display::text(centerX - width / 2, y, text, color, font);
 }
 

@@ -16,6 +16,7 @@
 #include "MenuManager.h"
 #include "ModuleFlags.h"
 #include "Navigation.h"
+#include "Orbit.h"
 #include "PcapTools.h"
 #include "Storage.h"
 #include "TextInput.h"
@@ -96,21 +97,42 @@ bool collectNetworks(std::vector<Network>& networks) {
             return false;
         }
         const uint32_t now = millis();
-        if (now - lastDraw > 120) {
-            const int dots = static_cast<int>((now - started) / 350) % 4;
-            display::clear();
-            display::header("Scansione WiFi", "WiFi");
-            display::textCentered(42, "Ricerca reti in corso" + std::string(dots, '.'),
-                                  display::kAccent, 2);
-            display::progressBar(20, 66, 200, 8,
-                                 static_cast<float>(now - started) / 6000.0f,
-                                 display::kInfo);
-            display::textCentered(84, "Attendi qualche secondo", display::kTextDim, 0);
+        if (now - lastDraw > 60) {
+            display::clear(display::C(display::T_bg));
+            orbit::sky(0, 0, display::width(), display::height(), 0x5CA4);
+            display::header("Radar WiFi", "WiFi");
+
+            // Radar: raggio rotante e blips che si accendono al passaggio.
+            static const int16_t blips[] = {-18, -22, 24, -12, -6, 26, 30, 14, -28, 8, 12, -30,
+                                            20, 30, -14, -6};
+            const int cx = 84;
+            const int cy = 74;
+            orbit::radar(cx, cy, 42, static_cast<float>(now) / 620.0f, blips, 8, now);
+            orbit::satellite(cx + 52, cy - 52, 9, display::C(display::T_hi),
+                             display::C(display::T_sec));
+
+            const uint32_t elapsed = now - started;
+            const int rightX = 142;
+            display::text(rightX, 32, "SCANSIONE", display::C(display::T_dim), 0);
+            char secs[12];
+            std::snprintf(secs, sizeof(secs), "%.1fs", static_cast<double>(elapsed) / 1000.0);
+            display::text(rightX, 42, secs, display::C(display::T_hi), 4);
+            display::text(rightX, 64, "BANDA 2.4 GHz", display::C(display::T_text), 0);
+            display::text(rightX, 74, "CANALI 1-13", display::C(display::T_dim), 0);
+            display::progressBar(rightX, 86, display::width() - rightX - 12, 6,
+                                 std::min(1.0f, static_cast<float>(elapsed) / 6000.0f),
+                                 display::C(display::T_sec));
+            for (int i = 0; i < 3; ++i) {
+                const bool on = ((elapsed / 220) % 3) == static_cast<uint32_t>(i);
+                display::g().fillRect(rightX + i * 8, 98, 5, 5,
+                                      on ? display::C(display::T_acc) : display::C(display::T_line2));
+            }
+            display::text(rightX + 30, 97, "SWEEP", display::C(display::T_dim), 0);
             display::footer("` = annulla");
             display::push();
             lastDraw = now;
         }
-        delay(40);
+        delay(30);
     }
 
     const int count = WiFi.scanComplete();

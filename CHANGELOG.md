@@ -4,6 +4,19 @@ Tutte le modifiche rilevanti del progetto. Formato basato su Keep a Changelog.
 
 ## [Unreleased]
 
+### Aggiunto
+
+- **Interfaccia Orbit**: nuova UI a tema spaziale disegnata interamente dal codice, senza asset preimpostati. Sette palette selezionabili (Nova, Aurora, Solar, Ice, Volt, Mono, Paper) applicate a tutto il firmware, font pixel 5x7 proprietario, icone procedurali, header/footer telemetrici con batteria e tacche.
+- **Tema colore** in Impostazioni: anteprima live della palette con pianeta e razzo, barra dei sette temi, salvataggio in NVS e in `config.json`.
+- **Animazioni di sistema**: title screen con pianeta che sorge e razzo in orbita, boot con rampa/countdown/decollo, carosello orbitale intorno a un pianeta, radar Wi-Fi con sweep e blip, traiettoria di download per l'OTA e anelli di progresso per scansione/connessione Wi-Fi.
+- **Helper grafici** `progressRing()`, `trajectory()` e `drawOrbitIcon()` in `display`, riutilizzabili dai moduli.
+
+### Modificato
+
+- `display::header()` e `display::footer()` sono ora barre telemetriche; il footer accetta un valore a destra (es. `P2/3`) al posto del LED.
+- I menu usano pannelli con angoli d'accento, ellissi con `textWidth()` e conteggio pagine; il carosello mostra la profondità dei badge e l'indice `nn/nn`.
+- I colori storici `display::k*` sono diventati variabili runtime mappate sul tema attivo: i moduli esistenti cambiano palette senza modifiche (con eccezioni puntuali per le tabelle `constexpr`).
+
 ## [1.1.0] - 2026-11-15
 
 ### Aggiunto
