@@ -94,7 +94,7 @@ bool confirm(const std::string& title, const std::vector<std::string>& lines,
     for (;;) {
         const uint32_t now = millis();
         if (lastDraw == 0 || now - lastDraw >= 500) {
-            drawScreen(title, parent, lines, "ENTER = conferma    ` = annulla",
+            drawScreen(title, parent, lines, "ENTER = conferma    ESC = annulla",
                        display::C(display::T_acc));
             lastDraw = now;
         }

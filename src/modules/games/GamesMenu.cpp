@@ -8,13 +8,17 @@
 #include "Doom.h"
 #include "Flappy.h"
 #include "Game2048.h"
+#include "Lander.h"
 #include "MenuManager.h"
 #include "Minecraft.h"
 #include "Minesweeper.h"
+#include "Orbital.h"
 #include "Pacman.h"
+#include "PixelJump.h"
 #include "Pong.h"
 #include "Simon.h"
 #include "Snake.h"
+#include "StarSweep.h"
 #include "Tetris.h"
 #include "Ui.h"
 
@@ -119,8 +123,28 @@ void runMenu() {
         runMinecraft();
         exitGameDisplay();
     });
+    menu.addItem("StarSweep", "rocket", [] {
+        enterGameDisplay();
+        runStarSweep();
+        exitGameDisplay();
+    });
+    menu.addItem("Lander", "planet", [] {
+        enterGameDisplay();
+        runLander();
+        exitGameDisplay();
+    });
+    menu.addItem("Orbital", "sat", [] {
+        enterGameDisplay();
+        runOrbital();
+        exitGameDisplay();
+    });
+    menu.addItem("Pixel Jump", "games", [] {
+        enterGameDisplay();
+        runPixelJump();
+        exitGameDisplay();
+    });
     menu.setCarousel();
-    menu.setHint("`=indietro  </>=scorri  ENTER=gioca");
+    menu.setHint("ESC=indietro  </>=scorri  ENTER=gioca");
     menu.run(true);
 }
 

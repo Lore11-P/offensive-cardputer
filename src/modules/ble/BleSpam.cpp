@@ -91,7 +91,7 @@ void drawScanProgress(int round, int total, size_t found, bool interrupted) {
                           display::kText, 2);
     display::textCentered(96, "Avvicina i dispositivi per il segnale",
                           display::kTextDim, 0);
-    display::footer("` = interrompi");
+    display::footer("ESC = interrompi");
     display::push();
 }
 
@@ -109,7 +109,10 @@ void runScanner() {
         return;
     }
 
-    ScanCallbacks callbacks;
+    // static: la scansione globale conserva il puntatore ai callback tra una
+    // schermata e l'altra; un oggetto sullo stack lascerebbe un puntatore
+    // pendente appena runScanner() ritorna.
+    static ScanCallbacks callbacks;
     scan->setAdvertisedDeviceCallbacks(&callbacks, true);
     scan->setActiveScan(true);
     scan->setInterval(100);
@@ -212,7 +215,7 @@ void runScanner() {
                         "BLE");
         });
     }
-    menu.setHint("ENTER=dettagli  `=indietro");
+    menu.setHint("ENTER=dettagli  ESC=indietro");
     menu.run(true);
 }
 
@@ -239,7 +242,7 @@ void drawSpam(const char* payloadName, uint32_t packets, uint32_t remainingMs,
                   display::kText, 0);
     display::text(8, 108, "Solo dispositivi propri / ambiente isolato",
                   display::kWarning, 0);
-    display::footer("` = interrompi");
+    display::footer("ESC = interrompi");
     display::push();
 }
 
@@ -333,6 +336,10 @@ void runSpam(const std::string& label,
     }
 
     advertising->stop();
+    // Il singleton e' condiviso con Chat/AirTag: va lasciato fermo e senza i
+    // payload falsi, e l'indirizzo deve tornare pubblico.
+    advertising->reset();
+    NimBLEDevice::setOwnAddrType(BLE_OWN_ADDR_PUBLIC, false);
     logger::info("BLE spam terminato: %u pacchetti", static_cast<unsigned>(packets));
 #else
     (void)label;
@@ -423,7 +430,7 @@ void runMenu() {
         runSpam("Tutti", allPayloads());
     });
 #endif
-    menu.setHint("`=indietro  ;.=nav  ENTER=apri");
+    menu.setHint("ESC=indietro  ;.=nav  ENTER=apri");
     menu.run(true);
 }
 

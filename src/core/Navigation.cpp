@@ -15,6 +15,10 @@ bool s_lastEnter = false;
 bool s_lastBack = false;
 // Caratteri nuovi non ancora consegnati: un poll restituisce un solo evento.
 std::vector<char> s_pending;
+// Ultimo istante in cui un tasto tenuto premuto ha contato come attivita'.
+uint32_t s_heldAt = 0;
+bool s_heldActive = false;
+constexpr uint32_t kHeldActivityMs = 10000;
 
 bool contains(const std::vector<char>& word, char c) {
     return std::find(word.begin(), word.end(), c) != word.end();
@@ -22,6 +26,10 @@ bool contains(const std::vector<char>& word, char c) {
 
 bool isPrintable(char c) {
     return c >= 0x20 && c < 0x7F;
+}
+
+bool isArrow(char c) {
+    return c == ';' || c == '.' || c == ',' || c == '/';
 }
 
 // Restituisce i caratteri presenti ora ma non nello stato precedente.
@@ -43,6 +51,7 @@ void begin() {
     s_lastEnter = state.enter;
     s_lastBack = contains(s_lastWord, '`') || state.del;
     s_pending.clear();
+    s_heldActive = false;
 }
 
 void update() {
@@ -51,6 +60,20 @@ void update() {
 
 EventData poll() {
     M5Cardputer.update();
+
+    // Un tasto tenuto premuto e' attivita' continua (scorrimento, giochi).
+    // Isteresi: si segnala al massimo ogni 10 s per non azzerare il timer
+    // a ogni poll.
+    if (M5Cardputer.Keyboard.isPressed() != 0) {
+        const uint32_t now = millis();
+        if (!s_heldActive || now - s_heldAt >= kHeldActivityMs) {
+            s_heldActive = true;
+            s_heldAt = now;
+            powertimer::activity();
+        }
+    } else {
+        s_heldActive = false;
+    }
 
     // Spegnimento automatico. Il controllo gira qui perche' ogni loop della UI
     // passa da poll() per leggere la tastiera: un solo punto di aggancio.
@@ -91,6 +114,17 @@ EventData poll() {
         // Piu' caratteri nello stesso poll: accodali e consegnane uno per volta.
         for (char c : fresh) {
             s_pending.push_back(c);
+        }
+    }
+
+    // Un evento freccia non deve far perdere i caratteri freschi arrivati nello
+    // stesso campione: verranno consegnati come Text ai poll successivi.
+    if (ev.type == Event::Up || ev.type == Event::Down || ev.type == Event::Left ||
+        ev.type == Event::Right) {
+        for (char c : fresh) {
+            if (!isArrow(c)) {
+                s_pending.push_back(c);
+            }
         }
     }
 

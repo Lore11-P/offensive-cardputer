@@ -96,7 +96,7 @@ void drawPlayer(int stationIndex) {
     display::textCentered(90, "volume " + std::to_string(volume) + "/21", display::kText, 0);
 
     display::text(6, 108, shortened(station.url, 38), display::kTextDim, 0);
-    display::footer(";.=volume  ENTER=stop  `=esci");
+    display::footer(";.=volume  ENTER=stop  ESC=esci");
     display::push();
 }
 
@@ -184,7 +184,7 @@ void runMenu() {
                     "Radio");
     });
     menu.addItem("WiFi", "wifi", [] { wifisetup::runSettings("Radio"); });
-    menu.setHint("ENTER=ascolta  `=indietro");
+    menu.setHint("ENTER=ascolta  ESC=indietro");
     menu.run(true);
 }
 

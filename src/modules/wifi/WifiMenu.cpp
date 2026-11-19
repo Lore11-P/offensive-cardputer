@@ -3,10 +3,12 @@
 #include <Arduino.h>
 #include <DNSServer.h>
 #include <ESPAsyncWebServer.h>
+#include <M5Cardputer.h>
 #include <WiFi.h>
 #include <esp_wifi.h>
 
 #include <algorithm>
+#include <new>
 #include <string>
 #include <vector>
 
@@ -21,6 +23,7 @@
 #include "Storage.h"
 #include "TextInput.h"
 #include "Ui.h"
+#include "WifiSetup.h"
 
 #include <esp_netif.h>
 #include <esp_netif_net_stack.h>
@@ -128,7 +131,7 @@ bool collectNetworks(std::vector<Network>& networks) {
                                       on ? display::C(display::T_acc) : display::C(display::T_line2));
             }
             display::text(rightX + 30, 97, "SWEEP", display::C(display::T_dim), 0);
-            display::footer("` = annulla");
+            display::footer("ESC = annulla");
             display::push();
             lastDraw = now;
         }
@@ -296,12 +299,14 @@ void runScanner() {
                         "WiFi");
         });
     }
-    menu.setHint("ENTER=dettagli  * = aperta  `=indietro");
+    menu.setHint("ENTER=dettagli  * = aperta  ESC=indietro");
     menu.run(true);
 }
 
 void runApInfo() {
-    if (WiFi.status() != WL_CONNECTED) {
+    // Funzione di rete: se la credenziale salvata esiste, riconnetti qui invece
+    // di rimandare l'utente a Impostazioni > Rete WiFi.
+    if (!wifisetup::ensureConnected(true, "WiFi")) {
         ui::message("AP info", {"WiFi non connesso.", "Configura la rete da",
                                 "Impostazioni > Rete WiFi."},
                     "WiFi");
@@ -566,7 +571,7 @@ void runJamDetect() {
                 display::text(x + 5, 110, std::to_string(i + 1),
                               display::kTextDim, 0);
             }
-            display::footer("` = esci");
+            display::footer("ESC = esci");
             display::push();
             lastDraw = now;
         }
@@ -588,7 +593,8 @@ struct SnifferSlot {
     uint8_t data[kSnifferMax];
 };
 
-SnifferSlot g_sniffSlots[kSnifferSlots];
+// Anello su heap: 12,8 KB occupati solo mentre lo sniffer e' aperto.
+SnifferSlot* g_sniffSlots = nullptr;
 volatile int g_sniffHead = 0;
 volatile int g_sniffTail = 0;
 volatile uint32_t g_sniffDropped = 0;
@@ -601,7 +607,7 @@ void IRAM_ATTR snifferCb(void* buf, wifi_promiscuous_pkt_type_t) {
     if (length > kSnifferMax) {
         length = kSnifferMax;
     }
-    if (length < 10) {
+    if (length < 10 || g_sniffSlots == nullptr) {
         return;
     }
     // sig_len comprende l'FCS (4 byte): il linktype 105 del PCAP non lo prevede,
@@ -645,6 +651,12 @@ void runSniffer() {
         return;
     }
 
+    g_sniffSlots = new (std::nothrow) SnifferSlot[kSnifferSlots];
+    if (g_sniffSlots == nullptr) {
+        ui::message("Sniffer", {"Memoria insufficiente per il buffer."}, "WiFi");
+        return;
+    }
+
     WiFi.persistent(false);
     WiFi.mode(WIFI_STA);
     WiFi.disconnect();
@@ -652,19 +664,26 @@ void runSniffer() {
 
     esp_wifi_set_promiscuous(false);
     esp_wifi_set_promiscuous_rx_cb(nullptr);
+    // Azzera l'anello PRIMA di registrare il callback e accendere il promiscuo:
+    // un frame in arrivo fra le due operazioni userebbe indici del giro
+    // precedente su uno stato gia' ripulito.
+    portENTER_CRITICAL(&g_sniffMux);
+    g_sniffHead = 0;
+    g_sniffTail = 0;
+    g_sniffDropped = 0;
+    g_sniffTotal = 0;
+    portEXIT_CRITICAL(&g_sniffMux);
+
     esp_wifi_set_promiscuous_rx_cb(snifferCb);
     if (esp_wifi_set_promiscuous(true) != ESP_OK) {
         WiFi.mode(WIFI_OFF);
+        delete[] g_sniffSlots;
+        g_sniffSlots = nullptr;
         ui::message("Sniffer", {"Modalita' promiscua non disponibile."},
                     "WiFi");
         return;
     }
     esp_wifi_set_promiscuous_filter(nullptr);
-
-    g_sniffHead = 0;
-    g_sniffTail = 0;
-    g_sniffDropped = 0;
-    g_sniffTotal = 0;
 
     // Estrazione live: gli EAPOL vengono copiati dal ring e analizzati qui sul
     // task principale, mai nel callback ISR.
@@ -686,6 +705,8 @@ void runSniffer() {
         esp_wifi_set_promiscuous(false);
         esp_wifi_set_promiscuous_rx_cb(nullptr);
         WiFi.mode(WIFI_OFF);
+        delete[] g_sniffSlots;
+        g_sniffSlots = nullptr;
         ui::message("Sniffer", {"Impossibile creare il file PCAP."}, "WiFi");
         return;
     }
@@ -702,6 +723,9 @@ void runSniffer() {
     const uint32_t start = millis();
     uint32_t lastDraw = 0;
     uint32_t written = 0;
+    uint32_t sinceFlush = 0;
+    uint32_t lastFlush = millis();
+    bool writeError = false;
     uint8_t channel = 1;
 
     navigation::waitRelease();
@@ -742,9 +766,24 @@ void runSniffer() {
                            sizeof(header)) != sizeof(header) ||
                 file.write(slot.data, slot.length) != slot.length) {
                 logger::warn("Sniffer: scrittura PCAP fallita (SD piena?)");
+                writeError = true;
                 break;
             }
             ++written;
+            ++sinceFlush;
+        }
+
+        if (writeError) {
+            // Senza SD non ha senso continuare a catturare: chiudi il file e
+            // avvisa, invece di girare a vuoto perdendo frame.
+            break;
+        }
+        // Flush periodico: un'interruzione di corrente perde al massimo ~1 s
+        // di cattura invece dell'intera sessione.
+        if (sinceFlush >= 64 || (millis() - lastFlush) >= 1000) {
+            file.flush();
+            sinceFlush = 0;
+            lastFlush = millis();
         }
 
         esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE);
@@ -784,6 +823,8 @@ void runSniffer() {
     esp_wifi_set_promiscuous_rx_cb(nullptr);
     esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE);
     WiFi.mode(WIFI_OFF);
+    delete[] g_sniffSlots;
+    g_sniffSlots = nullptr;
     logger::info("Sniffer terminato: %u frame in %s",
                  static_cast<unsigned>(written), capturePath);
 
@@ -798,6 +839,12 @@ void runSniffer() {
                      static_cast<unsigned>(hcStats.skippedNoEssid), hcPath);
     } else {
         logger::warn("Sniffer: scrittura hc22000 non riuscita");
+    }
+    if (writeError) {
+        ui::message("Sniffer",
+                    {"!Scrittura sulla microSD non riuscita.",
+                     "Cattura interrotta. Controlla spazio", "e stato della card."},
+                    "WiFi");
     }
 }
 
@@ -876,7 +923,7 @@ void runPortScan(const HostEntry& host) {
         display::progressBar(8, 70, 180, 8,
                              static_cast<float>(i + 1) / total,
                              display::kInfo);
-        display::footer("` = interrompi");
+        display::footer("ESC = interrompi");
         display::push();
     }
 
@@ -897,6 +944,13 @@ void runPortScan(const HostEntry& host) {
 }
 
 void runScanHosts() {
+    if (!wifisetup::ensureConnected(true, "WiFi")) {
+        ui::message("Scan Hosts",
+                    {"WiFi non connesso.", "Connetti la rete da",
+                     "Impostazioni > Rete WiFi."},
+                    "WiFi");
+        return;
+    }
     if (WiFi.status() != WL_CONNECTED) {
         ui::message("Scan Hosts",
                     {"WiFi non connesso.", "Connetti la rete da",
@@ -975,7 +1029,7 @@ void runScanHosts() {
             display::textCentered(104,
                                   "Trovati: " + std::to_string(hosts.size()),
                                   display::kTextDim, 0);
-            display::footer("` = interrompi");
+            display::footer("ESC = interrompi");
             display::push();
             lastDraw = now;
         }
@@ -1028,6 +1082,14 @@ void runTcpConsole(const std::string& title, uint16_t defaultPort) {
         return;
     }
 
+    if (!wifisetup::ensureConnected(true, "WiFi")) {
+        ui::message(title,
+                    {"WiFi non connesso.", "Configura la rete da",
+                     "Impostazioni > Rete WiFi."},
+                    "WiFi");
+        return;
+    }
+
     WiFiClient client;
     client.setTimeout(3000);
     if (!client.connect(fields[0].value.c_str(),
@@ -1044,17 +1106,30 @@ void runTcpConsole(const std::string& title, uint16_t defaultPort) {
     uint32_t lastDraw = 0;
 
     navigation::waitRelease();
+    // In console i caratteri si leggono diretti da keysState(): navigation::poll()
+    // trasforma ; . , / in frecce e quei caratteri non arriverebbero mai.
+    std::vector<char> lastWord = M5Cardputer.Keyboard.keysState().word;
     while (true) {
         navigation::update();
         const navigation::EventData ev = navigation::poll();
         if (ev.type == navigation::Event::Back) {
             break;
         }
-        if (ev.type == navigation::Event::Text && ev.ch != 0) {
-            client.write(static_cast<uint8_t>(ev.ch));
-        } else if (ev.type == navigation::Event::Select) {
+        if (ev.type == navigation::Event::Select) {
             client.write('\r');
         }
+        auto& state = M5Cardputer.Keyboard.keysState();
+        for (char c : state.word) {
+            if (c < 0x20 || c >= 0x7F || c == '`') {
+                continue;
+            }
+            if (std::find(lastWord.begin(), lastWord.end(), c) !=
+                lastWord.end()) {
+                continue;
+            }
+            client.write(static_cast<uint8_t>(c));
+        }
+        lastWord = state.word;
 
         while (client.available()) {
             const int value = client.read();
@@ -1087,7 +1162,7 @@ void runTcpConsole(const std::string& title, uint16_t defaultPort) {
                 display::text(6, 36 + i * 11, lines[i], display::kText, 0);
             }
             display::text(6, 117, "> " + current, display::kAccent, 0);
-            display::footer("scrivi + INVIO   ` = esci");
+            display::footer("scrivi + INVIO   ESC = esci");
             display::push();
             lastDraw = now;
         }
@@ -1095,9 +1170,17 @@ void runTcpConsole(const std::string& title, uint16_t defaultPort) {
     }
 
     client.stop();
+    navigation::waitRelease();  // scarta i caratteri rimasti nella coda di poll()
 }
 
 void runTcpListener() {
+    if (!wifisetup::ensureConnected(true, "WiFi")) {
+        ui::message("TCP Listener",
+                    {"WiFi non connesso.", "Configura la rete da",
+                     "Impostazioni > Rete WiFi."},
+                    "WiFi");
+        return;
+    }
     textinput::Field portField;
     portField.label = "Porta";
     portField.value = "2323";
@@ -1180,7 +1263,7 @@ void runTcpListener() {
                 display::text(8, 64 + i * 11, lines[firstLine + i],
                               display::kText, 0);
             }
-            display::footer("` = interrompi");
+            display::footer("ESC = interrompi");
             display::push();
             lastDraw = now;
         }
@@ -1209,7 +1292,8 @@ bool parseBssid(const std::string& text, uint8_t out[6]) {
     return true;
 }
 
-void drawDeauth(const Network& network, uint32_t packets, uint32_t remainingMs) {
+void drawDeauth(const Network& network, uint32_t packets, uint32_t txFail,
+                uint32_t remainingMs) {
     display::clear();
     display::header("Deauth WiFi", "WiFi");
     display::text(8, 30, "Target:", display::kTextDim, 0);
@@ -1217,13 +1301,15 @@ void drawDeauth(const Network& network, uint32_t packets, uint32_t remainingMs) 
     display::text(8, 64, "BSSID " + network.bssid, display::kText, 0);
     display::text(8, 76, "Canale " + std::to_string(network.channel),
                   display::kText, 0);
-    display::text(120, 76, "Frame: " + std::to_string(packets),
-                  display::kText, 0);
+    display::text(120, 76,
+                  "OK " + std::to_string(packets) +
+                      (txFail ? "  KO " + std::to_string(txFail) : ""),
+                  txFail ? display::kWarning : display::kText, 0);
     display::progressBar(8, 92, 180, 8,
                          1.0f - static_cast<float>(remainingMs) / 60000.0f,
                          display::kDanger);
     display::text(8, 106, "Solo reti proprie / autorizzate", display::kWarning, 0);
-    display::footer("` = interrompi (max 60s)");
+    display::footer("ESC = interrompi (max 60s)");
     display::push();
 }
 
@@ -1473,7 +1559,7 @@ int netcutScan() {
                                 : static_cast<float>(scanned) /
                                       static_cast<float>(totalHosts),
                 display::kInfo);
-            display::footer("` = annulla");
+            display::footer("ESC = annulla");
             display::push();
             lastDraw = now;
         }
@@ -1739,6 +1825,13 @@ void netcutDeviceMenu(int idx) {
 }
 
 void runNetCut() {
+    if (!wifisetup::ensureConnected(true, "WiFi")) {
+        ui::message("NetCut",
+                    {"Connettiti prima a una rete WiFi.",
+                     "Serve un IP assegnato dal router."},
+                    "WiFi");
+        return;
+    }
     if (WiFi.status() != WL_CONNECTED) {
         ui::message("NetCut",
                     {"Connettiti prima a una rete WiFi.",
@@ -1865,6 +1958,9 @@ void runDeauth() {
     constexpr uint32_t kMaxDuration = 60000;
     const uint32_t start = millis();
     uint32_t packets = 0;
+    uint32_t txFail = 0;
+    uint32_t failRun = 0;
+    bool blockedWarned = false;
     uint32_t lastDraw = 0;
     uint32_t sequence = 0;
 
@@ -1878,13 +1974,26 @@ void runDeauth() {
             frame[22] = static_cast<uint8_t>(sequence & 0xFF);
             frame[23] = static_cast<uint8_t>(((sequence >> 8) & 0x0F) << 4);
             ++sequence;
-            esp_wifi_80211_tx(WIFI_IF_STA, frame, sizeof(frame), false);
-            ++packets;
+            if (esp_wifi_80211_tx(WIFI_IF_STA, frame, sizeof(frame), false) ==
+                ESP_OK) {
+                ++packets;
+                failRun = 0;
+            } else {
+                ++txFail;
+                // Blocco prolungato: il driver rifiuta tutto (canale/regione).
+                if (++failRun >= 10 && !blockedWarned) {
+                    blockedWarned = true;
+                    ui::message("Deauth",
+                                {"!TX 802.11 rifiutato dal driver.",
+                                 "I frame non partono: canale o", "regione non consentiti."},
+                                "WiFi");
+                }
+            }
             delay(4);
         }
         const uint32_t now = millis();
         if (now - lastDraw > 120) {
-            drawDeauth(target, packets, kMaxDuration - (now - start));
+            drawDeauth(target, packets, txFail, kMaxDuration - (now - start));
             lastDraw = now;
         }
     }
@@ -1952,7 +2061,7 @@ const char* const kBeaconNames[] = {
 };
 
 void drawBeaconSpam(const char* ssid, uint8_t channel, uint32_t packets,
-                    uint32_t remainingMs) {
+                    uint32_t txFail, uint32_t remainingMs) {
     display::clear();
     display::header("Beacon Spam", "WiFi Atks");
     display::text(8, 28, "SSID:", display::kTextDim, 0);
@@ -1960,15 +2069,17 @@ void drawBeaconSpam(const char* ssid, uint8_t channel, uint32_t packets,
                   display::kAccent, 2);
     display::text(8, 62, "Canale " + std::to_string(channel),
                   display::kText, 0);
-    display::text(120, 62, "Beacon: " + std::to_string(packets),
-                  display::kText, 0);
+    display::text(120, 62,
+                  "OK " + std::to_string(packets) +
+                      (txFail ? " KO " + std::to_string(txFail) : ""),
+                  txFail ? display::kWarning : display::kText, 0);
     display::progressBar(8, 82, 180, 8,
                          1.0f - static_cast<float>(remainingMs) / 60000.0f,
                          display::kDanger);
     display::text(8, 98, "SSID falsi su tutti i canali", display::kWarning, 0);
     display::text(8, 110, "Solo test RF isolati e autorizzati",
                   display::kWarning, 0);
-    display::footer("` = interrompi (max 60s)");
+    display::footer("ESC = interrompi (max 60s)");
     display::push();
 }
 
@@ -1996,6 +2107,9 @@ void runBeaconSpam() {
     uint8_t channel = 1;
     uint32_t sequence = 0;
     uint32_t packets = 0;
+    uint32_t txFail = 0;
+    uint32_t failRun = 0;
+    bool blockedWarned = false;
     constexpr uint32_t kMaxDuration = 60000;
     const uint32_t start = millis();
     uint32_t lastDraw = 0;
@@ -2019,17 +2133,28 @@ void runBeaconSpam() {
         frame[22] = static_cast<uint8_t>(sequence & 0xFF);
         frame[23] = static_cast<uint8_t>(((sequence >> 8) & 0x0F) << 4);
         ++sequence;
-        esp_wifi_80211_tx(WIFI_IF_STA, frame, length, false);
-        ++packets;
+        if (esp_wifi_80211_tx(WIFI_IF_STA, frame, length, false) == ESP_OK) {
+            ++packets;
+            failRun = 0;
+        } else {
+            ++txFail;
+            if (++failRun >= 10 && !blockedWarned) {
+                blockedWarned = true;
+                ui::message("Beacon Spam",
+                            {"!TX 802.11 rifiutato dal driver.",
+                             "I beacon non partono: canale o", "regione non consentiti."},
+                            "WiFi");
+            }
+        }
 
-        if ((packets % 8) == 0) {
+        if (((packets + txFail) % 8) == 0) {
             channel = static_cast<uint8_t>(channel % 11 + 1);
             esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE);
         }
 
         const uint32_t now = millis();
         if (now - lastDraw > 150) {
-            drawBeaconSpam(ssid, channel, packets,
+            drawBeaconSpam(ssid, channel, packets, txFail,
                            kMaxDuration - (now - start));
             lastDraw = now;
         }
@@ -2045,15 +2170,17 @@ void runBeaconSpam() {
 }
 
 void drawDeauthFlood(size_t targets, size_t index, uint32_t packets,
-                     uint32_t remainingMs) {
+                     uint32_t txFail, uint32_t remainingMs) {
     display::clear();
     display::header("Deauth Flood", "WiFi Atks");
     display::text(8, 30, "Reti target: " + std::to_string(targets),
                   display::kText, 2);
     display::text(8, 52, "Indice: " + std::to_string(index + 1),
                   display::kTextDim, 0);
-    display::text(8, 66, "Frame: " + std::to_string(packets),
-                  display::kText, 0);
+    display::text(8, 66,
+                  "OK " + std::to_string(packets) +
+                      (txFail ? "  KO " + std::to_string(txFail) : ""),
+                  txFail ? display::kWarning : display::kText, 0);
     display::progressBar(8, 84, 180, 8,
                          1.0f - static_cast<float>(remainingMs) / 60000.0f,
                          display::kDanger);
@@ -2061,7 +2188,7 @@ void drawDeauthFlood(size_t targets, size_t index, uint32_t packets,
                   display::kWarning, 0);
     display::text(8, 112, "Solo reti proprie / autorizzate",
                   display::kWarning, 0);
-    display::footer("` = interrompi (max 60s)");
+    display::footer("ESC = interrompi (max 60s)");
     display::push();
 }
 
@@ -2115,6 +2242,9 @@ void runDeauthFlood() {
     constexpr uint32_t kMaxDuration = 60000;
     const uint32_t start = millis();
     uint32_t packets = 0;
+    uint32_t txFail = 0;
+    uint32_t failRun = 0;
+    bool blockedWarned = false;
     uint32_t sequence = 0;
     uint32_t lastDraw = 0;
     size_t index = 0;
@@ -2142,15 +2272,27 @@ void runDeauthFlood() {
             frame[22] = static_cast<uint8_t>(sequence & 0xFF);
             frame[23] = static_cast<uint8_t>(((sequence >> 8) & 0x0F) << 4);
             ++sequence;
-            esp_wifi_80211_tx(WIFI_IF_STA, frame, sizeof(frame), false);
-            ++packets;
+            if (esp_wifi_80211_tx(WIFI_IF_STA, frame, sizeof(frame), false) ==
+                ESP_OK) {
+                ++packets;
+                failRun = 0;
+            } else {
+                ++txFail;
+                if (++failRun >= 10 && !blockedWarned) {
+                    blockedWarned = true;
+                    ui::message("Deauth Flood",
+                                {"!TX 802.11 rifiutato dal driver.",
+                                 "I frame non partono: canale o", "regione non consentiti."},
+                                "WiFi");
+                }
+            }
             delay(2);
         }
         index = (index + 1) % targets.size();
 
         const uint32_t now = millis();
         if (now - lastDraw > 150) {
-            drawDeauthFlood(targets.size(), index, packets,
+            drawDeauthFlood(targets.size(), index, packets, txFail,
                             kMaxDuration - (now - start));
             lastDraw = now;
         }
@@ -2238,15 +2380,18 @@ void drawAccessPoint(const std::string& title, const Network& target,
                   display::kText, 0);
     display::text(8, 76, "Client: " + std::to_string(clients), display::kText, 0);
     if (portal) {
+        credLock();
+        const size_t credentialCount = g_credentials.size();
+        credUnlock();
         display::text(120, 76,
-                      "Credenziali: " + std::to_string(g_credentials.size()),
+                      "Credenziali: " + std::to_string(credentialCount),
                       display::kInfo, 0);
     }
     display::text(8, 90, "Uptime: " + std::to_string(uptimeMs / 1000) + "s",
                   display::kTextDim, 0);
     display::text(8, 106, "Solo test autorizzati - dati in RAM", display::kWarning,
                   0);
-    display::footer("` = interrompi AP");
+    display::footer("ESC = interrompi AP");
     display::push();
 }
 
@@ -2398,7 +2543,7 @@ void runAttacksMenu() {
     menu.addItem("NetCut / ARP", "jammer", [] { runNetCut(); });
     menu.addItem("Evil Twin", "wifi", [] { runEvilTwin(); });
     menu.addItem("Evil Portal", "portal", [] { runEvilPortal(); });
-    menu.setHint("`=indietro  ;.=nav  ENTER=apri");
+    menu.setHint("ESC=indietro  ;.=nav  ENTER=apri");
     menu.run(true);
 }
 #endif  // ENABLE_OFFENSIVE
@@ -2422,7 +2567,7 @@ void runMenu() {
     menu.addSeparator("Test sicurezza (solo autorizzati)");
     menu.addItem("WiFi Atks", "jammer", [] { runAttacksMenu(); });
 #endif
-    menu.setHint("`=indietro  ;.=nav  ENTER=apri");
+    menu.setHint("ESC=indietro  ;.=nav  ENTER=apri");
     menu.run(true);
 }
 

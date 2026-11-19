@@ -78,7 +78,7 @@ void runBrightness() {
                                   "valore " + std::to_string(local) + " / 255",
                                   display::kTextDim, 0);
             display::textCentered(102, ", = -10%    / = +10%", display::kText, 0);
-            display::footer("ENTER/` = salva e torna");
+            display::footer("ENTER/ESC = salva e torna");
             display::push();
             lastDraw = now;
         }
@@ -113,17 +113,22 @@ void runRotation() {
     navigation::waitRelease();
     uint32_t nextRepeat = 0;
     uint32_t lastDraw = 0;
+    // Anteprima su schermo e salvataggio solo all'uscita: cosi' non si
+    // riscrivono tutte le chiavi NVS a ogni passo.
+    uint8_t local = config::rotation();
+    const uint8_t initial = local;
+    bool commit = false;
     for (;;) {
         bool changed = false;
         if (navigation::pressed(',') && millis() >= nextRepeat) {
-            config::setRotation(static_cast<uint8_t>((config::rotation() + 3) & 3));
-            applyDisplay();
+            local = static_cast<uint8_t>((local + 3) & 3);
+            display::applyRotation(local);
             nextRepeat = millis() + 250;
             changed = true;
         }
         if (navigation::pressed('/') && millis() >= nextRepeat) {
-            config::setRotation(static_cast<uint8_t>((config::rotation() + 1) & 3));
-            applyDisplay();
+            local = static_cast<uint8_t>((local + 1) & 3);
+            display::applyRotation(local);
             nextRepeat = millis() + 250;
             changed = true;
         }
@@ -132,20 +137,29 @@ void runRotation() {
         if (changed || lastDraw == 0 || now - lastDraw >= 500) {
             display::clear();
             display::header("Rotazione", "Impostazioni");
-            display::textCentered(36, rotationLabel(config::rotation()), display::kAccent, 2);
-            display::textCentered(60, "indice display: " + std::to_string(config::rotation()),
+            display::textCentered(36, rotationLabel(local), display::kAccent, 2);
+            display::textCentered(60, "indice display: " + std::to_string(local),
                                   display::kTextDim, 0);
             display::textCentered(88, ", = precedente    / = successiva", display::kText, 0);
-            display::footer("ENTER/` = salva e torna");
+            display::footer("ENTER = salva    ESC = annulla");
             display::push();
             lastDraw = now;
         }
 
         const navigation::EventData ev = navigation::poll();
-        if (ev.type == navigation::Event::Back || ev.type == navigation::Event::Select) {
+        if (ev.type == navigation::Event::Select) {
+            commit = true;
+            break;
+        }
+        if (ev.type == navigation::Event::Back) {
             break;
         }
         delay(changed ? 40 : 30);
+    }
+    if (commit) {
+        config::setRotation(local);
+    } else {
+        display::applyRotation(initial);
     }
     navigation::waitRelease();
 }
@@ -192,7 +206,7 @@ void runSleepTimer() {
             display::textCentered(88, "Un tasto durante il preavviso", display::kMuted, 0);
             display::textCentered(98, "annulla lo spegnimento.", display::kMuted, 0);
             display::textCentered(110, ", / = cambia", display::kText, 0);
-            display::footer("ENTER/` = salva e torna");
+            display::footer("ENTER/ESC = salva e torna");
             display::push();
             lastDraw = now;
             lastValue = current;
@@ -279,7 +293,7 @@ void showInfo() {
                               0);
                 y += 11;
             }
-            display::footer("` = torna");
+            display::footer("ESC = torna");
             display::push();
         }
 
@@ -301,10 +315,12 @@ struct ToggleRow {
 void runTheme() {
     navigation::waitRelease();
     uint8_t local = config::theme();
+    const uint8_t initial = local;
     display::setTheme(local);
     uint32_t nextRepeat = 0;
     uint32_t lastDraw = 0;
     uint8_t lastShown = 0xFF;
+    bool commit = false;
     for (;;) {
         bool changed = false;
         if (navigation::pressed(',') && millis() >= nextRepeat) {
@@ -357,20 +373,27 @@ void runTheme() {
                                       std::to_string(display::kThemeCount),
                           display::C(display::T_dim), 0);
             display::text(10, 106, ", / = cambia palette", display::C(display::T_text), 0);
-            display::footer("ENTER/` = salva e torna");
+            display::footer("ENTER = salva    ESC = annulla");
             display::push();
             lastDraw = now;
             lastShown = local;
         }
 
         const navigation::EventData ev = navigation::poll();
-        if (ev.type == navigation::Event::Back || ev.type == navigation::Event::Select) {
+        if (ev.type == navigation::Event::Select) {
+            commit = true;
+            break;
+        }
+        if (ev.type == navigation::Event::Back) {
             break;
         }
         delay(changed ? 30 : 40);
     }
-    display::setTheme(local);
-    config::setTheme(local);
+    if (commit) {
+        config::setTheme(local);
+    } else {
+        display::setTheme(initial);
+    }
     navigation::waitRelease();
 }
 
@@ -410,7 +433,9 @@ void runModules() {
             dirty = true;
         } else if (ev.type == navigation::Event::Select) {
             const config::Module m = rows[selected].module;
-            config::setModuleEnabled(m, !config::moduleEnabled(m));
+            if (config::moduleCompiled(m)) {
+                config::setModuleEnabled(m, !config::moduleEnabled(m));
+            }
             navigation::waitRelease();
             dirty = true;
         } else if (ev.type == navigation::Event::Back) {
@@ -441,9 +466,12 @@ void runModules() {
                 }
                 display::drawIcon(rows[i].icon, 6, y + 2, 16);
                 display::text(28, y + 3, rows[i].label, display::kText, 2);
+                const bool compiled = config::moduleCompiled(rows[i].module);
                 const bool on = config::moduleEnabled(rows[i].module);
-                const std::string state = on ? "[ON]" : "[OFF]";
-                display::text(w - 42, y + 3, state, on ? display::kAccent : display::kTextDim, 2);
+                const std::string state =
+                    !compiled ? "[n/d]" : (on ? "[ON]" : "[OFF]");
+                display::text(w - 42, y + 3, state,
+                              (compiled && on) ? display::kAccent : display::kTextDim, 2);
             }
             if (kCount > visible) {
                 const int trackX = w - 3;
@@ -455,7 +483,7 @@ void runModules() {
                     trackY + (trackH - thumbH) * top / std::max(1, kCount - visible);
                 display::g().fillRect(trackX, thumbY, 2, thumbH, display::kAccent);
             }
-            display::footer("; . = seleziona  ENTER = toggle  ` = torna");
+            display::footer("; . = seleziona  ENTER = toggle  ESC = torna");
             display::push();
             lastDraw = now;
             dirty = false;
@@ -466,6 +494,11 @@ void runModules() {
 }
 
 void exportConfig() {
+    if (!ui::confirm("Salva config su FS",
+                     {"Sovrascrivere /config.json con", "le impostazioni attuali?"},
+                     "Impostazioni")) {
+        return;
+    }
     const bool ok = config::exportToFile("/config.json");
     ui::message("Backup config", {ok ? ">Configurazione salvata in" : "!Salvataggio fallito",
                                   ok ? "/config.json (LittleFS)" : "Verifica LittleFS (/data)."},
@@ -478,6 +511,12 @@ void importConfig() {
                                        "Carica il filesystem con:",
                                        "pio run -t uploadfs"},
                     "Impostazioni");
+        return;
+    }
+    if (!ui::confirm("Importa config",
+                     {"Importare /config.json?", "Le impostazioni attuali",
+                      "verranno sovrascritte."},
+                     "Impostazioni")) {
         return;
     }
     const bool ok = config::importFromFile("/config.json");

@@ -7,7 +7,7 @@
 namespace ui {
 
 void message(const std::string& title, const std::vector<std::string>& lines,
-             const std::string& parent = "", const std::string& hint = "ENTER/` = torna");
+             const std::string& parent = "", const std::string& hint = "ENTER/ESC = torna");
 
 // Conferma esplicita: true se l'utente preme ENTER, false con ESC.
 bool confirm(const std::string& title, const std::vector<std::string>& lines,

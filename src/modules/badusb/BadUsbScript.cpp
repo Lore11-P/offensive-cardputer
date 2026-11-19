@@ -561,7 +561,7 @@ void drawRunScreen(const std::string& name, uint32_t line, uint32_t total,
     if (!host) {
         display::text(8, y, "Host USB non rilevato", display::kWarning, 0);
     }
-    display::footer("` = annulla");
+    display::footer("ESC = annulla");
     display::push();
 }
 

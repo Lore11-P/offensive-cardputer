@@ -3,6 +3,7 @@
 #if ENABLE_MODULE_BLEEXT
 
 #include <Arduino.h>
+#include <SD.h>
 
 #include <algorithm>
 #include <cstdio>
@@ -29,6 +30,8 @@ char g_path[48] = {0};
 uint32_t g_startMs = 0;
 uint32_t g_durationMs = 0;
 uint32_t g_lastFlushMs = 0;
+// Righe gia' scritte nel CSV: il file viene solo accodato, mai riscritto.
+int g_flushedRows = 0;
 
 DeviceSummary g_rows[kMaxDevices];
 
@@ -60,21 +63,34 @@ void wardrivingHandler(const AdvertRecord& record) {
   }
 }
 
+// storage::openWrite apre in FILE_WRITE, cioe' tronca: riscrivere tutto il CSV
+// ogni 5 s perde il log se il device si spegne a meta'. La SD e' montata su
+// "/sd" con il path logico passato alla VFS (storage::sdPath non aggiunge il
+// mountpoint): FILE_APPEND accoda solo le righe dei MAC non ancora scritti.
 bool writeWardrivingCsv() {
   if (g_path[0] == '\0') {
     return false;
   }
-  File file = storage::openWrite(g_path, true);
+  const bool create = !storage::exists(g_path, true);
+  File file;
+  if (create) {
+    file = storage::openWrite(g_path, true);
+  } else if (storage::hasSD()) {
+    file = SD.open(g_path, FILE_APPEND);
+  }
   if (!file) {
     return false;
   }
 
   const char* header =
       "timestamp_ms,mac,name,vendor_oui,rssi,adv_type,service_uuid_count\n";
-  bool ok = file.print(header) == std::strlen(header);
+  bool ok = !create || file.print(header) == std::strlen(header);
 
   const int count = snapshotSummaries(g_rows, kMaxDevices, false);
-  for (int i = 0; i < count; ++i) {
+  if (g_flushedRows > count) {
+    g_flushedRows = count;
+  }
+  for (int i = g_flushedRows; ok && i < count; ++i) {
     const std::string name =
         g_rows[i].hasName ? csvEscapeName(g_rows[i].name) : std::string();
     const std::string oui(g_rows[i].address, 8);
@@ -92,6 +108,9 @@ bool writeWardrivingCsv() {
   }
   file.flush();
   file.close();
+  if (ok) {
+    g_flushedRows = count;
+  }
   return ok;
 }
 
@@ -121,7 +140,7 @@ void drawWardriving() {
                 "Tempo: " + std::to_string(elapsed / 1000) + "s / " +
                     std::to_string(g_durationMs / 1000) + "s",
                 display::kTextDim, 0);
-  display::footer("` = interrompi");
+  display::footer("ESC = interrompi");
   display::push();
 }
 
@@ -141,6 +160,10 @@ void runWardriving(uint32_t seconds) {
   g_lastFlushMs = g_startMs;
   g_packets = 0;
   g_dropped = 0;
+  g_flushedRows = 0;
+  // Azzera la tabella prima della prima scrittura: nessun device della
+  // sessione precedente deve finire nel nuovo CSV.
+  resetDevices();
 
   if (!writeWardrivingCsv()) {
     ui::message("Wardriving",
@@ -155,7 +178,6 @@ void runWardriving(uint32_t seconds) {
     return;
   }
 
-  resetDevices();
   setScanHandler(wardrivingHandler);
   configureScan(scan, false);  // passivo: solo advertising osservato
 
@@ -225,7 +247,7 @@ void runWardrivingMenu() {
   menu.addItem("30 secondi", "sd", [] { runWardriving(30); });
   menu.addItem("60 secondi", "sd", [] { runWardriving(60); });
   menu.addItem("120 secondi", "sd", [] { runWardriving(120); });
-  menu.setHint("`=indietro  ENTER=avvia");
+  menu.setHint("ESC=indietro  ENTER=avvia");
   menu.run(true);
 }
 

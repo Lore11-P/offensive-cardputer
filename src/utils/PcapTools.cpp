@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <memory>
 #include <new>
 #include <utility>
 
@@ -124,7 +125,16 @@ class LineWriter {
  public:
   enum class Result { Written, Duplicate, Full, Error };
 
-  explicit LineWriter(File& file) : file_(file) {}
+  explicit LineWriter(File& file) : file_(file) {
+    // 4 KB di dedup su heap: il chiamante gira su stack di task da 16 KB.
+    hashes_.reset(new (std::nothrow) uint64_t[kMaxHcLines]);
+    if (!hashes_) {
+      failed_ = true;
+    }
+  }
+
+  LineWriter(const LineWriter&) = delete;
+  LineWriter& operator=(const LineWriter&) = delete;
 
   Result write(const std::string& line) {
     if (failed_) {
@@ -165,7 +175,7 @@ class LineWriter {
   }
 
   File& file_;
-  uint64_t hashes_[kMaxHcLines] = {};
+  std::unique_ptr<uint64_t[]> hashes_;
   uint16_t count_ = 0;
   uint32_t lines_ = 0;
   bool failed_ = false;

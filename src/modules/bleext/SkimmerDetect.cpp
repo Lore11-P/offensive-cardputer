@@ -124,7 +124,7 @@ void drawSkimmer(int count, const DeviceSummary* rows) {
                     display::kWarning, 0);
     }
   }
-  display::footer("`=stop  euristica, non prova");
+  display::footer("ESC=stop  euristica, non prova");
   display::push();
 }
 

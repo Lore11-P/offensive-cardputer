@@ -141,7 +141,7 @@ void drawWaitScreen(const char* title, const char* parent, const char* heading,
     if (note && *note) {
         display::text(rightX, 106, note, display::C(display::T_dim), 0);
     }
-    display::footer("` = annulla");
+    display::footer("ESC = annulla");
     display::push();
 }
 
@@ -160,7 +160,13 @@ bool scanNetworks(std::vector<Network>& networks, const std::string& parent) {
     WiFi.disconnect();
     delay(120);
 
-    WiFi.scanNetworks(true, true);  // asincrona, mostra anche le reti nascoste
+    if (WiFi.scanNetworks(true, true) == WIFI_SCAN_FAILED) {
+        // Errore all'avvio (driver non pronto): la radio resterebbe accesa.
+        WiFi.mode(WIFI_OFF);
+        ui::message("Reti WiFi", {"!Avvio scansione non riuscito.", "Riprova tra qualche secondo."},
+                    parent);
+        return false;
+    }
 
     const uint32_t started = millis();
     uint32_t lastDraw = 0;
@@ -189,6 +195,7 @@ bool scanNetworks(std::vector<Network>& networks, const std::string& parent) {
     const int count = WiFi.scanComplete();
     if (count < 0) {
         WiFi.scanDelete();
+        WiFi.mode(WIFI_OFF);
         ui::message("Reti WiFi", {"!Scansione non riuscita.", "Riprova tra qualche secondo."},
                     parent);
         return false;
@@ -294,7 +301,7 @@ int chooseNetwork(const std::vector<Network>& networks, const std::string& paren
             const int thumbY = trackY + (trackH - thumbH) * top / std::max(1, total - visible);
             display::g().fillRect(trackX, thumbY, 3, thumbH, display::kAccent);
         }
-        display::footer("* = aperta   ENTER = seleziona   ` = annulla");
+        display::footer("* = aperta   ENTER = seleziona   ESC = annulla");
         display::push();
         delay(16);
     }
@@ -464,7 +471,7 @@ void drawSettingsScreen(const std::string& parent, const std::vector<std::string
         }
         display::text(10, y + 3, actions[i], isSelected ? display::kWhite : display::kText, 2);
     }
-    display::footer("; . = nav   ENTER = apri   ` = torna");
+    display::footer("; . = nav   ENTER = apri   ESC = torna");
     display::push();
 }
 
@@ -532,7 +539,7 @@ void runSettings(const std::string& parent) {
     };
     const int actionCount = static_cast<int>(actions.size());
     int selected = 0;
-    bool anyAction = false;
+    bool connectedHere = false;
 
     navigation::waitRelease();
     for (;;) {
@@ -551,7 +558,6 @@ void runSettings(const std::string& parent) {
         } else if (ev.type == navigation::Event::Down) {
             selected = (selected + 1) % actionCount;
         } else if (ev.type == navigation::Event::Select) {
-            anyAction = true;
             navigation::waitRelease();
             switch (selected) {
                 case 0:
@@ -567,17 +573,25 @@ void runSettings(const std::string& parent) {
                     confirmForget(parent);
                     break;
             }
+            // Se l'azione ha lasciato la radio connessa, la connessione e'
+            // stata appena impostata dall'utente: non va buttata giu' all'uscita.
+            if (WiFi.status() == WL_CONNECTED) {
+                connectedHere = true;
+            }
             navigation::waitRelease();
         }
         delay(20);
     }
     navigation::waitRelease();
 
-    // All'uscita la radio si spegne: i moduli che usano la rete riconnettono
-    // da soli con le credenziali salvate.
-    if (anyAction) {
-        logger::info("WiFi: impostazioni chiuse, radio spenta");
+    // All'uscita la radio si spegne, tranne quando l'utente ha appena
+    // configurato una connessione: i moduli riconnettono da soli con le
+    // credenziali salvate, ma buttar giu' un link appena creato e' inutile.
+    if (connectedHere) {
+        logger::info("WiFi: impostazioni chiuse, connessione mantenuta");
+        return;
     }
+    logger::info("WiFi: impostazioni chiuse, radio spenta");
     disconnect();
 }
 

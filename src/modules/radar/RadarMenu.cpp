@@ -245,8 +245,11 @@ public:
         }
 
         if (g_trackDevices) {
-            const char* name = device->haveName() ? device->getName().c_str() : "(senza nome)";
-            rememberDevice(address, name, rssi);
+            // getName() ritorna std::string per valore: il c_str() di un
+            // temporaneo pende appena l'espressione finisce.
+            const std::string name =
+                device->haveName() ? device->getName() : std::string("(senza nome)");
+            rememberDevice(address, name.c_str(), rssi);
         }
     }
 };
@@ -315,6 +318,9 @@ void configureScan(NimBLEScan* scan, RadarAdvertiseCallbacks* callbacks, bool ac
     scan->setActiveScan(active);
     scan->setInterval(100);
     scan->setWindow(100);  // duty 100%: serve per la misura di densita'
+    // La lista e' gestita dai callback: lo stack non deve accumulare advertiser
+    // (con 0 NimBLE invoca il callback e scarta subito il device).
+    scan->setMaxResults(0);
 }
 
 // ----------------------------------------------------------------------------
@@ -630,7 +636,7 @@ void drawFinderFrame(const std::string& name, const std::string& address, int rs
     drawSegmentBar(6, 118, 128, 4, kFinderSegments, fraction, peakFraction, color);
     display::text(140, 112, sound ? "audio ON" : "audio OFF", display::kTextDim, 0);
     display::text(196, 112, "hit " + std::to_string(hits), display::kTextDim, 0);
-    display::footer("ENTER=muto  `=stop  S" +
+    display::footer("ENTER=muto  ESC=stop  S" +
                     std::to_string(config::radarSensitivity()));
     display::push();
 }
@@ -680,7 +686,7 @@ void runBleFinder() {
             BleDevice devices[kMaxDevices];
             const int found = snapshotDevices(devices, kMaxDevices);
             display::textCentered(80, "Trovati: " + std::to_string(found), display::kText, 2);
-            display::footer("` = annulla");
+            display::footer("ESC = annulla");
             display::push();
         }
     }
@@ -941,7 +947,7 @@ void drawPpi(const BleDevice* devices, int count, uint32_t sweepMs) {
     if (shown == 0) {
         display::text(112, 60, "nessun blip", display::kTextDim, 0);
     }
-    display::footer("` = stop");
+    display::footer("ESC = stop");
     display::push();
 }
 
@@ -1079,7 +1085,7 @@ void drawBandMeasure(int channelDone, int channelTotal) {
                          static_cast<float>(channelDone) / static_cast<float>(channelTotal),
                          display::kInfo);
     display::textCentered(84, "Sniffer 802.11 passivo", display::kTextDim, 0);
-    display::footer("` = annulla");
+    display::footer("ESC = annulla");
     display::push();
 }
 
@@ -1263,7 +1269,7 @@ void drawBandChart(const BandReading& reading, int activeChannel, bool blePhase,
     display::text(112, 114, "adv " + std::to_string(advPerSecond) + "/s",
                   display::kNeoCyan, 0);
     display::text(178, 114, coexisting ? "radio unica" : "sequenziale", display::kTextDim, 0);
-    display::footer("` = stop");
+    display::footer("ESC = stop");
     display::push();
 }
 
@@ -1487,7 +1493,7 @@ void drawCsi(int channel, bool calibrating, int progressPercent, float energy, f
         display::text(112, 50, std::to_string(progressPercent) + "%", display::kText, 4);
         display::text(112, 82, "ambiente vuoto", display::kTextDim, 0);
         display::text(112, 94, "ch " + std::to_string(channel), display::kTextDim, 0);
-        display::footer("` = annulla");
+        display::footer("ESC = annulla");
         display::push();
         return;
     }
@@ -1503,7 +1509,7 @@ void drawCsi(int channel, bool calibrating, int progressPercent, float energy, f
     display::text(112, 94, "rssi " + std::to_string(rssi) + " dBm", display::kTextDim, 0);
     display::text(112, 106, "frame " + std::to_string(frames) + "  ch " + std::to_string(channel),
                   display::kTextDim, 0);
-    display::footer("ENTER=ricalibra  ,/=canale  `=stop");
+    display::footer("ENTER=ricalibra  ,/=canale  ESC=stop");
     display::push();
 }
 
@@ -1650,7 +1656,7 @@ void runSensitivity() {
         display::textCentered(94, "1 = solo da vicino   5 = molto reattivo",
                               display::kTextDim, 0);
         display::textCentered(108, ", / = cambia", display::kText, 0);
-        display::footer("ENTER/` = salva e torna");
+        display::footer("ENTER/ESC = salva e torna");
         display::push();
 
         const navigation::EventData ev = navigation::poll();
@@ -1700,7 +1706,7 @@ void runMenu() {
     menu.addSeparator("Strumenti");
     menu.addItem("Sensibilita", "settings", [] { runSensitivity(); });
     menu.addItem("Info radio", "scan", [] { showRadioInfo(); });
-    menu.setHint("`=indietro  ;.=nav  ENTER=apri");
+    menu.setHint("ESC=indietro  ;.=nav  ENTER=apri");
     menu.run(true);
 }
 

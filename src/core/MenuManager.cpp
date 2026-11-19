@@ -53,6 +53,22 @@ std::string ellipsize(const std::string& text, int maxWidth, uint8_t font = 0) {
     return out + "..";
 }
 
+// Prima voce selezionabile da start in avanti (con wrap): -1 se nessuna.
+int firstSelectable(const std::vector<MenuItem>& items, int start) {
+    const int count = static_cast<int>(items.size());
+    if (count == 0) {
+        return -1;
+    }
+    start = std::max(0, std::min(start, count - 1));
+    for (int i = 0; i < count; ++i) {
+        const int idx = (start + i) % count;
+        if (items[idx].enabled) {
+            return idx;
+        }
+    }
+    return -1;
+}
+
 // Angoli d'accento: la firma visiva dei pannelli Orbit.
 void cornerTicks(int x, int y, int w, int h, uint16_t color, int len = 4) {
     auto& d = display::g();
@@ -114,7 +130,7 @@ void drawOrbitBadge(const MenuItem& item, int cx, int cy, int iconSize, bool sel
 
 MenuManager::MenuManager(std::string title, std::string parent)
     : title_(std::move(title)), parent_(std::move(parent)) {
-    hint_ = "`=indietro  ;.,/=nav  ENTER=apri";
+    hint_ = "ESC=indietro ;.,/=nav ENTER=apri";
 }
 
 void MenuManager::addItem(std::string label, std::string icon, std::function<void()> action,
@@ -292,6 +308,11 @@ void MenuManager::ensureVisible() {
 
 void MenuManager::run(bool allowBack) {
     visibleRows_ = rowsPerPage();
+    // La selezione iniziale puo' cadere su un separatore o una voce spenta.
+    const int first = firstSelectable(items_, selected_);
+    if (first >= 0) {
+        selected_ = first;
+    }
     ensureVisible();
 
     uint32_t nextUp = 0;
@@ -336,7 +357,7 @@ void MenuManager::run(bool allowBack) {
     bool running = true;
     uint32_t lastClock = millis() / 1000;
     while (running) {
-        navigation::update();
+        // poll() aggiorna gia' la tastiera: un solo update per iterazione.
         const navigation::EventData ev = navigation::poll();
 
         bool dirty = false;
@@ -413,7 +434,8 @@ void MenuManager::run(bool allowBack) {
         if (dirty) {
             draw();
         }
-        delay(16);
+        // 2 ms: il loop deve restare reattivo quanto la lettura della tastiera.
+        delay(2);
     }
 }
 
@@ -442,6 +464,11 @@ void MenuManager::draw() {
             std::snprintf(pageText, sizeof(pageText), "P%d/%d", selected_ / size + 1, pages);
             trailing = pageText;
         }
+    } else if (mode_ == Mode::List && !items_.empty()) {
+        char posText[16];
+        std::snprintf(posText, sizeof(posText), "%d/%d", selected_ + 1,
+                      static_cast<int>(items_.size()));
+        trailing = posText;
     }
     display::footer(hint_, trailing);
     display::push();
@@ -585,6 +612,18 @@ void MenuManager::drawCarousel() {
     for (int off = -(visible / 2); off <= (visible / 2); ++off) {
         int idx = (selected_ + off) % total;
         if (idx < 0) idx += total;
+        // Con meno di 7 voci gli offset estremi ripetono la stessa voce:
+        // disegnala una volta sola.
+        bool duplicate = false;
+        for (int i = 0; i < nslots; ++i) {
+            if (slots[i].idx == idx) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (duplicate) {
+            continue;
+        }
         const float a = off * kOrbitStep + phase;
         if (fabsf(a) > 2.95f) {
             continue;
@@ -662,7 +701,9 @@ void MenuManager::selectIndex(int index) {
     if (items_.empty()) {
         return;
     }
-    selected_ = std::max(0, std::min(index, static_cast<int>(items_.size()) - 1));
+    const int clamped = std::max(0, std::min(index, static_cast<int>(items_.size()) - 1));
+    const int first = firstSelectable(items_, clamped);
+    selected_ = first >= 0 ? first : clamped;
     ensureVisible();
 }
 

@@ -60,7 +60,8 @@ struct Settings {
 
 void begin();
 const Settings& get();
-void save();
+// false se NVS non e' pronta o una chiave non e' stata scritta.
+bool save();
 void reset();
 
 uint8_t brightness();

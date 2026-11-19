@@ -9,6 +9,7 @@
 #include "Config.h"
 #include "Display.h"
 #include "Logger.h"
+#include "Navigation.h"
 
 namespace powertimer {
 namespace {
@@ -233,6 +234,9 @@ void powerOff() {
     display::push();
     logger::info("Ripresa");
     begin();
+    // Il tasto di risveglio e' stato rilasciato durante la sospensione:
+    // riallinea la tastiera per non generare eventi fantasma al ritorno.
+    navigation::begin();
 }
 
 Hold::Hold() {

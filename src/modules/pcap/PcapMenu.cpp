@@ -151,7 +151,7 @@ void drawPicker(const std::string& title, const std::vector<CaptureItem>& items,
     display::text(4, y + 1, label, color, 0);
     display::text(display::width() - sizeWidth - 3, y + 1, size, display::kMuted, 0);
   }
-  display::footer("`=indietro  ;.=nav  ENTER=apri");
+  display::footer("ESC=indietro  ;.=nav  ENTER=apri");
   display::push();
 }
 
@@ -300,7 +300,7 @@ void drawScanProgress(const std::string& file, size_t count, size_t offset,
   display::textCentered(78, percent, display::kInk, 2);
   display::textCentered(94, formatSize(offset) + " / " + formatSize(total),
                         display::kMuted, 0);
-  display::footer("` = annulla");
+  display::footer("ESC = annulla");
   display::push();
 }
 
@@ -353,11 +353,11 @@ void drawBrowser(pc::Reader& reader, const std::vector<uint32_t>& offsets,
   }
 
   if (truncatedIndex) {
-    display::footer("`=torna  ;.=nav  ,/=pag  max 20000");
+    display::footer("ESC=torna  ;.=nav  ,/=pag  max 20000");
   } else if (damaged) {
-    display::footer("`=torna  ;.=nav  file troncato");
+    display::footer("ESC=torna  ;.=nav  file troncato");
   } else {
-    display::footer("`=torna  ;.=nav  ,/=pag  ENTER=hex");
+    display::footer("ESC=torna  ;.=nav  ,/=pag  ENTER=hex");
   }
   display::push();
 }
@@ -399,7 +399,7 @@ void showHex(pc::Reader& reader, uint32_t offset, const std::string& file,
           display::text(3, 23 + static_cast<int>(row) * 10, line, display::kInk, 0);
         }
       }
-      display::footer(length > kMaxBytes ? "`=torna  primi 128B" : "`=torna");
+      display::footer(length > kMaxBytes ? "ESC=torna  primi 128B" : "ESC=torna");
       display::push();
       lastDraw = now;
     }
@@ -571,7 +571,7 @@ void drawWork(const std::string& title, const std::string& file,
   display::textCentered(80, percent, display::kInk, 2);
   display::textCentered(94, formatSize(offset) + " / " + formatSize(total),
                         display::kMuted, 0);
-  display::footer("` = annulla");
+  display::footer("ESC = annulla");
   display::push();
 }
 
@@ -767,7 +767,7 @@ void runMenu() {
   menu.addItem("Converti in hc22000", "lock", [] { convertCapture(); });
   menu.addItem("Estrai solo EAPOL", "wifi", [] { extractCapture(); });
   menu.addItem("Elimina .hc22000", "settings", [] { deleteHc(); });
-  menu.setHint("`=indietro  ;.=nav  ENTER=apri");
+  menu.setHint("ESC=indietro  ;.=nav  ENTER=apri");
   menu.run(true);
 }
 

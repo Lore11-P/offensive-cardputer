@@ -33,13 +33,12 @@ File openOn(fs::FS& filesystem, const std::string& path) {
 }
 
 std::string sdPath(const std::string& path) {
-    if (path.rfind("/sd", 0) == 0) {
-        return path;
+    // SD e' montata su "/sd": la VFS aggiunge gia' il mountpoint, quindi qui
+    // va passato il path logico (es. "/scores.txt" -> card:/scores.txt).
+    if (path.empty()) {
+        return "/";
     }
-    if (path.empty() || path[0] != '/') {
-        return "/sd/" + path;
-    }
-    return "/sd" + path;
+    return path[0] == '/' ? path : "/" + path;
 }
 
 std::string joinPath(const std::string& base, const std::string& name) {
@@ -224,21 +223,27 @@ bool readText(const std::string& path, std::string& out, size_t maxBytes,
     if (!f) {
         return false;
     }
+    const size_t size = static_cast<size_t>(f.size());
     out.clear();
-    out.reserve(maxBytes < 4096 ? maxBytes : 4096);
+    out.reserve(std::min(size, maxBytes < 4096 ? maxBytes : 4096));
     size_t total = 0;
     uint8_t buffer[256];
-    while (f.available() && total < maxBytes) {
-        const size_t want = std::min(sizeof(buffer), maxBytes - total);
+    bool readError = false;
+    while (total < size && total < maxBytes) {
+        const size_t want =
+            std::min(sizeof(buffer), std::min(size - total, maxBytes - total));
         const int got = f.read(buffer, want);
         if (got <= 0) {
+            readError = true;
             break;
         }
         out.append(reinterpret_cast<const char*>(buffer), static_cast<size_t>(got));
         total += static_cast<size_t>(got);
     }
     f.close();
-    return true;
+    // true solo se il file e' stato letto per intero: un file piu' grande di
+    // maxBytes o un errore a meta' stream non devono sembrare letture valide.
+    return !readError && total == size;
 }
 
 File openWrite(const std::string& path, bool preferSD) {
@@ -272,15 +277,58 @@ File openWrite(const std::string& path, bool preferSD) {
     return File();
 }
 
-bool writeText(const std::string& path, const std::string& data, bool preferSD) {
-    File f = openWrite(path, preferSD);
+bool writeAtomic(fs::FS& filesystem, const char* backend,
+                 const std::string& path, const std::string& data) {
+    const std::string tmp = path + ".tmp";
+    File f = filesystem.open(tmp.c_str(), FILE_WRITE);
     if (!f) {
         return false;
     }
     const size_t written =
         f.write(reinterpret_cast<const uint8_t*>(data.data()), data.size());
+    f.flush();
+    const bool writeOk = written == data.size() && f.getWriteError() == 0;
     f.close();
-    return written == data.size();
+    if (!writeOk) {
+        filesystem.remove(tmp.c_str());
+        return false;
+    }
+
+    // Se il rename diretto non sostituisce la destinazione (alcune versioni
+    // di FAT rifiutano il target esistente), il file vecchio viene spostato
+    // in .bak e ripristinato se il rename finale fallisce.
+    if (filesystem.rename(tmp.c_str(), path.c_str())) {
+        g_backend = backend;
+        return true;
+    }
+    const std::string bak = path + ".bak";
+    filesystem.remove(bak.c_str());  // residuo di un tentativo precedente
+    if (!filesystem.exists(path.c_str()) ||
+        !filesystem.rename(path.c_str(), bak.c_str())) {
+        filesystem.remove(tmp.c_str());
+        return false;
+    }
+    if (filesystem.rename(tmp.c_str(), path.c_str())) {
+        filesystem.remove(bak.c_str());
+        g_backend = backend;
+        return true;
+    }
+    filesystem.rename(bak.c_str(), path.c_str());
+    filesystem.remove(tmp.c_str());
+    return false;
+}
+
+bool writeText(const std::string& path, const std::string& data, bool preferSD) {
+    if (path.empty()) {
+        return false;
+    }
+    if (preferSD) {
+        return g_sd && writeAtomic(SD, "SD", path, data);
+    }
+    if (g_littlefs && writeAtomic(LittleFS, "LittleFS", path, data)) {
+        return true;
+    }
+    return g_sd && writeAtomic(SD, "SD", path, data);
 }
 
 bool removeFile(const std::string& path, bool preferSD) {

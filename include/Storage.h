@@ -33,11 +33,15 @@ std::vector<std::string> list(const std::string& path, bool dirsOnly,
 std::vector<Entry> listEntries(const std::string& path, bool preferSD = true);
 
 // Legge un file di testo con limite massimo (protezione da file enormi).
+// false se il file e' assente, se un errore interrompe la lettura o se il file
+// supera maxBytes (out contiene in ogni caso la parte letta).
 bool readText(const std::string& path, std::string& out, size_t maxBytes = 16384,
               bool preferSD = false);
 
 // Scrittura e gestione file (default: microSD).
 File openWrite(const std::string& path, bool preferSD = true);
+// Scrittura atomica: tmp + flush + rename, il file precedente resta valido se
+// la scrittura fallisce.
 bool writeText(const std::string& path, const std::string& data, bool preferSD = true);
 bool removeFile(const std::string& path, bool preferSD = true);
 bool mkdir(const std::string& path, bool preferSD = true);

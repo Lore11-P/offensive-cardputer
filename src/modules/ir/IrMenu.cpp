@@ -359,12 +359,24 @@ uint64_t encodeKaseikyo(uint32_t address, uint32_t command) {
     return data;
 }
 
+// Limiti del parser: un file .ir ostile o corrotto non deve esaurire la SRAM.
+// Il tetto richiesto e' 128 comandi, ma openFile() ne mostra solo 100:
+// fermarsi prima evita di allocare comandi che verrebbero scartati.
+constexpr size_t kMaxParsedCommands = 128;
+constexpr size_t kMaxMenuCommands = 100;
+constexpr size_t kParsedCommandsLimit =
+    kMaxMenuCommands < kMaxParsedCommands ? kMaxMenuCommands : kMaxParsedCommands;
+// Un comando raw oltre 512 valori (circa un NEC ripetuto 5 volte) non e' un
+// telecomando reale: viene troncato per non saturare l'heap.
+constexpr size_t kMaxRawValues = 512;
+
 void parseRawValues(const std::string& value, std::vector<uint16_t>& out) {
     std::string cleaned = value;
     std::replace(cleaned.begin(), cleaned.end(), ',', ' ');
     std::istringstream stream(cleaned);
     std::string token;
-    while (stream >> token && out.size() < 1024) {
+    out.reserve(std::min(kMaxRawValues, out.size() + 128));
+    while (stream >> token && out.size() < kMaxRawValues) {
         char* end = nullptr;
         const long parsed = std::strtol(token.c_str(), &end, 10);
         if (end == token.c_str()) {
@@ -451,13 +463,15 @@ void finalizeCommand(IrCommand& command) {
 
 std::vector<IrCommand> parseIrFile(const std::string& text) {
     std::vector<IrCommand> commands;
+    commands.reserve(kParsedCommandsLimit);
     std::istringstream stream(text);
     std::string line;
     IrCommand current;
     bool active = false;
 
     auto flush = [&] {
-        if (active && !current.name.empty()) {
+        if (active && !current.name.empty() &&
+            commands.size() < kParsedCommandsLimit) {
             finalizeCommand(current);
             commands.push_back(current);
         }
@@ -466,6 +480,10 @@ std::vector<IrCommand> parseIrFile(const std::string& text) {
     };
 
     while (std::getline(stream, line)) {
+        // Cap raggiunto: inutile continuare a parsare e allocare.
+        if (commands.size() >= kParsedCommandsLimit) {
+            break;
+        }
         line = trim(line);
         if (line.empty()) {
             continue;
@@ -675,10 +693,10 @@ void openFile(const std::string& path, const std::string& title) {
         if (ch == 'f' || ch == 'F') {
             switch (toggleFavorite(path)) {
                 case FavoriteResult::Added:
-                    menu.setHint("Aggiunto ai preferiti   `=esci");
+                    menu.setHint("Aggiunto ai preferiti   ESC=esci");
                     break;
                 case FavoriteResult::Removed:
-                    menu.setHint("Rimosso dai preferiti   `=esci");
+                    menu.setHint("Rimosso dai preferiti   ESC=esci");
                     break;
                 case FavoriteResult::Full:
                     menu.setHint("Preferiti pieni (max 20)");
@@ -736,7 +754,7 @@ void openBrand(const std::string& brand) {
         }
         menu.addItem(title, "ir", [path, title] { openFile(path, title); });
     }
-    menu.setHint("ENTER=apri  `=indietro");
+    menu.setHint("ENTER=apri  ESC=indietro");
     menu.run(true);
 }
 
@@ -909,7 +927,7 @@ void runScannerBrands() {
         menu.addItem(brand, "ir", [brand] { runScanner(brand); });
     }
     menu.setGrid(3);
-    menu.setHint("ENTER=scansiona  ;.=riga/pagina  `=indietro");
+    menu.setHint("ENTER=scansiona  ;.=riga/pagina  ESC=indietro");
     menu.run(true);
 }
 
@@ -933,7 +951,7 @@ void runFavorites() {
         const std::string label = favoriteLabel(path);
         menu.addItem(label, "fav", [path, label] { openFile(path, label); });
     }
-    menu.setHint("ENTER=apri  `=indietro");
+    menu.setHint("ENTER=apri  ESC=indietro");
     menu.run(true);
 }
 
@@ -951,7 +969,7 @@ void runRemotes() {
         menu.addItem(brand, "ir", [brand] { openBrand(brand); });
     }
     menu.setGrid(3);
-    menu.setHint("ENTER=apri  ;.=riga/pagina  `=indietro");
+    menu.setHint("ENTER=apri  ;.=riga/pagina  ESC=indietro");
     menu.run(true);
 }
 
@@ -1017,7 +1035,7 @@ void runSearch() {
     for (auto& item : matches) {
         menu.addItem(std::move(item));
     }
-    menu.setHint("ENTER=apri  `=indietro");
+    menu.setHint("ENTER=apri  ESC=indietro");
     menu.run(true);
 }
 
@@ -1031,7 +1049,7 @@ void drawTvBg(const char* brand, int index, int total, int cycle) {
                          static_cast<float>(index + 1) / total);
     display::g().fillCircle(200, 60, 14, display::kDanger);
     display::g().fillCircle(200, 60, 8, display::kWarning);
-    display::footer("` = interrompi");
+    display::footer("ESC = interrompi");
     display::push();
 }
 
@@ -1112,7 +1130,7 @@ void runJammer() {
             display::progressBar(40, 92, 160, 8,
                                  static_cast<float>(now % 2000) / 2000.0f,
                                  display::kWarning);
-            display::footer("` = interrompi");
+            display::footer("ESC = interrompi");
             display::push();
             lastDraw = now;
         }
@@ -1161,7 +1179,7 @@ void runMenu() {
                  },
                  false);
 #endif
-    menu.setHint("`=indietro  </>=scorri  ENTER=apri");
+    menu.setHint("ESC=indietro  </>=scorri  ENTER=apri");
     menu.run(true);
 }
 

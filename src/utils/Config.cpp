@@ -29,6 +29,20 @@ uint16_t clampU16(int value, int lo, int hi) {
     return static_cast<uint16_t>(std::max(lo, std::min(hi, value)));
 }
 
+uint16_t snapSleepTimeout(uint16_t seconds) {
+    // 0 = disattivato; gli altri valori sono quelli proposti in Impostazioni.
+    static const uint16_t kAllowed[] = {0, 30, 60, 120, 300, 600, 900, 1800};
+    if (seconds > 1800) {
+        seconds = 1800;  // fuori scala: massimo, mai 0
+    }
+    for (uint16_t value : kAllowed) {
+        if (seconds <= value) {
+            return value;
+        }
+    }
+    return 1800;
+}
+
 bool bitFor(Module module, uint16_t& mask) {
     if (module >= Module::Count) {
         return false;
@@ -120,7 +134,8 @@ void begin() {
             std::max(0, std::min(5, static_cast<int>(g_prefs.getUChar("ir_rep", 2)))));
         g_settings.irTvbgDelayMs =
             clampU16(g_prefs.getUShort("ir_tvd", 120), 20, 2000);
-        g_settings.sleepTimeoutSec = g_prefs.getUShort("sleep_s", 120);
+        g_settings.sleepTimeoutSec =
+            snapSleepTimeout(g_prefs.getUShort("sleep_s", 120));
         g_settings.radarSensitivity =
             static_cast<uint8_t>(std::max(1, std::min(5, static_cast<int>(g_prefs.getUChar("radar_s", 3)))));
         const String storedNickname =
@@ -139,24 +154,43 @@ const Settings& get() {
     return g_settings;
 }
 
-void save() {
+bool save() {
     if (!g_ready) {
-        return;
+        return false;
     }
-    g_prefs.putUChar("bright", g_settings.brightness);
-    g_prefs.putUChar("rot", g_settings.rotation);
-    g_prefs.putUChar("theme", g_settings.theme);
-    g_prefs.putUShort("mods", g_settings.modules);
-    g_prefs.putUShort("ble_dur", g_settings.bleDurationSec);
-    g_prefs.putUShort("ble_itv", g_settings.bleIntervalMs);
-    g_prefs.putUChar("ir_rep", g_settings.irRepeat);
-    g_prefs.putUShort("ir_tvd", g_settings.irTvbgDelayMs);
-    g_prefs.putUShort("sleep_s", g_settings.sleepTimeoutSec);
-    g_prefs.putUChar("radar_s", g_settings.radarSensitivity);
-    g_prefs.putString("chat_nick", g_settings.chatNickname.c_str());
-    g_prefs.putString("chat_to", g_settings.chatRecipient.c_str());
-    g_prefs.putBool("chat_notify", g_settings.chatNotify);
-    g_prefs.putUInt("magic", kConfigMagic);
+    bool ok = true;
+    auto check = [&ok](size_t wrote) {
+        if (wrote == 0) {
+            ok = false;
+        }
+    };
+    check(g_prefs.putUChar("bright", g_settings.brightness));
+    check(g_prefs.putUChar("rot", g_settings.rotation));
+    check(g_prefs.putUChar("theme", g_settings.theme));
+    check(g_prefs.putUShort("mods", g_settings.modules));
+    check(g_prefs.putUShort("ble_dur", g_settings.bleDurationSec));
+    check(g_prefs.putUShort("ble_itv", g_settings.bleIntervalMs));
+    check(g_prefs.putUChar("ir_rep", g_settings.irRepeat));
+    check(g_prefs.putUShort("ir_tvd", g_settings.irTvbgDelayMs));
+    check(g_prefs.putUShort("sleep_s", g_settings.sleepTimeoutSec));
+    check(g_prefs.putUChar("radar_s", g_settings.radarSensitivity));
+    // putString() ritorna strlen(): 0 e' anche il valore legittimo di una
+    // stringa vuota, quindi l'esito si puo' valutare solo se non e' vuota.
+    auto checkString = [&ok](size_t wrote, const std::string& value) {
+        if (wrote == 0 && !value.empty()) {
+            ok = false;
+        }
+    };
+    checkString(g_prefs.putString("chat_nick", g_settings.chatNickname.c_str()),
+                g_settings.chatNickname);
+    checkString(g_prefs.putString("chat_to", g_settings.chatRecipient.c_str()),
+                g_settings.chatRecipient);
+    check(g_prefs.putBool("chat_notify", g_settings.chatNotify));
+    check(g_prefs.putUInt("magic", kConfigMagic));
+    if (!ok) {
+        logger::error("NVS: salvataggio impostazioni incompleto");
+    }
+    return ok;
 }
 
 void reset() {
@@ -230,6 +264,11 @@ bool moduleCompiled(Module module) {
 }
 
 bool moduleEnabled(Module module) {
+    // Impostazioni non deve mai poter essere disattivato (ne' da NVS ne' da
+    // JSON): sarebbe l'unico modo per rendere il menu irraggiungibile.
+    if (module == Module::Settings) {
+        return moduleCompiled(module);
+    }
     if (!moduleCompiled(module)) {
         return false;
     }
@@ -239,6 +278,9 @@ bool moduleEnabled(Module module) {
 
 void setModuleEnabled(Module module, bool enabled) {
     uint16_t bit = 0;
+    if (module == Module::Settings) {
+        return;
+    }
     if (!bitFor(module, bit) || !moduleCompiled(module)) {
         return;
     }
@@ -291,16 +333,7 @@ uint16_t sleepTimeoutSec() {
 }
 
 void setSleepTimeoutSec(uint16_t seconds) {
-    // 0 = disattivato; gli altri valori sono quelli proposti in Impostazioni.
-    static const uint16_t kAllowed[] = {0, 30, 60, 120, 300, 600, 900, 1800};
-    uint16_t chosen = 0;
-    for (uint16_t value : kAllowed) {
-        if (seconds <= value) {
-            chosen = value;
-            break;
-        }
-    }
-    g_settings.sleepTimeoutSec = chosen;
+    g_settings.sleepTimeoutSec = snapSleepTimeout(seconds);
     save();
 }
 

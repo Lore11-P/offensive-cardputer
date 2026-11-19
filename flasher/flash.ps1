@@ -72,7 +72,7 @@ if ($Erase) {
     }
 }
 
-Write-Host "Scrittura firmware CardputerFirmware v1.0..." -ForegroundColor Cyan
+Write-Host "Scrittura firmware ORBIT OS v1.2.0..." -ForegroundColor Cyan
 & python @common $writeCmd `
     $flashModeFlag dio `
     $flashFreqFlag 80m `

@@ -23,11 +23,14 @@ bool preferSD() {
     return storage::hasSD();
 }
 
-std::map<std::string, uint32_t> load() {
-    std::map<std::string, uint32_t> out;
+bool load(std::map<std::string, uint32_t>& out) {
+    out.clear();
+    if (!storage::exists(kPath, preferSD())) {
+        return true;  // primo salvataggio: il file non esiste ancora
+    }
     std::string text;
     if (!storage::readText(kPath, text, kMaxBytes, preferSD())) {
-        return out;
+        return false;  // errore o troncato: non riscrivere il file
     }
     std::istringstream stream(text);
     std::string line;
@@ -43,7 +46,7 @@ std::map<std::string, uint32_t> load() {
         const unsigned long value = std::strtoul(line.c_str() + eq + 1, nullptr, 10);
         out[name] = static_cast<uint32_t>(value);
     }
-    return out;
+    return true;
 }
 
 void store(const std::map<std::string, uint32_t>& values) {
@@ -60,7 +63,10 @@ void store(const std::map<std::string, uint32_t>& values) {
 }  // namespace
 
 uint32_t best(const std::string& game) {
-    const auto values = load();
+    std::map<std::string, uint32_t> values;
+    if (!load(values)) {
+        return 0;
+    }
     const auto it = values.find(game);
     return it == values.end() ? 0 : it->second;
 }
@@ -69,7 +75,12 @@ void submit(const std::string& game, uint32_t score) {
     if (game.empty()) {
         return;
     }
-    auto values = load();
+    std::map<std::string, uint32_t> values;
+    // Se il file non e' leggibile per intero non va sovrascritto: si
+    // perderebbero i record che non sono stati letti.
+    if (!load(values)) {
+        return;
+    }
     auto& slot = values[game];
     if (score > slot) {
         slot = score;
@@ -78,8 +89,8 @@ void submit(const std::string& game, uint32_t score) {
 }
 
 std::string all() {
-    const auto values = load();
-    if (values.empty()) {
+    std::map<std::string, uint32_t> values;
+    if (!load(values) || values.empty()) {
         return "";
     }
     std::string text;

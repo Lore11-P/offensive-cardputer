@@ -128,6 +128,9 @@ std::string keyMaterial(const std::string& sender,
     return canonicalName(sender) + '\x1F' + canonicalName(recipient);
 }
 
+// shortcut: la chiave AES e' solo SHA-256 dei due nickname, senza segreto
+// condiviso ne' ECDH/pairing: chi conosce i nickname puo' decifrare. Per una
+// riservatezza reale serve uno scambio X25519 con fingerprint verificato.
 void deriveKey(const std::string& sender, const std::string& recipient,
                uint8_t key[32]) {
     sha256(keyMaterial(sender, recipient), key);
@@ -513,6 +516,11 @@ public:
         }
 
         const uint32_t now = millis();
+        // Costruisce il messaggio fuori dalla sezione critica: le stringhe
+        // allocano e non devono bloccare gli altri task.
+        ChatMessage message;
+        message.sender = sender;
+        message.text = text;
         bool duplicate = false;
         portENTER_CRITICAL(&g_lock);
         const bool freshPeer = touchPeerLocked(address, now);
@@ -524,9 +532,6 @@ public:
             duplicate = true;
         } else {
             g_lastCounter[address] = counter;
-            ChatMessage message;
-            message.sender = sender;
-            message.text = text;
             g_messages.push_back(std::move(message));
             if (g_messages.size() > kHistoryMax) {
                 g_messages.erase(g_messages.begin());
@@ -570,12 +575,15 @@ bool publishMessage(const std::string& text, const std::string& recipient) {
 void drawChat() {
     g_dirty = false;
 
+    // Capacita' riservata fuori dalla sezione critica: lo snapshot dentro il
+    // lock non deve allocare il buffer del vector.
     std::vector<ChatMessage> messages;
+    messages.reserve(kHistoryMax);
     size_t peers = 0;
     std::string notifyName;
 
     portENTER_CRITICAL(&g_lock);
-    messages = g_messages;
+    messages.assign(g_messages.begin(), g_messages.end());
     const uint32_t now = millis();
     for (auto it = g_peers.begin(); it != g_peers.end();) {
         if (now - it->second > kPeerTimeoutMs) {
@@ -631,7 +639,7 @@ void drawChat() {
         }
     }
 
-    display::footer("ENTER=scrivi  `=esci");
+    display::footer("ENTER=scrivi  ESC=esci");
     display::push();
 }
 
@@ -649,8 +657,13 @@ void composeMessage() {
 
     config::setChatRecipient(fields[0].value);
     const std::string recipient = config::chatRecipient();
+    // Il messaggio compare nella chat solo se e' stato realmente trasmesso.
+    if (!publishMessage(fields[1].value, recipient)) {
+        ui::message("Chat BLE", {"!Invio non riuscito.", "Messaggio non aggiunto."},
+                    "Chat");
+        return;
+    }
     addLocalMessage(fields[1].value);
-    publishMessage(fields[1].value, recipient);
 }
 
 NameCheck checkNicknameAvailable(const std::string& candidate) {
@@ -787,6 +800,7 @@ void runChat() {
     g_counter = static_cast<uint16_t>(esp_random());
     g_peers.clear();
     g_lastCounter.clear();
+    g_messages.reserve(kHistoryMax);  // nessuna riallocazione in ricezione
     g_dirty = true;
 
     if (scan->isScanning()) {
@@ -906,7 +920,7 @@ void runMenu() {
                      "davvero sensibili."},
                     "Chat");
     });
-    menu.setHint("`=indietro  ;.=nav  ENTER=apri");
+    menu.setHint("ESC=indietro  ;.=nav  ENTER=apri");
     menu.run(true);
 }
 

@@ -90,7 +90,7 @@ void showHelp() {
                  "REPEAT n ripete l'ultima riga.",
                  "` interrompe l'esecuzione.",
                  "Collega il cavo USB al computer."},
-                "BadUSB", "ENTER/` = torna");
+                "BadUSB", "ENTER/ESC = torna");
 }
 
 void runScriptEntry(const ScriptEntry& script) {
@@ -118,7 +118,7 @@ void runList(bool allowReload) {
         menu.addItem("Ricarica elenco", "settings", [] { runList(false); });
     }
     menu.addItem("Guida rapida", "file", showHelp);
-    menu.setHint("`=indietro  ;.=nav  ENTER=avvia");
+    menu.setHint("ESC=indietro  ;.=nav  ENTER=avvia");
     menu.run(true);
 }
 

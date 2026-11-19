@@ -1,8 +1,8 @@
-# Flasher CardputerFirmware v1.0
+# Flasher ORBIT OS v1.2.0
 
 Pacchetto pronto all'uso per installare il firmware su M5Stack Cardputer ADV
 (ESP32-S3, 8 MB flash) senza compilare nulla. Include 307 telecomandi IR,
-BLE spam multibrand, chat BLE, Wi-Fi scanner, sei giochi e file browser microSD.
+BLE spam multibrand, chat BLE, Wi-Fi scanner, diciassette giochi e file browser microSD.
 
 > **Questa confezione contiene la build OFFENSIVA** (`ENABLE_OFFENSIVE=1`):
 > deauth Wi-Fi, evil twin/portal, BLE spam e jammer IR sono attivi. Usala solo

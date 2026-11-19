@@ -83,7 +83,7 @@ void drawAirTagScreen(const char* title, uint32_t foundStrong,
                     display::kTextDim, 0);
     }
   }
-  display::footer("`=stop  solo ricerca passiva");
+  display::footer("ESC=stop  solo ricerca passiva");
   display::push();
 }
 
@@ -104,7 +104,7 @@ void drawSpoofScreen(const uint8_t* mac, uint32_t remainingMs) {
   display::textCentered(100, std::to_string(remainingMs / 1000) + " s",
                         display::kText, 0);
   display::textCentered(114, "Solo test autorizzati", display::kWarning, 0);
-  display::footer("` = interrompi");
+  display::footer("ESC = interrompi");
   display::push();
 }
 #endif  // ENABLE_OFFENSIVE

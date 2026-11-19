@@ -71,7 +71,7 @@ void drawBoard(int level, uint32_t best, int active, const std::string& status) 
     }
 
     display::textCentered(114, status, display::kNeoPink, 0);
-    display::footer("frecce = ripeti  ` = esci");
+    display::footer("frecce = ripeti  ESC = esci");
     display::push();
 }
 

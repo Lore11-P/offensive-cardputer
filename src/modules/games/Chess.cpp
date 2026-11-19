@@ -30,12 +30,14 @@ enum Difficulty { kEasy = 0, kMedium = 1, kHard = 2 };
 int g_difficulty = kMedium;
 
 struct HistoryEntry {
-    Position pos;
     Move move;
     char text[8];
 };
 
 HistoryEntry g_history[kMaxHistory];
+// Posizione prima di g_history[0]: le mosse bastano a ricostruire ogni
+// posizione per l'undo, senza tenere una Position per voce.
+Position g_historyBase;
 int g_historyCount = 0;
 int g_historyScroll = 0;
 bool g_showHistory = false;
@@ -82,15 +84,24 @@ void moveToText(const Position& before, const Move& mv, char* out, size_t size) 
     }
 }
 
+Position positionAt(int count) {
+    Position pos = g_historyBase;
+    for (int i = 0; i < count; ++i) {
+        makeMove(pos, g_history[i].move);
+    }
+    return pos;
+}
+
 void pushHistory(const Position& before, const Move& mv) {
     if (g_historyCount >= kMaxHistory) {
+        // La base avanza con la mossa scartata, cosi' il replay resta valido.
+        makeMove(g_historyBase, g_history[0].move);
         for (int i = 1; i < kMaxHistory; ++i) {
             g_history[i - 1] = g_history[i];
         }
         --g_historyCount;
     }
     HistoryEntry& entry = g_history[g_historyCount++];
-    entry.pos = before;
     entry.move = mv;
     moveToText(before, mv, entry.text, sizeof(entry.text));
 }
@@ -407,8 +418,12 @@ Move chooseAiMove(const Position& pos, int difficulty) {
 }
 
 bool insufficientMaterial(const Position& pos) {
-    int whiteMinors = 0;
-    int blackMinors = 0;
+    int whiteBishops = 0;
+    int blackBishops = 0;
+    int whiteKnights = 0;
+    int blackKnights = 0;
+    int whiteBishopSq = -1;
+    int blackBishopSq = -1;
     for (int sq = 0; sq < 64; ++sq) {
         const char p = pos.board[sq];
         if (p == '.') {
@@ -418,15 +433,41 @@ bool insufficientMaterial(const Position& pos) {
         if (type == 'P' || type == 'R' || type == 'Q') {
             return false;
         }
-        if (type == 'N' || type == 'B') {
+        if (type == 'B') {
             if (isWhitePiece(p)) {
-                ++whiteMinors;
+                ++whiteBishops;
+                whiteBishopSq = sq;
             } else {
-                ++blackMinors;
+                ++blackBishops;
+                blackBishopSq = sq;
+            }
+        } else if (type == 'N') {
+            if (isWhitePiece(p)) {
+                ++whiteKnights;
+            } else {
+                ++blackKnights;
             }
         }
     }
-    return whiteMinors <= 1 && blackMinors <= 1;
+
+    const int whiteMinors = whiteBishops + whiteKnights;
+    const int blackMinors = blackBishops + blackKnights;
+    if (whiteMinors == 0 && blackMinors == 0) {
+        return true;  // K vs K
+    }
+    if (whiteMinors == 1 && blackMinors == 0) {
+        return true;  // K+B/K+N vs K
+    }
+    if (blackMinors == 1 && whiteMinors == 0) {
+        return true;  // K vs K+B/K+N
+    }
+    if (whiteBishops == 1 && blackBishops == 1) {
+        // Alfieri dello stesso colore: nessuna casa di promozione utile,
+        // quindi e' patta. Colori opposti possono ancora dare matto.
+        return ((rowOf(whiteBishopSq) + colOf(whiteBishopSq)) & 1) ==
+               ((rowOf(blackBishopSq) + colOf(blackBishopSq)) & 1);
+    }
+    return false;
 }
 
 bool positionEnded(const Position& pos, int& result) {
@@ -472,6 +513,7 @@ void runChess() {
         uint32_t thinkAt = 0;
         bool finished = false;
         int result = 0;
+        g_historyBase = pos;
         g_historyCount = 0;
         g_historyScroll = 0;
         g_showHistory = false;
@@ -558,7 +600,7 @@ void runChess() {
                 if (ev.ch == 'u' || ev.ch == 'U') {
                     if (g_historyCount >= 2) {
                         g_historyCount -= 2;
-                        pos = g_history[g_historyCount].pos;
+                        pos = positionAt(g_historyCount);
                         selected = -1;
                         if (g_historyCount > 0) {
                             lastFrom = g_history[g_historyCount - 1].move.from;

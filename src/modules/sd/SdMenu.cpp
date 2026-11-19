@@ -92,7 +92,9 @@ bool looksText(const std::string& path) {
 void showFile(const std::string& path) {
     navigation::waitRelease();
     std::string text;
-    if (!storage::readText(path, text, kMaxViewBytes, true)) {
+    // readText() e' false anche quando il file supera kMaxViewBytes: in quel
+    // caso mostra la parte letta invece di rifiutare il file.
+    if (!storage::readText(path, text, kMaxViewBytes, true) && text.empty()) {
         ui::message("Apri file", {"!Impossibile leggere il file.", path}, "SD > Sfoglia");
         return;
     }
@@ -130,7 +132,7 @@ void showFile(const std::string& path) {
             display::text(4, 25 + i * 9, lines[idx], display::kInk, 0);
         }
         char status[32];
-        std::snprintf(status, sizeof(status), "%d/%d  `=torna",
+        std::snprintf(status, sizeof(status), "%d/%d  ESC=torna",
                       std::min(top + rows, static_cast<int>(lines.size())),
                       static_cast<int>(lines.size()));
         display::footer(status);
@@ -184,7 +186,7 @@ void browse(const std::string& path) {
         }
     }
     menu.setGrid(3);
-    menu.setHint(truncated ? "solo 200 voci  `=indietro" : "`=indietro  ;.,/=nav  ENTER=apri");
+    menu.setHint(truncated ? "solo 200 voci  ESC=indietro" : "ESC=indietro  ;.,/=nav  ENTER=apri");
     menu.run(true);
     --depth;
 }
@@ -279,7 +281,7 @@ void runMenu() {
     menu.addItem("Backup", "backup", backupConfig);
     menu.addItem("Punteggi", "trophy", showScores);
     menu.setGrid(3);
-    menu.setHint("`=indietro  ;.,/=nav  ENTER=apri");
+    menu.setHint("ESC=indietro  ;.,/=nav  ENTER=apri");
     menu.run(true);
 }
 

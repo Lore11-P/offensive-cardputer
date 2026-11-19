@@ -135,31 +135,6 @@ uint16_t* s_fallbackBuffer = nullptr;
 bool s_fallbackMode = false;
 uint32_t s_spriteBytes = 0;
 
-constexpr int kIconSize = 32;
-constexpr int kIconCacheCount = 8;
-
-struct IconCacheEntry {
-    bool valid = false;
-    char id[20] = {0};
-    uint16_t pixels[kIconSize * kIconSize] = {0};
-};
-
-IconCacheEntry s_iconCache[kIconCacheCount];
-int s_iconEvict = 0;
-
-inline uint16_t read16(const uint8_t* p) {
-    return static_cast<uint16_t>(p[0] | (p[1] << 8));
-}
-
-inline uint32_t read32(const uint8_t* p) {
-    return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
-           (static_cast<uint32_t>(p[2]) << 16) | (static_cast<uint32_t>(p[3]) << 24);
-}
-
-inline uint16_t toRgb565(uint8_t r, uint8_t g, uint8_t b) {
-    return static_cast<uint16_t>(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
-}
-
 void releaseFallbackBuffer() {
     if (s_fallbackBuffer != nullptr) {
         heap_caps_free(s_fallbackBuffer);
@@ -211,88 +186,6 @@ bool ensureSprite(int w, int h) {
                      static_cast<unsigned>(dmaFree / 1024));
     }
     return s_spriteOk;
-}
-
-IconCacheEntry* findIcon(const char* id) {
-    for (auto& entry : s_iconCache) {
-        if (entry.valid && std::strncmp(entry.id, id, sizeof(entry.id) - 1) == 0) {
-            return &entry;
-        }
-    }
-    return nullptr;
-}
-
-// Decodifica BMP 32x32 24/32 bit (formato usato dagli asset in /icons).
-bool decodeBmp32(const char* path, uint16_t* out) {
-    File f = storage::openRead(path);
-    if (!f) {
-        return false;
-    }
-    uint8_t header[54] = {0};
-    if (f.read(header, sizeof(header)) != sizeof(header) || header[0] != 'B' || header[1] != 'M') {
-        f.close();
-        return false;
-    }
-    const uint32_t dataOffset = read32(header + 10);
-    const int32_t width = static_cast<int32_t>(read32(header + 18));
-    const int32_t rawHeight = static_cast<int32_t>(read32(header + 22));
-    const uint16_t bpp = read16(header + 28);
-    const uint32_t compression = read32(header + 30);
-
-    const int32_t absHeight = rawHeight < 0 ? -rawHeight : rawHeight;
-    if (width != kIconSize || absHeight != kIconSize || (bpp != 24 && bpp != 32) ||
-        compression != 0) {
-        f.close();
-        return false;
-    }
-
-    const bool topDown = rawHeight < 0;
-    const int32_t height = absHeight;
-    const int bytesPerPixel = bpp / 8;
-    const int rowSize = ((width * bytesPerPixel + 3) / 4) * 4;
-    std::vector<uint8_t> row(static_cast<size_t>(rowSize));
-
-    for (int y = 0; y < height; ++y) {
-        const int srcRow = topDown ? y : (height - 1 - y);
-        if (!f.seek(dataOffset + static_cast<uint32_t>(srcRow) * rowSize)) {
-            f.close();
-            return false;
-        }
-        const size_t got = f.read(row.data(), static_cast<size_t>(rowSize));
-        if (got != static_cast<size_t>(rowSize)) {
-            f.close();
-            return false;
-        }
-        for (int x = 0; x < width; ++x) {
-            const uint8_t* px = row.data() + x * bytesPerPixel;
-            out[static_cast<size_t>(y) * kIconSize + x] = toRgb565(px[2], px[1], px[0]);
-        }
-    }
-    f.close();
-    return true;
-}
-
-bool loadIcon(const std::string& id, uint16_t* out) {
-    if (id.empty()) {
-        return false;
-    }
-    IconCacheEntry* cached = findIcon(id.c_str());
-    if (cached) {
-        std::memcpy(out, cached->pixels, sizeof(cached->pixels));
-        return true;
-    }
-
-    std::string path = "/icons/" + id + ".bmp";
-    if (!decodeBmp32(path.c_str(), out)) {
-        return false;
-    }
-
-    IconCacheEntry& entry = s_iconCache[s_iconEvict];
-    s_iconEvict = (s_iconEvict + 1) % kIconCacheCount;
-    entry.valid = true;
-    std::snprintf(entry.id, sizeof(entry.id), "%s", id.c_str());
-    std::memcpy(entry.pixels, out, sizeof(entry.pixels));
-    return true;
 }
 
 void arrow(int x, int y, int s, uint16_t color, int dir) {
@@ -804,6 +697,26 @@ uint32_t s_battSampleAt = 0;
 uint8_t s_battRise = 0;
 bool s_battCharging = false;
 
+// Cache delle letture di tensione/livello/carica: sono letture lente e non
+// cambiano abbastanza da giustificarne una a ogni frame.
+constexpr uint32_t kBattCacheMs = 2000;
+uint32_t s_battReadAt = 0;
+bool s_battReadValid = false;
+bool s_battExplicit = false;
+int s_battLevel = -1;
+uint32_t s_battLevelAt = 0;
+bool s_battLevelValid = false;
+
+int batteryLevelCached() {
+    const uint32_t now = millis();
+    if (!s_battLevelValid || now - s_battLevelAt >= kBattCacheMs) {
+        s_battLevel = static_cast<int>(M5Cardputer.Power.getBatteryLevel());
+        s_battLevelAt = now;
+        s_battLevelValid = true;
+    }
+    return s_battLevel;
+}
+
 }  // namespace
 
 void resetChargingDetector() {
@@ -811,25 +724,38 @@ void resetChargingDetector() {
     s_battSampleAt = 0;
     s_battRise = 0;
     s_battCharging = false;
+    s_battReadAt = 0;
+    s_battReadValid = false;
+    s_battExplicit = false;
+    s_battLevelAt = 0;
+    s_battLevelValid = false;
 }
 
 bool chargingLikely() {
+    // Controlla il tempo PRIMA di toccare il PMIC/ADC.
+    const uint32_t now = millis();
+    if (s_battReadValid && now - s_battReadAt < kBattCacheMs) {
+        return s_battExplicit || s_battCharging;
+    }
+    s_battReadAt = now;
+    s_battReadValid = true;
+
     // Solo lo stato esplicito "in carica" e' affidabile: su Cardputer/ADV
     // isCharging() ritorna charge_unknown, che come bool sarebbe sempre vero.
-    if (M5Cardputer.Power.isCharging() == m5::Power_Class::is_charging) {
+    s_battExplicit = (M5Cardputer.Power.isCharging() == m5::Power_Class::is_charging);
+    if (s_battExplicit) {
         return true;
     }
     const int16_t mv = M5Cardputer.Power.getBatteryVoltage();
     if (mv <= 0) {
         return false;
     }
-    const uint32_t now = millis();
     if (s_battBaseline < 0) {
         s_battBaseline = mv;
         s_battSampleAt = now;
         return false;
     }
-    if (now - s_battSampleAt < 2000) {
+    if (now - s_battSampleAt < kBattCacheMs) {
         return s_battCharging;
     }
     s_battSampleAt = now;
@@ -864,7 +790,7 @@ bool chargingLikely() {
 
 void drawBatteryWidget(int right, int y) {
     auto& d = g();
-    const int level = static_cast<int>(M5Cardputer.Power.getBatteryLevel());
+    const int level = batteryLevelCached();
     const bool charging = chargingLikely();
     const int percent = level < 0 ? -1 : std::min(level, 100);
 
@@ -956,10 +882,34 @@ void footer(const std::string& hint, const std::string& trailing) {
     // Segmento d'accento: la "riga di stato" del computer di bordo.
     d.fillRect(0, h - 12, 14, 1, C(T_acc));
     d.drawPixel(4, h - 7, C(T_acc));
-    text(9, h - 10, hint, C(T_dim), 0);
+
+    // Lo hint non deve finire sotto il trailing (o il LED): se non entra,
+    // viene troncato con l'ellissi invece di sovrapporsi.
+    auto clipped = [&](const std::string& s, int maxWidth) {
+        if (textWidth(s, 0) <= maxWidth) {
+            return s;
+        }
+        std::string out = s;
+        while (!out.empty() && textWidth(out + "..", 0) > maxWidth) {
+            out.pop_back();
+        }
+        return out + "..";
+    };
+
+    constexpr int kHintX = 9;
+    constexpr int kGap = 4;
     if (!trailing.empty()) {
-        text(width() - 6 - textWidth(trailing, 0), h - 10, trailing, C(T_acc), 0);
+        const int trailingX = width() - 6 - textWidth(trailing, 0);
+        const int hintMax = trailingX - kGap - kHintX;
+        if (hintMax >= textWidth("..", 0)) {
+            text(kHintX, h - 10, clipped(hint, hintMax), C(T_dim), 0);
+        }
+        text(trailingX, h - 10, trailing, C(T_acc), 0);
         return;
+    }
+    const int hintMax = width() - kHintX - 12;  // spazio per il LED a destra
+    if (hintMax >= textWidth("..", 0)) {
+        text(kHintX, h - 10, clipped(hint, hintMax), C(T_dim), 0);
     }
     // LED di stato pulsante.
     const bool blink = (millis() / 700) % 2 == 0;
@@ -968,25 +918,11 @@ void footer(const std::string& hint, const std::string& trailing) {
 
 void drawIcon(const std::string& icon, int x, int y, int size) {
     size = std::max(8, std::min(32, size));
-    // Prima le icone procedurali Orbit: nessun asset, stessa estetica in ogni
-    // tema. I BMP restano come riserva per id non ancora mappati.
+    // Icone procedurali Orbit: nessun asset, stessa estetica in ogni tema.
     if (drawOrbitIcon(icon, x, y, size)) {
         return;
     }
-    static uint16_t src[kIconSize * kIconSize];
-    if (loadIcon(icon, src)) {
-        static uint16_t scaled[32 * 32];
-        for (int ty = 0; ty < size; ++ty) {
-            const int sy = ty * kIconSize / size;
-            for (int tx = 0; tx < size; ++tx) {
-                const int sx = tx * kIconSize / size;
-                scaled[ty * size + tx] = src[sy * kIconSize + sx];
-            }
-        }
-        g().pushImage(x, y, size, size, scaled);
-    } else {
-        drawFallbackIcon(icon, x, y, size);
-    }
+    drawFallbackIcon(icon, x, y, size);
 }
 
 namespace {
@@ -997,6 +933,9 @@ bool bootFrames(uint32_t ms, Fn&& draw) {
     const uint32_t start = millis();
     uint32_t frame = 0;
     for (;;) {
+        // Aggiorna la tastiera: senza questo isPressed() vede lo stato vecchio
+        // e lo splash non e' saltabile.
+        navigation::update();
         const uint32_t now = millis();
         const uint32_t elapsed = now - start;
         if (elapsed >= ms) {

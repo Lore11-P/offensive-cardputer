@@ -1,6 +1,6 @@
 {
-  "name": "CardputerFirmware v1.1.0 (offensiva)",
-  "version": "1.1.0",
+  "name": "ORBIT OS v1.2.0 (offensiva)",
+  "version": "1.2.0",
   "new_install_prompt_erase": true,
   "builds": [
     {

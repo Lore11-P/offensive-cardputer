@@ -8,8 +8,8 @@
 // In questa modalita' i tasti sono letterali: anche ';' '.' ',' '/' vengono
 // inseriti come caratteri, perche' SSID e password possono contenerli. Le
 // frecce non sono disponibili mentre si scrive: si usa ENTER per confermare
-// (o passare al campo successivo) e backtick per cancellare un carattere.
-// Con il campo vuoto, backtick annulla e torna indietro.
+// (o passare al campo successivo), ESC per annullare e tornare indietro e
+// DEL per cancellare (con auto-repeat).
 namespace textinput {
 
 struct Field {
@@ -20,7 +20,7 @@ struct Field {
     bool numeric = false;  // accetta solo 0-9, '.' e '-'
 };
 
-// Ritorna false se l'utente annulla (backtick su campo vuoto).
+// Ritorna false se l'utente annulla (ESC).
 bool edit(const std::string& title, const std::string& parent,
           std::vector<Field>& fields);
 

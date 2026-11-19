@@ -144,7 +144,7 @@ void drawPlayer(const Track& track, bool paused, bool waiting) {
     display::textCentered(100, "volume " + std::to_string(audioout::volume()) + "/21",
                           display::kTextDim, 0);
     display::text(6, 112, shortened(track.path, 38), display::kTextDim, 0);
-    display::footer("ENTER=pausa  ,/=brano  ;.=vol  `=esci");
+    display::footer("ENTER=pausa  ,/=brano  ;.=vol  ESC=esci");
     display::push();
 }
 
@@ -255,7 +255,7 @@ void runMenu() {
         }
     }
 
-    menu.setHint("ENTER=apri  `=indietro");
+    menu.setHint("ENTER=apri  ESC=indietro");
     menu.run(true);
 }
 

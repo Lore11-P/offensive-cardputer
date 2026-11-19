@@ -5,6 +5,7 @@
 #include <Arduino.h>
 #include <NimBLEDevice.h>
 #include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 #include <freertos/task.h>
 
 #include <algorithm>
@@ -34,6 +35,27 @@ struct GattLine {
 
 GattLine g_lines[kMaxGattLines];
 int g_lineCount = 0;
+// Il worker di enumerazione puo' restare vivo dopo un timeout della UI: le
+// voci condivise vanno sempre lette e scritte sotto lo stesso lock, altrimenti
+// un worker orfano puo' sforare il limite o far leggere una riga a meta'.
+SemaphoreHandle_t g_linesMtx = nullptr;
+// true finche' il worker precedente non ha davvero chiuso il client.
+volatile bool g_jobActive = false;
+
+void linesLock() {
+  if (g_linesMtx == nullptr) {
+    g_linesMtx = xSemaphoreCreateMutex();
+  }
+  if (g_linesMtx != nullptr) {
+    xSemaphoreTake(g_linesMtx, portMAX_DELAY);
+  }
+}
+
+void linesUnlock() {
+  if (g_linesMtx != nullptr) {
+    xSemaphoreGive(g_linesMtx);
+  }
+}
 
 struct GattJob {
   DeviceSummary target;
@@ -84,7 +106,9 @@ std::string propertyString(NimBLERemoteCharacteristic* characteristic) {
 }
 
 void appendLine(const std::string& text, uint8_t kind) {
+  linesLock();
   if (g_lineCount >= kMaxGattLines) {
+    linesUnlock();
     return;
   }
   std::snprintf(g_lines[g_lineCount].text,
@@ -92,6 +116,7 @@ void appendLine(const std::string& text, uint8_t kind) {
   g_lines[g_lineCount].kind = kind;
   ++g_lineCount;
   g_job.lineCount = g_lineCount;
+  linesUnlock();
 }
 
 bool releaseClient(NimBLEClient* client) {
@@ -118,6 +143,7 @@ void gattWorker(void*) {
     g_job.phase = 2;
     g_job.heapAfter = ESP.getFreeHeap();
     g_job.done = true;
+    g_jobActive = false;
     vTaskDelete(nullptr);
     return;
   }
@@ -129,6 +155,7 @@ void gattWorker(void*) {
     g_job.phase = 2;
     g_job.heapAfter = ESP.getFreeHeap();
     g_job.done = true;
+    g_jobActive = false;
     vTaskDelete(nullptr);
     return;
   }
@@ -147,6 +174,7 @@ void gattWorker(void*) {
     g_job.phase = 2;
     g_job.heapAfter = ESP.getFreeHeap();
     g_job.done = true;
+    g_jobActive = false;
     vTaskDelete(nullptr);
     return;
   }
@@ -160,7 +188,7 @@ void gattWorker(void*) {
       if (g_job.abortRequested) {
         break;
       }
-      if (g_lineCount >= kMaxGattLines ||
+      if (g_job.lineCount >= kMaxGattLines ||
           g_job.serviceCount >= kMaxServices) {
         truncated = true;
         break;
@@ -175,7 +203,7 @@ void gattWorker(void*) {
           if (g_job.abortRequested) {
             break;
           }
-          if (g_lineCount >= kMaxGattLines) {
+          if (g_job.lineCount >= kMaxGattLines) {
             truncated = true;
             break;
           }
@@ -195,6 +223,7 @@ void gattWorker(void*) {
   releaseClient(client);
   g_job.heapAfter = ESP.getFreeHeap();
   g_job.done = true;
+  g_jobActive = false;
   vTaskDelete(nullptr);
 }
 
@@ -208,7 +237,7 @@ void drawDiscovery(uint32_t elapsed, int found) {
                        display::kInfo);
   display::textCentered(78, "Trovati: " + std::to_string(found),
                         display::kText, 2);
-  display::footer("` = annulla");
+  display::footer("ESC = annulla");
   display::push();
 }
 
@@ -255,7 +284,10 @@ void drawGattProgress(const DeviceSummary& target, uint32_t elapsedMs,
 
 void showGattResults(const DeviceSummary& target, bool truncated,
                      uint32_t heapAfter) {
-  if (g_lineCount == 0) {
+  linesLock();
+  const int initialCount = g_lineCount;
+  linesUnlock();
+  if (initialCount == 0) {
     ui::message("Servizi GATT",
                 {"!Nessun servizio o caratteristica.", "Il peer potrebbe",
                  "richiedere accoppiamento o non esporre GATT."},
@@ -273,12 +305,24 @@ void showGattResults(const DeviceSummary& target, bool truncated,
     if (ev.type == navigation::Event::Back) {
       break;
     }
+    // Il worker orfano puo' ancora accodare voci: la lettura va sotto lock.
+    linesLock();
+    GattLine visible[kVisible];
+    const int lineCount = g_lineCount;
     if (ev.type == navigation::Event::Up && top > 0) {
       --top;
     } else if (ev.type == navigation::Event::Down &&
-               top + kVisible < g_lineCount) {
+               top + kVisible < lineCount) {
       ++top;
     }
+    for (int row = 0; row < kVisible; ++row) {
+      const int index = top + row;
+      if (index >= lineCount) {
+        break;
+      }
+      visible[row] = g_lines[index];
+    }
+    linesUnlock();
 
     display::clear();
     display::header("Servizi GATT", "BLE+");
@@ -290,17 +334,16 @@ void showGattResults(const DeviceSummary& target, bool truncated,
                       (truncated ? "  ~" : ""),
                   display::kAccent, 0);
     for (int row = 0; row < kVisible; ++row) {
-      const int index = top + row;
-      if (index >= g_lineCount) {
+      if (top + row >= lineCount) {
         break;
       }
       const int y = 45 + row * kRowH;
-      display::text(4, y, g_lines[index].text,
-                    g_lines[index].kind == 0 ? display::kAccent
-                                             : display::kText,
+      display::text(4, y, visible[row].text,
+                    visible[row].kind == 0 ? display::kAccent
+                                           : display::kText,
                     0);
     }
-    display::footer("S/N=scorri  `=esci");
+    display::footer("S/N=scorri  ESC=esci");
     display::push();
     delay(30);
   }
@@ -373,9 +416,20 @@ void runGattEnum() {
                 "BLE+");
     return;
   }
+  // g_job e' unico: se il worker di un giro precedente e' ancora vivo (timeout
+  // della UI) non si puo' sovrascrivere il target sotto i suoi piedi.
+  if (g_jobActive) {
+    ui::message("Servizi GATT",
+                {"!Enumerazione precedente ancora attiva.",
+                 "Attendi che il client si chiuda."},
+                "BLE+");
+    return;
+  }
 
   const uint32_t heapBefore = ESP.getFreeHeap();
+  linesLock();
   g_lineCount = 0;
+  linesUnlock();
   g_job.target = target;
   g_job.done = false;
   g_job.abortRequested = false;
@@ -391,8 +445,10 @@ void runGattEnum() {
 
   navigation::waitRelease();
   TaskHandle_t worker = nullptr;
+  g_jobActive = true;
   if (xTaskCreate(gattWorker, "ble_gatt", kWorkerStack, nullptr, 1, &worker) !=
       pdPASS) {
+    g_jobActive = false;
     ui::message("Servizi GATT",
                 {"!Task client non avviabile.", "Memoria insufficiente."},
                 "BLE+");
@@ -457,12 +513,15 @@ void runGattEnum() {
     return;
   }
 
-  for (int i = 0; i < g_lineCount; ++i) {
+  linesLock();
+  const int lineTotal = g_lineCount;
+  for (int i = 0; i < lineTotal; ++i) {
     Serial.println(g_lines[i].text);
   }
+  linesUnlock();
   logger::info("GATT: %d servizi, %d caratteristiche, %d voci, heap %u -> %u",
                static_cast<int>(g_job.serviceCount),
-               static_cast<int>(g_job.charCount), g_lineCount,
+               static_cast<int>(g_job.charCount), lineTotal,
                static_cast<unsigned>(heapBefore),
                static_cast<unsigned>(heapAfter));
 

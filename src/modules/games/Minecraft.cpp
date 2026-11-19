@@ -16,10 +16,12 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <new>
 
 #include "Display.h"
 #include "ModuleFlags.h"
 #include "Navigation.h"
+#include "Ui.h"
 
 #if ENABLE_MODULE_GAMES
 
@@ -68,8 +70,9 @@ const uint16_t kSkyTop = rgb(42, 88, 148);
 const uint16_t kSkyHorizon = rgb(178, 206, 228);
 const uint16_t kFogColor = kSkyHorizon;
 
-uint8_t g_height[kWorldD][kWorldW];
-uint8_t g_block[kWorldD][kWorldW];
+// Mondo su heap: 8 KB in .bss solo mentre la partita e' aperta.
+uint8_t (*g_height)[kWorldW] = nullptr;
+uint8_t (*g_block)[kWorldW] = nullptr;
 
 struct Player {
     float x = 32.0f;
@@ -666,6 +669,18 @@ void runMinecraft() {
     }
     navigation::waitRelease();
 
+    g_height = new (std::nothrow) uint8_t[kWorldD][kWorldW];
+    g_block = new (std::nothrow) uint8_t[kWorldD][kWorldW];
+    if (g_height == nullptr || g_block == nullptr) {
+        delete[] g_height;
+        delete[] g_block;
+        g_height = nullptr;
+        g_block = nullptr;
+        ui::message("Minecraft", {"Memoria insufficiente per il mondo."},
+                    "Giochi");
+        return;
+    }
+
     startRun(esp_random());
     uint32_t lastFrame = millis();
     uint32_t lastDraw = 0;
@@ -701,6 +716,11 @@ void runMinecraft() {
         }
         delay(2);
     }
+
+    delete[] g_height;
+    delete[] g_block;
+    g_height = nullptr;
+    g_block = nullptr;
 }
 
 }  // namespace games

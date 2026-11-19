@@ -115,7 +115,7 @@ void drawDiscovery(uint32_t elapsed, int found) {
   display::textCentered(78, "Trovati: " + std::to_string(found),
                         display::kText, 2);
   display::textCentered(96, "Nome o OUI noto", display::kTextDim, 0);
-  display::footer("` = annulla");
+  display::footer("ESC = annulla");
   display::push();
 }
 
@@ -164,7 +164,7 @@ void drawTracker(const std::string& name, const std::string& address,
                 display::kTextDim, 0);
   display::text(196, 112, "visti " + std::to_string(hits),
                 display::kTextDim, 0);
-  display::footer("ENTER=muto  `=stop");
+  display::footer("ENTER=muto  ESC=stop");
   display::push();
 }
 

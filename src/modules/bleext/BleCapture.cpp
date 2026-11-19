@@ -243,7 +243,7 @@ void drawCapture(uint32_t elapsed, const char* csvPath, const char* pcapPath) {
                 display::kTextDim, 0);
   display::text(8, 114, std::string("PCAP: ") + pcapPath,
                 display::kTextDim, 0);
-  display::footer("` = interrompi");
+  display::footer("ESC = interrompi");
   display::push();
 }
 

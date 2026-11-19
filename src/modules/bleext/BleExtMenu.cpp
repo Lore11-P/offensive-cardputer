@@ -21,7 +21,7 @@ void runMenu() {
   menu.addSeparator("Registrazione");
   menu.addItem("Wardriving", "sd", [] { runWardrivingMenu(); });
   menu.addItem("Cattura BLE", "sd", [] { runBleCapture(); });
-  menu.setHint("`=indietro  ;.=nav  ENTER=apri");
+  menu.setHint("ESC=indietro  ;.=nav  ENTER=apri");
   menu.run(true);
 }
 

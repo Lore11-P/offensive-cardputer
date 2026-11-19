@@ -1,4 +1,4 @@
-# CardputerFirmware v1.1
+# ORBIT OS v1.2
 
 Firmware modulare per **M5Stack Cardputer ADV** (ESP32-S3FN8, 8 MB flash, **senza PSRAM**), scritto in C++17 con PlatformIO/Arduino. Interfaccia a menu con icone, navigazione da tastiera e moduli attivabili/disattivabili a runtime.
 
@@ -11,7 +11,7 @@ Firmware modulare per **M5Stack Cardputer ADV** (ESP32-S3FN8, 8 MB flash, **senz
 |---|---|---|
 | Menu principale / UI / navigazione | ✅ | Carosello orizzontale a icone con animazione, griglia, breadcrumb e liste scrollabili |
 | Impostazioni | ✅ | Luminosità, rotazione, **spegnimento automatico**, info dispositivo, **rete WiFi** (scansione + password), moduli on/off, export/import JSON, reset |
-| Giochi | ✅ | Tetris, Breakout, Pac-Man, Doom Lite, Snake, Pong, 2048, Flappy, Simon, Minesweeper, Connect 4, Scacchi e Minecraft 3D (gli altri giochi con record su SD) |
+| Giochi | ✅ | Tetris, Breakout, Pac-Man, Doom Lite, Snake, Pong, 2048, Flappy, Simon, Minesweeper, Connect 4, Scacchi, Minecraft 3D, StarSweep, Lander, Orbital e Pixel Jump (record su SD) |
 | Infrarossi | ✅ | Parser `.ir` Flipper, ricerca per nome, preferiti, ripresa ultimo telecomando, tasti rapidi, scanner Power, TV-B-Gone, jammer opzionale, learn disabilitato |
 | BLE | ✅ | Scanner passivo/attivo, spam Random/Samsung/Google/Windows opzionale |
 | Chat BLE | ✅ | Messaggi cifrati AES e filtrati per destinatario, notifiche di presenza, nickname unico e cronologia locale |

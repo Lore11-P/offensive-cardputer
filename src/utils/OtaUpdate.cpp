@@ -48,7 +48,7 @@ void drawProgress(const std::string& status, float fraction, const std::string& 
     if (!detail.empty()) {
         display::text(14, 106, detail, display::C(display::T_dim), 0);
     }
-    display::footer("` = annulla");
+    display::footer("ESC = annulla");
     display::push();
 }
 
@@ -90,14 +90,17 @@ void run(const std::string& parent) {
     drawProgress("Connessione a GitHub", 0.0f, "", parent);
 
     WiFiClientSecure client;
-    // Il firmware non e' firmato: il canale e' cifrato (TLS) ma senza pinning
-    // di una CA. L'URL e' fisso nel repository del progetto.
+    // shortcut: nessuna verifica di integrita'/autenticazione. TLS e' cifrato
+    // ma senza CA pinnata (setInsecure accetta qualsiasi certificato) e il
+    // binario non viene confrontato con un hash firmato. Per chiuderlo servono
+    // una CA pinnata e un SHA-256 pubblicato e firmato (es. Ed25519),
+    // verificato sul buffer scaricato prima di Update.end(true).
     client.setInsecure();
 
     HTTPClient http;
     http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
     http.setTimeout(kHttpTimeoutMs);
-    http.setUserAgent("CardputerFirmware-OTA");
+    http.setUserAgent("ORBIT-OS-OTA");
 
     if (!http.begin(client, kFirmwareUrl)) {
         fail("Aggiornamento", {"!URL firmware non valido.", "Verifica OtaUpdate.cpp."}, parent);
