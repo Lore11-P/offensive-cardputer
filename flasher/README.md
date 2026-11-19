@@ -1,4 +1,4 @@
-# Flasher ORBIT OS v1.20.0
+# Flasher ORBIT OS v1.21.0
 
 Pacchetto pronto all'uso per installare il firmware su M5Stack Cardputer ADV
 (ESP32-S3, 8 MB flash) senza compilare nulla. Include 307 telecomandi IR,

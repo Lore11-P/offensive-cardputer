@@ -248,7 +248,14 @@ private:
 void drawCover(const Cover& cover, int x, int y) {
     auto& d = display::g();
     if (cover.ready()) {
-        d.pushImage(x, y, kCoverSide, kCoverSide, cover.pixels());
+        // drawPixel passa dalla conversione colore del display: pushImage
+        // riswappa i 16 bit e inverte i canali RGB della cover.
+        const uint16_t* px = cover.pixels();
+        for (int row = 0; row < kCoverSide; ++row) {
+            for (int col = 0; col < kCoverSide; ++col) {
+                d.drawPixel(x + col, y + row, px[row * kCoverSide + col]);
+            }
+        }
         d.drawRect(x - 1, y - 1, kCoverSide + 2, kCoverSide + 2,
                    display::C(display::T_line));
         return;
