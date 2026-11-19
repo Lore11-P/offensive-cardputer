@@ -1,4 +1,4 @@
-# ORBIT OS v1.2
+# ORBIT OS v1.20
 
 Firmware modulare per **M5Stack Cardputer ADV** (ESP32-S3FN8, 8 MB flash, **senza PSRAM**), scritto in C++17 con PlatformIO/Arduino. Interfaccia a menu con icone, navigazione da tastiera e moduli attivabili/disattivabili a runtime.
 
@@ -18,7 +18,7 @@ Firmware modulare per **M5Stack Cardputer ADV** (ESP32-S3FN8, 8 MB flash, **senz
 | Wi-Fi | ✅ | Scanner reti, deauth/evil twin/evil portal opzionali |
 | Radar Wi-Fi/BLE | ✅ | Finder BLE hot/cold con HUD stile contatore Geiger, radar PPI, vista banda 2.4 GHz con TDM Wi-Fi/BLE, presenza CSI sperimentale |
 | Web Radio | ✅ | 5 stazioni HTTP MP3 con decoder ESP32-audioI2S, volume, stato; usa il bus I2S dello speaker |
-| Musica | ✅ | Lettore MP3/WAV/FLAC da `/music` sulla microSD: lista brani, pausa, cambio traccia, volume, barra di avanzamento; decoder condiviso con la web radio |
+| Musica | ✅ | Lettore MP3/WAV/FLAC/OGG/M4A da `/data/Music` sulla microSD: album, cover 64x64 opzionale, pausa, cambio traccia, volume, barra di avanzamento; decoder condiviso con la web radio |
 | Capture | ✅ | Browser PCAP on-device, export hashcat hc22000 (PMKID/EAPOL) e pcap dei soli EAPOL |
 | BLE+ | ✅ | AirTag/FindMy, Flipper finder, enumerazione GATT, skimmer detect, wardriving CSV, cattura BLE (CSV + pcap 251) |
 | BadUSB | ✅ solo env `hid` | Script Ducky/Flipper da `/badusb`, tastiera HID via TinyUSB (nessun mouse) |
@@ -55,16 +55,23 @@ Firmware modulare per **M5Stack Cardputer ADV** (ESP32-S3FN8, 8 MB flash, **senz
 
 ## Musica (MP3 locali)
 
-Il menu **Musica** riproduce i file audio nella cartella `/music` della microSD
-(`WAV`, `FLAC`, `M4A`, `AAC`, `OGG`/`OPUS` sono accettati; la SD e' il supporto
-consigliato per la capacita'). Se la SD non e' montata viene usata `/music` su
-LittleFS, utile solo per pochi file di prova.
+Il menu **Musica** mostra prima gli album presenti in `/data/Music` della
+microSD: ogni sottocartella e' un album e i file audio sciolti nella root
+compaiono nella voce **Senza album**. `WAV`, `FLAC`, `M4A`, `AAC`, `OGG`/`OPUS`
+sono accettati; la SD e' il supporto consigliato per la capacita'. Se la SD non
+e' montata viene usata `/data/Music` su LittleFS, utile solo per pochi file di
+prova.
 
-Tasti nel lettore: `ENTER` pausa/riprendi, `,`/`/` brano precedente/successivo,
-`;`/`.` volume, `` ` `` esce. A fine brano passa da solo al successivo.
+Dentro un album la cover opzionale e' `cover.cvr`: 64x64 pixel in RGB565
+little-endian, 8192 byte esatti (4096 pixel x 2 byte). Senza cover il lettore
+disegna un segnaposto procedurale.
 
-Per aggiungere brani copia i file nella cartella `/music` della microSD dal PC: il
-lettore non scarica nulla dalla rete.
+Tasti: nell'elenco album `ENTER` apre l'album e `` ` `` torna indietro; nel
+lettore `ENTER` pausa/riprendi, `,`/`/` brano precedente/successivo, `;`/`.`
+volume, `` ` `` esce. A fine brano passa da solo al successivo.
+
+Per aggiungere brani copia i file sulla microSD dal PC in
+`/data/Music/<Album>/`: il lettore non scarica nulla dalla rete.
 
 ## Capture (analisi catture 802.11)
 

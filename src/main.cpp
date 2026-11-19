@@ -1,5 +1,5 @@
 // ============================================================================
-//  ORBIT OS v1.2.0 - entry point
+//  ORBIT OS v1.20.0 - entry point
 //  M5Stack Cardputer ADV (ESP32-S3FN8, 8 MB flash)
 //
 //  Menu principale -> moduli separati. Ogni modulo e' compilabile a parte con
