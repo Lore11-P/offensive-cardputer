@@ -14,28 +14,38 @@ Nessun file condiviso modificato (`main.cpp`, `platformio.ini`, `ModuleFlags.h`,
   - scansione AP sui canali 1-13 (country IT forzato, radio in STA + promiscuo);
   - selezione multipla di massimo **3 target** in RAM;
   - invio di auth open system e assoc request (RSN WPA2-PSK/CCMP) con MAC STA
-    locale casuale per target;
+    locale casuale per target; il ritorno di `esp_wifi_80211_tx` è controllato
+    e i TX rifiutati sono contati (`KO`) e mostrati a fine sessione;
   - cattura dei frame data con un anello statico di 6 slot da 512 byte
-    (nessun buffer da 64 KB), parsing EAPOL sul task principale;
+    (nessun buffer da 64 KB), filtrato già nel callback per BSSID target e
+    solo EAPOL-Key;
   - accettazione del solo M1 (`pairwise && ack && !MIC`) che contenga un IE
     vendor `00:0F:AC:04` con 16 byte di PMKID reali;
   - salvataggio `/wifilab/pmkid/<bssid>.hc22000` (riga `WPA*01*...`) e
     `/wifilab/pmkid/<bssid>.pcap` (linktype 105, beacon/probe response del
-    target + frame EAPOL);
+    target + frame EAPOL); flush ed errori SD sono verificati;
+  - il vecchio `.hc22000` dello stesso BSSID viene rimosso all'avvio del
+    target e la rimozione è verificata: se il file resta, la sessione viene
+    annullata. Un esito negativo non può sembrare un nuovo successo;
   - stato per target: `cerco`, `M1`, `senza ESSID`, `trovato`, `n/d`;
   - stop/drenaggio del promiscuo e chiusura file all'uscita.
 - **Client Monitor**
-  - scelta dell'AP, canale fisso sull'AP;
+  - scelta dell'AP, canale fisso sull'AP; la scansione AP di questo percorso è
+    **passiva** (nessuna probe request), quindi non richiede un avviso legale;
   - raccolta client dai frame data (toDS/fromDS, QoS escluso il vettore di
     indirizzi non valido), tabella statica di 16 client con MAC, RSSI, numero
     frame e ultimo avvistamento;
+  - aging a 120 s e sostituzione del client visto meno di recente quando la
+    tabella è piena (niente scarto silenzioso definitivo);
   - lookup OUI locale per i vendor più comuni (Apple, Samsung, Intel,
     Espressif, Huawei, Xiaomi, TP-Link, Cisco, Google, Amazon, Microsoft,
     Raspberry, Sonos, Nintendo, Sony, LG, Netgear, Asus, Ubiquiti, Philips,
     D-Link); MAC locally-administered mostrato come `random`;
-  - deauth del **solo client selezionato** (DA = client, SA/BSSID = AP),
-    rifiutata se il client non è più in tabella o non è stato visto negli
-    ultimi 10 s. Nessun frame broadcast: gli altri client non vengono toccati.
+  - deauth del **solo client selezionato** (DA = client, SA/BSSID = AP), con
+    identità del client tenuta per MAC (l'aging può compattare la tabella);
+    dopo l'avviso legale viene fatto un drain e un nuovo `findClient()` con
+    finestra di 5 s, senza riusare la copia pre-avviso. Nessun frame broadcast:
+    gli altri client non vengono toccati.
 - **Whitelist**
   - file `/wifilab/whitelist.txt`, una voce per riga: `BSSID|SSID`, `BSSID|`,
     `|SSID`; righe `#` ignorate;
@@ -44,25 +54,35 @@ Nessun file condiviso modificato (`main.cpp`, `platformio.ini`, `ModuleFlags.h`,
     confronto SSID ignora maiuscole/minuscole (scelta conservativa: meglio
     escludere una rete in più che attaccarne una protetta);
   - massimo 24 voci, file massimo 4 KB;
-  - **fail-closed**: file assente, > 4 KB, con righe malformate o con più di
-    24 voci valide ⇒ `g_whiteReady = false` e PMKID/deauth bloccati, perché
-    non è possibile garantire l'esclusione;
+  - **fail-closed**: file assente, > 4 KB, con righe malformate, BSSID non
+    valido (zero/broadcast) o con più di 24 voci valide ⇒
+    `g_whiteReady = false` e PMKID/deauth bloccati, perché non è possibile
+    garantire l'esclusione;
+  - una voce solo-SSID blocca anche gli AP nascosti (non si può dimostrare che
+    non siano la rete protetta);
   - un AP whitelisted (per BSSID o per SSID) non viene mai selezionato per
     PMKID e non riceve auth/assoc/deauth; il controllo è ripetuto anche
-    all'avvio del target e in `deauthClient`.
-  - aggiunta di un AP dalla UI (crea il file) e creazione esplicita di un file
-    vuoto con conferma (`N`).
+    all'avvio del target e in `deauthClient`;
+  - aggiunta di un AP dalla UI con scansione **passiva**; se il file esiste ma
+    non è leggibile per intero, `addWhitelistEntry` abortisce invece di
+    riscriverlo perdendo le protezioni; controlla il limite di 4 KB e 24 voci;
+  - creazione esplicita di un file vuoto con conferma (`N`).
 - **Spettro 2.4 GHz**
   - promiscuo su tutti i tipi di frame, dwell 60 ms per canale, sweep 1-13;
-  - barre live con scala automatica, canale corrente evidenziato;
-  - **peak hold** per canale (linea gialla);
+  - barre live con scala basata sui conteggi correnti, canale corrente
+    evidenziato;
+  - **peak hold** per canale con decay di 1/8 a ogni sweep e scala propria:
+    un burst iniziale non comprime le barre per sempre;
   - **PPS** calcolato sulla finestra reale dello sweep + totale frame;
   - **waterfall** 13 colonne × 16 righe (2 px per riga), intensità in 4
     livelli, aggiornata a ogni sweep;
   - uscita con ESC e stop del promiscuo.
-- **Legal gate**
-  - `ui::legalWarning` prima della scansione/attività PMKID e prima di ogni
-    deauth;
+- **Legal gate e radio**
+  - `ui::legalWarning` prima della scansione attiva/attività PMKID e prima di
+    ogni deauth;
+  - scansioni di Client Monitor e Whitelist in modalità **passiva** (nessuna
+    probe request); `beginRadio()`/`stopRadio()` controllano `WiFi.status()` e
+    chiamano `disconnect()` solo se c'è una connessione attiva;
   - `esp_wifi_80211_tx` presente solo nel blocco `#if ENABLE_OFFENSIVE`; con
     flag 0 il menu PMKID e il deauth mostrano un messaggio e non trasmettono
     nulla (auth/assoc non sono nemmeno compilate).
@@ -148,31 +168,35 @@ WPA*01*<pmkid 32 hex>*<bssid 12 hex>*<sta 12 hex>*<essid hex>***
 - **Rete nascosta**: senza ESSID il file `.hc22000` non viene creato di
   proposito; il pcap può essere convertito/analizzato a parte.
 - **Un solo PMKID per target**: il nome file è fissato dal BSSID (come da
-  specifica) e viene sovrascritto alla sessione successiva. Il pcap viene
-  troncato a ogni sessione.
+  specifica) e il vecchio hash viene rimosso all'avvio del target; il pcap
+  viene troncato a ogni sessione.
 - **Whitelist fail-closed**: con file assente non si può attaccare. Per una
   rete di test bisogna creare la whitelist (vuota con `N`, oppure con una
   voce che non sia l'AP di test).
 - **Solo 2.4 GHz**, canali 1-13; nessun 5 GHz (hardware e specifica).
+- **Scansioni passive** in Client Monitor e Whitelist: nessuna probe request,
+  quindi possono vedere meno AP o richiedere più tempo rispetto a una
+  scansione attiva. La scansione PMKID resta attiva ma solo dopo l'avviso
+  legale.
 - **PPS/spettro**: un solo radio, quindi il valore è aggregato sullo sweep
   (circa 780 ms), non un analizzatore a banda intera simultanea.
 - **FCS**: si assume che `sig_len` includa i 4 byte di FCS, come nel codice
   esistente `WifiMenu.cpp`. Se una versione del driver non li includesse, il
   pcap perderebbe 4 byte in coda (l'analisi EAPOL resta corretta perché usa
   le lunghezze dichiarate).
-- **Deauth client**: funziona solo se il client è stato visto negli ultimi
-  10 s e se l'AP non è in whitelist; non è un deauth flood e non tocca gli
-  altri client.
+- **Deauth client**: funziona solo se il client è ancora in tabella e visto
+  negli ultimi 5 s dopo l'avviso; non è un deauth flood e non tocca gli altri
+  client.
 
 ## 5. Dimensione firmware
 
 Build `cardputer-adv-offensive` (PlatformIO 6.7.0, Arduino-ESP32 2.0.16,
 `-Os`), ultima build verde:
 
-- `firmware.bin`: **2.398.048 byte**.
-- Flash usata da PlatformIO: **2.397.689 / 2.621.440 byte (91,5%)** dello slot
-  applicativo OTA da 2,5 MB; restano circa **223 KB** liberi.
-- RAM statica: **122.072 / 327.680 byte (37,3%)**.
+- `firmware.bin`: **2.398.944 byte**.
+- Flash usata da PlatformIO: **2.398.581 / 2.621.440 byte (91,5%)** dello slot
+  applicativo OTA da 2,5 MB; restano circa **222 KB** liberi.
+- RAM statica: **122.080 / 327.680 byte (37,3%)**.
 - Firmware ELF: `.pio/build/cardputer-adv-offensive/firmware.elf`.
 - `firmware.bin`: `.pio/build/cardputer-adv-offensive/firmware.bin`.
 
@@ -197,7 +221,7 @@ Build `cardputer-adv-offensive` (PlatformIO 6.7.0, Arduino-ESP32 2.0.16,
    - collegare due client (A e B) all'AP di test, generare traffico;
    - verificare MAC, RSSI e vendor; selezionare A e premere `D`;
    - controllare che A si disconnetta/riconnetta e che **B resti connesso**;
-   - verificare che dopo 10 s senza traffico il deauth di A venga rifiutato
+   - verificare che dopo 5 s senza traffico il deauth di A venga rifiutato
      come stale.
 4. **Spettro**
    - aprire Spettro 2.4: barre e waterfall devono muoversi con traffico
