@@ -721,8 +721,8 @@ void browseStations(std::vector<Station>& stations) {
             reloadPlaylist();
         } else if (selected == statusRow) {
             std::vector<std::string> lines;
-            lines.push_back(audioout::decoder().isRunning() ? ">Decoder attivo"
-                                                           : ">Decoder fermo");
+            lines.push_back(audioout::decoderRunning() ? ">Decoder attivo"
+                                                       : ">Decoder fermo");
             lines.push_back("Volume: " + std::to_string(audioout::volume()) + "/21");
             lines.push_back("Playlist: " + std::to_string(stationCount) + " stazioni (" +
                             g_sourceNote + ")");

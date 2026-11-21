@@ -282,6 +282,10 @@ Audio& decoder() {
     return *g_decoder;
 }
 
+bool decoderRunning() {
+    return g_decoder != nullptr && g_decoder->isRunning();
+}
+
 int volume() {
     return g_volume;
 }

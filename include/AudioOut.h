@@ -14,6 +14,10 @@ namespace audioout {
 // Decoder condiviso, creato alla prima richiesta.
 Audio& decoder();
 
+// Stato del decoder senza costruirlo: usare questa funzione nelle schermate
+// informative per non installare I2S0 (~40 KB) solo per leggere lo stato.
+bool decoderRunning();
+
 // Volume nella scala del decoder (0..21), persistente per la sessione.
 int volume();
 void setVolume(int value);

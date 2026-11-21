@@ -32,6 +32,10 @@
   `audioout::endPlayback()` ferma lo stream, finalizza il WAV, **disinstalla
   I2S0** e restituisce lo speaker a M5Unified (`Speaker.begin()` su I2S1, per
   i beep della UI).
+- **Stato senza allocare il decoder**: la voce *Stato / ferma* usa
+  `audioout::decoderRunning()`, che legge solo lo stato dell'eventuale
+  decoder esistente. Non costruisce `Audio` e non installa I2S0 quando la
+  radio non è ancora stata usata, lasciando la porta al microfono.
 - Un solo oggetto `Audio`, sempre tramite `audioout::decoder()`.
 
 File modificati: `src/modules/radio/RadioMenu.cpp`, `src/utils/AudioOut.cpp`,
@@ -106,12 +110,12 @@ Build `python -m platformio run -e cardputer-adv-offensive`: **SUCCESS**.
 
 | Voce | Valore |
 |---|---|
-| `firmware.bin` | **2.381.088 byte** (2,27 MiB) |
-| Flash slot | 2.380.725 / 2.621.440 byte = **90,8 %** |
+| `firmware.bin` | **2.381.104 byte** (2,27 MiB) |
+| Flash slot | 2.380.741 / 2.621.440 byte = **90,8 %** |
 | RAM statica | 115.880 / 327.680 byte = **35,4 %** |
 | Heap durante REC | +16.384 byte per il ring, liberati allo stop |
 
-La feature aggiunge ~22 KB di flash e **~360 byte** di RAM statica rispetto
+La feature aggiunge ~22,5 KB di flash e **~360 byte** di RAM statica rispetto
 alla baseline (2.358.193 byte di flash, 115.520 byte di RAM statica). Il ring
 da 16 KB non è più statico: viene allocato con `new (std::nothrow)` solo
 quando parte la registrazione, dopo un controllo di heap, e liberato in
@@ -144,6 +148,9 @@ avvisa "Registrazione non avviata".
 - Non è stato possibile eseguire test su hardware reale da questo ambiente
   (niente Cardputer/SD collegate): i test di ascolto, registrazione e ciclo
   I2S sono manuali, elencati sotto.
+- La voce *Stato / ferma* usa `decoderRunning()`: non deve comparire alcuna
+  allocazione del decoder né I2S0 installato se la radio non è mai stata
+  avviata (verificabile con il modulo Audio/microfono attivo).
 
 ## 7. Limiti e rischi
 
