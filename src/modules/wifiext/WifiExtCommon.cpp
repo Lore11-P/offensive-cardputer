@@ -72,6 +72,9 @@ bool appendSd(const char* path, const std::string& text) {
     if (!ensureDir()) {
         return false;
     }
+    if (text.empty()) {
+        return true;
+    }
     File file;
     if (SD.exists(path)) {
         file = SD.open(path, FILE_APPEND);
@@ -81,10 +84,24 @@ bool appendSd(const char* path, const std::string& text) {
     if (!file) {
         return false;
     }
+    // Con la SD piena una write parziale lascerebbe una riga troncata a cui si
+    // attaccherebbe la successiva: meglio rifiutare prima.
+    const uint64_t total = SD.totalBytes();
+    const uint64_t used = SD.usedBytes();
+    if (total > used && (total - used) < text.size() + 4) {
+        file.close();
+        return false;
+    }
     const size_t written =
         file.write(reinterpret_cast<const uint8_t*>(text.data()), text.size());
     file.flush();
-    const bool ok = written == text.size() && file.getWriteError() == 0;
+    bool ok = written == text.size() && file.getWriteError() == 0;
+    if (!ok && written < text.size()) {
+        // Isola la riga troncata: la prossima append parte da una riga nuova.
+        const uint8_t newline = '\n';
+        file.write(&newline, 1);
+        file.flush();
+    }
     file.close();
     return ok;
 }

