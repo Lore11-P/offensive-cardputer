@@ -43,7 +43,12 @@ constexpr const char* kTimezone = "CET-1CEST,M3.5.0,M10.5.0/3";
 constexpr time_t kEpochValid = 1700000000;
 constexpr size_t kNotesMax = 1024;
 constexpr size_t kCalendarMax = 8192;
+constexpr size_t kCalendarTextMax = 70;
+constexpr size_t kCalendarEventsMax = 120;
 constexpr size_t kTotpMax = 4096;
+constexpr size_t kTotpNameMax = 20;
+constexpr size_t kTotpSecretMax = 64;
+constexpr size_t kTotpSecretsMax = 16;
 constexpr size_t kCalcMax = 64;
 constexpr size_t kQrTextMax = 100;
 constexpr int kNoteWrap = 32;
@@ -99,6 +104,87 @@ std::string shorten(const std::string& text, size_t maxChars) {
         return text;
     }
     return text.substr(0, maxChars - 1) + "~";
+}
+
+// Il font pixel copre solo ASCII 0x20-0x7F: le lettere accentate UTF-8
+// provenienti dai file vengono mostrate con l'equivalente senza accento
+// (il file resta invariato). Le sequenze non gestite diventano '?'.
+std::string displayAscii(const std::string& text) {
+    std::string out;
+    out.reserve(text.size());
+    for (size_t i = 0; i < text.size();) {
+        const uint8_t c = static_cast<uint8_t>(text[i]);
+        if (c < 0x80) {
+            out.push_back(static_cast<char>(c));
+            ++i;
+            continue;
+        }
+        uint32_t cp = 0;
+        size_t len = 0;
+        if ((c & 0xE0) == 0xC0) {
+            cp = c & 0x1F;
+            len = 2;
+        } else if ((c & 0xF0) == 0xE0) {
+            cp = c & 0x0F;
+            len = 3;
+        } else if ((c & 0xF8) == 0xF0) {
+            cp = c & 0x07;
+            len = 4;
+        } else {
+            out.push_back('?');
+            ++i;
+            continue;
+        }
+        if (i + len > text.size()) {
+            out.push_back('?');
+            break;
+        }
+        bool valid = true;
+        for (size_t k = 1; k < len; ++k) {
+            const uint8_t next = static_cast<uint8_t>(text[i + k]);
+            if ((next & 0xC0) != 0x80) {
+                valid = false;
+                break;
+            }
+            cp = (cp << 6) | (next & 0x3F);
+        }
+        if (!valid) {
+            out.push_back('?');
+            ++i;
+            continue;
+        }
+        i += len;
+        switch (cp) {
+            case 0x00A0: out.push_back(' '); break;
+            case 0x00C0: case 0x00C1: case 0x00C2: case 0x00C3: case 0x00C4:
+            case 0x00C5: out.push_back('A'); break;
+            case 0x00C7: out.push_back('C'); break;
+            case 0x00C8: case 0x00C9: case 0x00CA: case 0x00CB: out.push_back('E'); break;
+            case 0x00CC: case 0x00CD: case 0x00CE: case 0x00CF: out.push_back('I'); break;
+            case 0x00D1: out.push_back('N'); break;
+            case 0x00D2: case 0x00D3: case 0x00D4: case 0x00D5: case 0x00D6:
+            case 0x00D8: out.push_back('O'); break;
+            case 0x00D9: case 0x00DA: case 0x00DB: case 0x00DC: out.push_back('U'); break;
+            case 0x00DD: out.push_back('Y'); break;
+            case 0x00E0: case 0x00E1: case 0x00E2: case 0x00E3: case 0x00E4:
+            case 0x00E5: out.push_back('a'); break;
+            case 0x00E7: out.push_back('c'); break;
+            case 0x00E8: case 0x00E9: case 0x00EA: case 0x00EB: out.push_back('e'); break;
+            case 0x00EC: case 0x00ED: case 0x00EE: case 0x00EF: out.push_back('i'); break;
+            case 0x00F1: out.push_back('n'); break;
+            case 0x00F2: case 0x00F3: case 0x00F4: case 0x00F5: case 0x00F6:
+            case 0x00F8: out.push_back('o'); break;
+            case 0x00F9: case 0x00FA: case 0x00FB: case 0x00FC: out.push_back('u'); break;
+            case 0x00FD: case 0x00FF: out.push_back('y'); break;
+            case 0x2018: case 0x2019: out.push_back('\''); break;
+            case 0x201C: case 0x201D: out.push_back('"'); break;
+            case 0x2013: case 0x2014: out.push_back('-'); break;
+            case 0x2026: out += "..."; break;
+            case 0x20AC: out += "EUR"; break;
+            default: out.push_back('?'); break;
+        }
+    }
+    return out;
 }
 
 bool isDigit(char c) {
@@ -199,6 +285,46 @@ std::string datePretty(int value) {
            std::to_string(year);
 }
 
+std::string backupPath(const char* path) {
+    return std::string(path) + ".bak";
+}
+
+// Scrittura verificata: storage::writeText e' gia' atomico, ma qui si rilegge
+// il file prima di considerarlo salvato e solo dopo si rimuove un eventuale
+// .bak rimasto da un tentativo precedente.
+bool writeFileVerified(const char* path, const std::string& data, size_t maxBytes) {
+    if (!storage::writeText(path, data, true)) {
+        return false;
+    }
+    std::string check;
+    if (!storage::readText(path, check, maxBytes, true) || check != data) {
+        return false;
+    }
+    const std::string bak = backupPath(path);
+    if (storage::exists(bak.c_str(), true)) {
+        storage::removeFile(bak.c_str(), true);
+    }
+    return true;
+}
+
+// Se il rename finale di writeAtomic e' stato interrotto, il file principale
+// puo' mancare e restare solo il .bak: lo si ripristina e verifica.
+// true = file principale presente o recuperato; false = recupero fallito.
+bool recoverBackup(const char* path, size_t maxBytes) {
+    if (storage::exists(path, true)) {
+        return true;
+    }
+    const std::string bak = backupPath(path);
+    if (!storage::exists(bak.c_str(), true)) {
+        return true;
+    }
+    std::string data;
+    if (!storage::readText(bak.c_str(), data, maxBytes, true)) {
+        return false;
+    }
+    return writeFileVerified(path, data, maxBytes);
+}
+
 // Aggiunge una riga a un file di testo preservando il contenuto esistente.
 bool appendLine(const char* path, const std::string& line, size_t maxBytes) {
     if (!ensureToolsDir()) {
@@ -217,16 +343,27 @@ bool appendLine(const char* path, const std::string& line, size_t maxBytes) {
     if (data.size() > maxBytes) {
         return false;
     }
-    return storage::writeText(path, data, true);
+    return writeFileVerified(path, data, maxBytes);
 }
 
 // ---------------------------------------------------------------------------
 // Orologio
 // ---------------------------------------------------------------------------
 
-bool syncNtp(const std::string& parent) {
+enum class NtpResult { Ok, Cancelled, Failed };
+
+// Spegne sempre Wi-Fi e SNTP, anche su uscite anticipate o errori.
+struct NtpCleanup {
+    ~NtpCleanup() {
+        wifisetup::disconnect();
+        sntp_stop();
+    }
+};
+
+NtpResult syncNtp(const std::string& parent) {
+    NtpCleanup cleanup;
     if (!wifisetup::ensureConnected(true, parent)) {
-        return false;
+        return NtpResult::Failed;
     }
     configTzTime(kTimezone, "pool.ntp.org", "time.cloudflare.com");
     // Forza un nuovo ciclo: senza reset una sincronizzazione precedente
@@ -236,12 +373,12 @@ bool syncNtp(const std::string& parent) {
     navigation::waitRelease();
     const uint32_t started = millis();
     uint32_t lastDraw = 0;
-    bool ok = false;
+    NtpResult result = NtpResult::Failed;
     for (;;) {
         const uint32_t now = millis();
         if (sntp_get_sync_status() == SNTP_SYNC_STATUS_COMPLETED &&
             timeValid(time(nullptr))) {
-            ok = true;
+            result = NtpResult::Ok;
             break;
         }
         if (now - started >= 10000) {
@@ -262,13 +399,28 @@ bool syncNtp(const std::string& parent) {
         }
         const navigation::EventData ev = navigation::poll();
         if (ev.type == navigation::Event::Back) {
+            result = NtpResult::Cancelled;
             break;
         }
         delay(20);
     }
-    wifisetup::disconnect();
-    sntp_stop();
-    return ok;
+    return result;
+}
+
+void reportNtpResult(NtpResult result, bool announceCancel) {
+    if (result == NtpResult::Ok) {
+        return;
+    }
+    if (result == NtpResult::Cancelled) {
+        if (announceCancel) {
+            ui::message("Orologio", {"Sincronizzazione annullata."}, "Orologio");
+        }
+        return;
+    }
+    ui::message("Orologio",
+                {"!Rete o NTP non disponibili.", "Configurazione annullata o server",
+                 "non raggiungibile. Riprova."},
+                "Orologio");
 }
 
 void drawClockScreen() {
@@ -337,15 +489,22 @@ void manualTimeScreen() {
     local.tm_isdst = -1;
     const time_t stamp = mktime(&local);
     if (stamp == static_cast<time_t>(-1) || local.tm_year != year - 1900 ||
-        local.tm_mon != month - 1 || local.tm_mday != day) {
-        ui::message("Data e ora", {"!Data non valida."}, "Orologio");
+        local.tm_mon != month - 1 || local.tm_mday != day || local.tm_hour != hour ||
+        local.tm_min != minute || local.tm_sec != 0) {
+        ui::message("Data e ora", {"!Data o ora non valida."}, "Orologio");
+        return;
+    }
+    // Stesso limite di validita' usato da NTP: niente date "valide" a meta'.
+    if (stamp < kEpochValid) {
+        ui::message("Data e ora", {"!Data troppo vecchia.", "Minimo 15/11/2023."},
+                    "Orologio");
         return;
     }
 
     struct timeval tv = {};
     tv.tv_sec = stamp;
     tv.tv_usec = 0;
-    if (settimeofday(&tv, nullptr) != 0) {
+    if (settimeofday(&tv, nullptr) != 0 || !timeValid(time(nullptr))) {
         ui::message("Data e ora", {"!Impostazione non riuscita."}, "Orologio");
         return;
     }
@@ -360,6 +519,11 @@ void clockScreen() {
     ensureTimezone();
     powertimer::Hold hold;
     navigation::waitRelease();
+    // All'apertura, se l'ora non e' valida prova subito NTP; l'annullamento
+    // esplicito dell'utente non apre un messaggio modale.
+    if (!timeValid(time(nullptr))) {
+        reportNtpResult(syncNtp("Orologio"), false);
+    }
     uint32_t lastDraw = 0;
     for (;;) {
         const uint32_t now = millis();
@@ -372,7 +536,7 @@ void clockScreen() {
             break;
         }
         if (ev.type == navigation::Event::Select) {
-            syncNtp("Orologio");
+            reportNtpResult(syncNtp("Orologio"), true);
             lastDraw = 0;
         } else if (ev.type == navigation::Event::Text && (ev.ch == 'm' || ev.ch == 'M')) {
             manualTimeScreen();
@@ -398,7 +562,7 @@ std::vector<CalEvent> loadCalendar() {
         return events;
     }
     size_t pos = 0;
-    while (pos < data.size() && events.size() < 120) {
+    while (pos < data.size() && events.size() < kCalendarEventsMax) {
         size_t end = data.find('\n', pos);
         if (end == std::string::npos) {
             end = data.size();
@@ -417,13 +581,16 @@ std::vector<CalEvent> loadCalendar() {
         if (!parseIsoDate(line.substr(0, 10), year, month, day)) {
             continue;
         }
-        const std::string text = trimCopy(line.substr(11));
+        std::string text = displayAscii(trimCopy(line.substr(11)));
         if (text.empty()) {
             continue;
         }
+        if (text.size() > kCalendarTextMax) {
+            text.resize(kCalendarTextMax);
+        }
         CalEvent event;
         event.date = makeDateValue(year, month, day);
-        event.text = text;
+        event.text = std::move(text);
         events.push_back(std::move(event));
     }
     return events;
@@ -491,7 +658,7 @@ void drawCalendarMonth(int year, int month, int selected,
 void addCalendarEvent(int dateValue) {
     std::vector<textinput::Field> fields(1);
     fields[0].label = "Evento";
-    fields[0].maxLen = 70;
+    fields[0].maxLen = kCalendarTextMax;
     if (!textinput::edit("Nuovo evento", "Calendario", fields)) {
         return;
     }
@@ -527,7 +694,8 @@ void calendarDay(int year, int month, int day, std::vector<CalEvent>& events) {
                 if (shown >= 7) {
                     break;
                 }
-                display::text(8, 42 + shown * 11, "- " + shorten(event.text, 36),
+                display::text(8, 42 + shown * 11,
+                              "- " + shorten(displayAscii(event.text), 36),
                               display::kText, 0);
                 ++shown;
             }
@@ -553,6 +721,16 @@ void calendarDay(int year, int month, int day, std::vector<CalEvent>& events) {
 
 void calendarScreen() {
     ensureTimezone();
+    if (!storage::hasSD()) {
+        ui::message("Calendario", {"!microSD assente.", "Gli eventi stanno in /tools/calendar.txt."},
+                    "Utility");
+        return;
+    }
+    if (!recoverBackup(kCalendarPath, kCalendarMax)) {
+        ui::message("Calendario", {"!Recupero del file non riuscito.", "Controlla /tools/calendar.txt.bak."},
+                    "Utility");
+        return;
+    }
     std::vector<CalEvent> events = loadCalendar();
 
     const time_t now = time(nullptr);
@@ -639,17 +817,20 @@ void forEachNoteLine(const std::string& note, Callback callback) {
     callback(line);
 }
 
-void drawNotes(const std::string& note) {
+enum class NoteSaveState { Saved, Pending, Failed };
+
+void drawNotes(const std::string& note, NoteSaveState state) {
     display::clear();
     display::header("Note", "Utility");
 
+    const std::string shownNote = displayAscii(note);
     int total = 0;
-    forEachNoteLine(note, [&](const std::string&) { ++total; });
+    forEachNoteLine(shownNote, [&](const std::string&) { ++total; });
     const int skip = total > kNoteLines ? total - kNoteLines : 0;
 
     int index = 0;
     int y = 26;
-    forEachNoteLine(note, [&](const std::string& line) {
+    forEachNoteLine(shownNote, [&](const std::string& line) {
         ++index;
         if (index <= skip) {
             return;
@@ -668,17 +849,32 @@ void drawNotes(const std::string& note) {
     std::snprintf(info, sizeof(info), "%u/%u", static_cast<unsigned>(note.size()),
                   static_cast<unsigned>(kNotesMax));
     display::text(8, 116, info, display::kTextDim, 0);
+
+    const char* label = state == NoteSaveState::Failed
+                            ? "!SALVA"
+                            : (state == NoteSaveState::Pending ? "modificato" : "salvato");
+    const uint16_t color = state == NoteSaveState::Failed
+                               ? display::kDanger
+                               : (state == NoteSaveState::Pending ? display::kTextDim
+                                                                  : display::kAccent);
+    display::text(display::width() - 8 - display::textWidth(label, 0), 116, label, color,
+                  0);
     display::footer("ESC=salva DEL=cancella ENTER=a capo");
     display::push();
 }
 
 bool saveNotes(const std::string& note) {
-    return ensureToolsDir() && storage::writeText(kNotesPath, note, true);
+    return ensureToolsDir() && writeFileVerified(kNotesPath, note, kNotesMax);
 }
 
 void notesScreen() {
     if (!ensureToolsDir()) {
         ui::message("Note", {"!microSD assente.", "Inserisci una SD per salvare."},
+                    "Utility");
+        return;
+    }
+    if (!recoverBackup(kNotesPath, kNotesMax)) {
+        ui::message("Note", {"!Recupero del file non riuscito.", "Controlla /tools/notes.txt.bak."},
                     "Utility");
         return;
     }
@@ -701,15 +897,16 @@ void notesScreen() {
     bool delHeld = false;
     uint32_t nextDel = 0;
     uint32_t lastDraw = 0;
-    uint32_t lastSave = millis();
+    uint32_t lastSaveAttempt = millis();
     bool unsaved = false;
+    NoteSaveState saveState = NoteSaveState::Saved;
 
     for (;;) {
         powertimer::tick();
         const uint32_t now = millis();
         if (lastDraw == 0 || now - lastDraw >= 80) {
             lastDraw = now;
-            drawNotes(note);
+            drawNotes(note, saveState);
         }
 
         M5Cardputer.update();
@@ -733,6 +930,9 @@ void notesScreen() {
             if (note.size() < kNotesMax) {
                 note.push_back(c);
                 unsaved = true;
+                if (saveState != NoteSaveState::Failed) {
+                    saveState = NoteSaveState::Pending;
+                }
             }
         }
 
@@ -744,6 +944,9 @@ void notesScreen() {
                 if (!note.empty()) {
                     note.pop_back();
                     unsaved = true;
+                    if (saveState != NoteSaveState::Failed) {
+                        saveState = NoteSaveState::Pending;
+                    }
                 }
             } else if (millis() >= nextDel) {
                 nextDel = millis() + 60;
@@ -751,6 +954,9 @@ void notesScreen() {
                 if (!note.empty()) {
                     note.pop_back();
                     unsaved = true;
+                    if (saveState != NoteSaveState::Failed) {
+                        saveState = NoteSaveState::Pending;
+                    }
                 }
             }
         } else {
@@ -760,15 +966,21 @@ void notesScreen() {
         if (state.enter && !lastEnter && note.size() < kNotesMax) {
             note.push_back('\n');
             unsaved = true;
+            if (saveState != NoteSaveState::Failed) {
+                saveState = NoteSaveState::Pending;
+            }
         }
 
         lastWord = word;
         lastEnter = state.enter;
 
-        if (unsaved && millis() - lastSave >= 15000) {
+        if (unsaved && millis() - lastSaveAttempt >= 15000) {
+            lastSaveAttempt = millis();
             if (saveNotes(note)) {
                 unsaved = false;
-                lastSave = millis();
+                saveState = NoteSaveState::Saved;
+            } else {
+                saveState = NoteSaveState::Failed;
             }
         }
         delay(18);
@@ -952,9 +1164,9 @@ void qrScreen() {
         return;
     }
 
-    // qrcode_getBufferSize(6) = 176 byte: formula della libreria, costante qui
-    // perche' il buffer e' statico (niente PSRAM).
-    static uint8_t modules[((16 * 6 + 128) * 6 + 64) / 8];
+    // qrcode_getBufferSize(6) = ((41*41)+7)/8 = 211 byte (41 moduli, v6).
+    // Il buffer e' statico: nessuna allocazione, niente PSRAM.
+    static uint8_t modules[((41 * 41) + 7) / 8];
     QRCode qr;
     if (qrcode_initText(&qr, modules, static_cast<uint8_t>(version), ECC_LOW,
                         fields[0].value.c_str()) != 0) {
@@ -974,12 +1186,19 @@ void qrScreen() {
             break;
         }
         if (ev.type == navigation::Event::Text && (ev.ch == 's' || ev.ch == 'S')) {
-            const bool ok = ensureToolsDir() && display::saveScreenshot(kQrBmpPath);
-            ui::message("QR code",
-                        ok ? std::vector<std::string>{"BMP salvato:", kQrBmpPath}
-                           : std::vector<std::string>{"!Salvataggio non riuscito.",
-                                                      "Controlla la microSD."},
-                        "Utility");
+            const bool hasSd = storage::hasSD();
+            const bool ok = hasSd && ensureToolsDir() && display::saveScreenshot(kQrBmpPath);
+            if (ok) {
+                ui::message("QR code", {"BMP salvato:", kQrBmpPath}, "Utility");
+            } else if (!hasSd) {
+                ui::message("QR code",
+                            {"!microSD assente.", "Inserisci una SD per esportare il BMP."},
+                            "Utility");
+            } else {
+                ui::message("QR code",
+                            {"!Salvataggio non riuscito.", "Controlla la microSD."},
+                            "Utility");
+            }
             dirty = true;
         }
         delay(5);
@@ -1061,7 +1280,7 @@ std::vector<TotpSecret> loadTotp() {
         return secrets;
     }
     size_t pos = 0;
-    while (pos < data.size() && secrets.size() < 16) {
+    while (pos < data.size() && secrets.size() < kTotpSecretsMax) {
         size_t end = data.find('\n', pos);
         if (end == std::string::npos) {
             end = data.size();
@@ -1076,9 +1295,17 @@ std::vector<TotpSecret> loadTotp() {
             continue;
         }
         TotpSecret secret;
-        secret.name = trimCopy(line.substr(0, separator));
+        secret.name = displayAscii(trimCopy(line.substr(0, separator)));
         secret.source = trimCopy(line.substr(separator + 1));
         if (secret.name.empty() || secret.source.empty()) {
+            continue;
+        }
+        if (secret.name.size() > kTotpNameMax) {
+            secret.name.resize(kTotpNameMax);
+        }
+        // Un segreto piu' lungo del campo di input viene scartato, non
+        // troncato: un troncamento produrrebbe codici sbagliati.
+        if (secret.source.size() > kTotpSecretMax) {
             continue;
         }
         if (!base32Decode(secret.source, secret.key, sizeof(secret.key),
@@ -1105,7 +1332,7 @@ void drawTotp(const std::vector<TotpSecret>& secrets, int selected) {
     }
 
     const TotpSecret& secret = secrets[selected];
-    display::textCentered(25, shorten(secret.name, 30), display::kAccent, 2);
+    display::textCentered(25, shorten(displayAscii(secret.name), 30), display::kAccent, 2);
     char position[16];
     std::snprintf(position, sizeof(position), "%d/%d", selected + 1,
                   static_cast<int>(secrets.size()));
@@ -1136,11 +1363,18 @@ void drawTotp(const std::vector<TotpSecret>& secrets, int selected) {
 }
 
 void addTotpSecret() {
+    if (loadTotp().size() >= kTotpSecretsMax) {
+        ui::message("TOTP",
+                    {"!Limite di 16 segreti raggiunto.",
+                     "Rimuovi una riga da /tools/totp.txt."},
+                    "TOTP");
+        return;
+    }
     std::vector<textinput::Field> fields(2);
     fields[0].label = "Nome";
-    fields[0].maxLen = 20;
+    fields[0].maxLen = kTotpNameMax;
     fields[1].label = "Segreto Base32";
-    fields[1].maxLen = 64;
+    fields[1].maxLen = kTotpSecretMax;
     fields[1].secret = true;
     if (!textinput::edit("Nuovo TOTP", "TOTP", fields)) {
         return;
@@ -1151,8 +1385,16 @@ void addTotpSecret() {
     name.erase(std::remove(name.begin(), name.end(), '|'), name.end());
     name.erase(std::remove(name.begin(), name.end(), '\n'), name.end());
     name.erase(std::remove(name.begin(), name.end(), '\r'), name.end());
+    if (name.size() > kTotpNameMax) {
+        name.resize(kTotpNameMax);
+    }
     if (name.empty() || source.empty()) {
         ui::message("TOTP", {"!Nome o segreto mancante."}, "TOTP");
+        return;
+    }
+    if (source.size() > kTotpSecretMax) {
+        ui::message("TOTP", {"!Segreto troppo lungo.", "Massimo 64 caratteri Base32."},
+                    "TOTP");
         return;
     }
 
@@ -1182,6 +1424,11 @@ void addTotpSecret() {
 void totpScreen() {
     if (!ensureToolsDir()) {
         ui::message("TOTP", {"!microSD assente.", "I segreti stanno in /tools/totp.txt."},
+                    "Utility");
+        return;
+    }
+    if (!recoverBackup(kTotpPath, kTotpMax)) {
+        ui::message("TOTP", {"!Recupero del file non riuscito.", "Controlla /tools/totp.txt.bak."},
                     "Utility");
         return;
     }
