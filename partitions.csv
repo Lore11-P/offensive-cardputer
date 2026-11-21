@@ -1,13 +1,18 @@
 # Cardputer ADV - 8 MB flash, layout dual-OTA (aggiornamento via USB o WiFi)
-# Due slot app da 2.5 MB: Update.h scrive sempre sullo slot inattivo, quindi un
-# aggiornamento OTA interrotto non tocca il firmware in esecuzione.
-# LittleFS passa a 0x510000 e scende a 2.875 MB per fare spazio al set WiFi/BLE
-# completo; i dati IR (2.3 MB) restano capienti. Il cambio di offset richiede un
-# flash USB una tantum con la nuova tabella e la nuova immagine LittleFS.
+# Due slot app da 2.6875 MB: Update.h scrive sempre sullo slot inattivo, quindi
+# un aggiornamento OTA interrotto non tocca il firmware in esecuzione.
+# Mappa: app0 0x010000-0x2C0000, app1 0x2C0000-0x570000. Entrambi gli slot
+# sono allineati a 0x10000 (64 KB) e hanno la stessa dimensione (0x2B0000).
+# LittleFS scende a 2.5 MB (0x570000-0x7F0000). I 2.375 MB del Piano B non
+# bastavano: buildfs riempiva la partizione con il fallback IR da 309 file.
+# I dati IR completi stanno sulla microSD; in LittleFS resta il fallback.
+# MIGRAZIONE: il vecchio LittleFS a 0x510000 non viene letto. Serve un flash
+# USB una tantum con questa tabella, partitions.bin e la nuova littlefs.bin.
+# La NVS a 0x9000 non si sposta; dopo la migrazione l'OTA torna disponibile.
 # Name,     Type, SubType,  Offset,   Size,     Flags
 nvs,        data, nvs,      0x9000,   0x5000,
 otadata,    data, ota,      0xE000,   0x2000,
-app0,       app,  ota_0,    0x10000,  0x280000,
-app1,       app,  ota_1,    0x290000, 0x280000,
-spiffs,     data, spiffs,   0x510000, 0x2E0000,
+app0,       app,  ota_0,    0x10000,  0x2B0000,
+app1,       app,  ota_1,    0x2C0000, 0x2B0000,
+spiffs,     data, spiffs,   0x570000, 0x280000,
 coredump,   data, coredump, 0x7F0000, 0x10000,

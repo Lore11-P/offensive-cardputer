@@ -55,7 +55,14 @@ una connessione internet attiva. Il flasher usa gli offset:
 | `0x0` | bootloader |
 | `0x8000` | tabella partizioni |
 | `0x10000` | firmware |
-| `0x510000` | LittleFS 2,9 MB (icone + database IR) |
+| `0x570000` | LittleFS 2,5 MB (icone + fallback IR) |
+
+> **Flash USB una tantum.** Il Piano B sposta LittleFS da `0x510000` a
+> `0x570000`: il vecchio filesystem non viene letto. Scrivi bootloader,
+> `partitions.bin`, firmware e `littlefs.bin` insieme via USB; i dati IR
+> completi stanno sulla microSD e in LittleFS resta solo il fallback. Dopo
+> questo flash l'OTA torna disponibile. Senza il flash USB la nuova tabella
+> non entra: l'OTA aggiorna solo lo slot applicativo.
 
 ## Ricompilare i binari
 

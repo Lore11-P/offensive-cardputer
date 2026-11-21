@@ -118,7 +118,7 @@ Sintassi supportata: `id:`/commenti, `DEFAULT_DELAY`, `DELAY`, `STRING`,
 | Voce | Valore |
 |---|---|
 | MCU | ESP32-S3FN8, 240 MHz, 320 KB SRAM |
-| Flash | 8 MB (2 slot app da 2,5 MB per OTA + LittleFS 2,875 MB) |
+| Flash | 8 MB (2 slot app da 2,6875 MB per OTA + LittleFS 2,5 MB) |
 | Display | 1.14" 240×135 |
 | Tastiera | 56 tasti (frecce: `;` `.` `,` `/`) |
 | IR TX | GPIO 44 |
@@ -197,9 +197,9 @@ In caso di problemi, tenere premuto il tasto di boot (G0) e reinserire il cavo U
 
 ### Aggiornamento OTA via WiFi
 
-`partitions.csv` usa **due slot applicativi da 2,5 MB** (`app0`/`app1`): `Update.h` scrive sempre lo slot inattivo, quindi un aggiornamento interrotto non danneggia il firmware in esecuzione. Il firmware deve restare sotto i 2,5 MB.
+`partitions.csv` usa **due slot applicativi da 2,6875 MB** (`app0` a `0x10000`, `app1` a `0x2C0000`): `Update.h` scrive sempre lo slot inattivo, quindi un aggiornamento interrotto non danneggia il firmware in esecuzione. Il firmware deve restare sotto i 2,6875 MB.
 
-**Prima installazione (una volta sola, via USB):** i dispositivi che hanno ancora il layout precedente devono essere riflash con `bootloader.bin`, `partitions.bin`, `firmware.bin` e `littlefs.bin` aggiornati (web flasher o `flasher\flash.bat`). LittleFS ora parte da `0x510000`, quindi il vecchio contenuto a `0x410000` non viene più letto: la nuova immagine LittleFS va scritta nello stesso flash USB (il web flasher lo fa automaticamente).
+**Prima installazione (una volta sola, via USB):** i dispositivi che hanno ancora il layout precedente devono essere riflash con `bootloader.bin`, `partitions.bin`, `firmware.bin` e `littlefs.bin` aggiornati (web flasher o `flasher\flash.bat`). LittleFS ora parte da `0x570000`, quindi il vecchio contenuto a `0x510000` non viene più letto: la nuova immagine LittleFS va scritta nello stesso flash USB (il web flasher lo fa automaticamente). I dati IR completi stanno sulla microSD; in LittleFS resta solo il fallback. La NVS a `0x9000` non si sposta, quindi le impostazioni restano, ma senza un flash USB completo la nuova tabella non entra (l'OTA aggiorna solo lo slot app).
 
 Dopo il primo flash USB, gli aggiornamenti si fanno dalla Cardputer:
 
@@ -315,7 +315,7 @@ address: 07 00 00 00
 command: 02 00 00 00
 ```
 
-Protocolli parsed supportati: `NEC`, `NECext`, `Samsung32`, `LG`, `Sony`/`SIRC12/15/20`, `RC5`, `RC5X`, `RC6`, `JVC`, `Kaseikyo` (Panasonic) e `RCA`. I comandi `type: raw` con `frequency` e `data` in microsecondi sono inviati con `sendRaw`. I file sono letti da LittleFS e, se assenti, da `/sd/ir/...`. I comandi con protocolli non riconosciuti sono marcati `[n/d]`; dettagli e provenienza sono in `data/ir/SOURCES.txt`. LittleFS è dimensionata a 2,875 MB e i nomi dei file devono restare entro 32 caratteri.
+Protocolli parsed supportati: `NEC`, `NECext`, `Samsung32`, `LG`, `Sony`/`SIRC12/15/20`, `RC5`, `RC5X`, `RC6`, `JVC`, `Kaseikyo` (Panasonic) e `RCA`. I comandi `type: raw` con `frequency` e `data` in microsecondi sono inviati con `sendRaw`. I file sono letti da LittleFS e, se assenti, da `/sd/ir/...`. I comandi con protocolli non riconosciuti sono marcati `[n/d]`; dettagli e provenienza sono in `data/ir/SOURCES.txt`. LittleFS è dimensionata a 2,5 MB (il database IR completo sta sulla SD) e i nomi dei file devono restare entro 32 caratteri.
 
 ## Limiti noti
 
