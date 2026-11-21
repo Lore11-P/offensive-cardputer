@@ -1,0 +1,4 @@
+# Fixture WPA-SEC: formato reale bssid:station_mac:ssid:password
+# MAC localmente amministrati, dati inventati: nessuna rete reale.
+020000000001:020000000002:ORBIT-TEST:test-password
+020000000003:020000000004:ORBIT:LAB:test-pass2
