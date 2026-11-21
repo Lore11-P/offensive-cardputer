@@ -21,6 +21,10 @@ constexpr int kCarouselFrames = 6;
 // Passo angolare tra due voci sull'orbita (radianti).
 constexpr float kOrbitStep = 0.5934f;  // 34 gradi
 
+// Hub attivo: i menu radice dei moduli mostrano il hub invece di
+// "Menu principale". Solo un livello, nessuna allocazione (letterali).
+const char* s_rootContext = nullptr;
+
 std::string toUpperFirst(const std::string& s) {
     if (s.empty()) {
         return s;
@@ -175,7 +179,17 @@ void drawOrbitBadge(const MenuItem& item, int cx, int cy, int iconSize, bool sel
 
 MenuManager::MenuManager(std::string title, std::string parent)
     : title_(std::move(title)), parent_(std::move(parent)) {
+    // Un modulo aperto da un hub mantiene il suo breadcrumb reale. "ORBIT"
+    // e' il padre storico del menu Audio, anch'esso aperto dal hub.
+    if ((parent_ == "Menu principale" || parent_ == "ORBIT") && s_rootContext &&
+        *s_rootContext) {
+        parent_ = s_rootContext;
+    }
     hint_ = "ESC=indietro ;.,/=nav ENTER=apri";
+}
+
+void MenuManager::setRootContext(const char* context) {
+    s_rootContext = context;
 }
 
 void MenuManager::addItem(std::string label, std::string icon, std::function<void()> action,

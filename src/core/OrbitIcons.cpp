@@ -76,6 +76,21 @@ bool drawOrbitIcon(const std::string& id, int x, int y, int size, uint16_t tint)
         p.dot(7, 1, alt);
         return true;
     }
+    if (id == "hid") {
+        // Tastiera con antenna: BLE HID.
+        p.dot(5, 2, alt);
+        p.dot(8, 2, hot);
+        p.dot(11, 2, main);
+        p.frame(2, 5, 12, 8, main);
+        p.rect(3, 6, 10, 6, C(T_bg3));
+        for (int row = 0; row < 2; ++row) {
+            for (int col = 0; col < 4; ++col) {
+                p.pix(4 + col * 2, 7 + row * 2, alt);
+            }
+        }
+        p.hline(4, 11, 8, C(T_line));
+        return true;
+    }
     if (id == "chat") {
         p.frame(2, 3, 12, 8, main);
         p.rect(3, 4, 10, 6, C(T_bg3));
@@ -88,6 +103,16 @@ bool drawOrbitIcon(const std::string& id, int x, int y, int size, uint16_t tint)
         p.dot(13, 2, hot);
         return true;
     }
+    if (id == "espnow") {
+        // Mesh di nodi collegati: ESP-NOW.
+        p.line(3, 4, 12, 5, C(T_line));
+        p.line(3, 4, 8, 12, C(T_line));
+        p.line(12, 5, 8, 12, C(T_line));
+        p.disc(3, 4, 2, main);
+        p.disc(12, 5, 2, alt);
+        p.disc(8, 12, 2, hot);
+        return true;
+    }
     if (id == "wifi") {
         auto& d = g();
         const int cx = p.X(8);
@@ -97,6 +122,46 @@ bool drawOrbitIcon(const std::string& id, int x, int y, int size, uint16_t tint)
             d.drawArc(cx, cy, r, r + p.u, 220, 320, i == 2 ? alt : main);
         }
         d.fillCircle(cx, cy, std::max(1, p.u + 1), hot);
+        return true;
+    }
+    if (id == "wifiplus") {
+        // Onde WiFi con badge "+".
+        auto& d = g();
+        const int cx = p.X(8);
+        const int cy = p.Y(13);
+        for (int i = 0; i < 2; ++i) {
+            const int r = (4 + i * 4) * p.u;
+            d.drawArc(cx, cy, r, r + p.u, 220, 320, main);
+        }
+        d.fillCircle(cx, cy, std::max(1, p.u + 1), hot);
+        d.fillCircle(p.X(12), p.Y(4), 3 * p.u, C(T_bg2));
+        p.hline(10, 4, 5, alt);
+        p.vline(12, 2, 5, alt);
+        return true;
+    }
+    if (id == "wifilab") {
+        // Beuta da laboratorio: WiFi Lab.
+        p.hline(6, 2, 5, main);
+        p.line(6, 3, 6, 6, main);
+        p.line(10, 3, 10, 6, main);
+        p.line(6, 6, 3, 13, main);
+        p.line(10, 6, 13, 13, main);
+        p.hline(3, 13, 11, main);
+        p.hline(5, 10, 7, alt);
+        p.dot(7, 8, hot);
+        p.dot(9, 6, hot);
+        return true;
+    }
+    if (id == "wpasec") {
+        // Scudo con toppa: catture e chiave WPA-SEC.
+        p.line(8, 1, 3, 4, main);
+        p.line(8, 1, 13, 4, main);
+        p.line(3, 4, 3, 9, main);
+        p.line(13, 4, 13, 9, main);
+        p.line(3, 9, 8, 14, main);
+        p.line(13, 9, 8, 14, main);
+        p.disc(8, 7, 1, alt);
+        p.vline(8, 8, 2, alt);
         return true;
     }
     if (id == "radar") {
@@ -125,6 +190,15 @@ bool drawOrbitIcon(const std::string& id, int x, int y, int size, uint16_t tint)
         p.disc(4, 13, 2, alt);
         p.disc(11, 10, 2, alt);
         p.dot(13, 1, hot);
+        return true;
+    }
+    if (id == "audio") {
+        // Forma d'onda: microfono, spettro e registrazioni.
+        const int bars[7] = {3, 6, 10, 13, 9, 5, 2};
+        for (int i = 0; i < 7; ++i) {
+            p.vline(1 + i * 2, 8 - bars[i] / 2, bars[i],
+                    i == 3 ? hot : (i % 2 ? main : alt));
+        }
         return true;
     }
     if (id == "capture") {
@@ -192,6 +266,29 @@ bool drawOrbitIcon(const std::string& id, int x, int y, int size, uint16_t tint)
             p.pix(x0 / 2 + 4, y0 / 2 + 4, main);
         }
         p.dot(8, 1, hot);
+        return true;
+    }
+    if (id == "tools") {
+        // Cassetta attrezzi: Utility (clock, note, calcolatrice...).
+        p.line(6, 5, 6, 2, main);
+        p.line(10, 5, 10, 2, main);
+        p.hline(6, 2, 5, main);
+        p.rect(2, 5, 12, 9, C(T_bg3));
+        p.frame(2, 5, 12, 9, main);
+        p.hline(3, 8, 10, C(T_line));
+        p.rect(7, 8, 2, 4, hot);
+        p.dot(4, 6, alt);
+        p.dot(12, 6, alt);
+        return true;
+    }
+    if (id == "sensors") {
+        // Livella a bolla: sensori IMU e strumenti di misura.
+        p.rect(1, 5, 14, 9, C(T_bg3));
+        p.frame(1, 5, 14, 9, main);
+        p.hline(3, 9, 10, C(T_line));
+        p.vline(11, 7, 5, C(T_line2));
+        p.disc(6, 9, 2, alt);
+        p.dot(6, 9, hot);
         return true;
     }
     if (id == "2048") {
