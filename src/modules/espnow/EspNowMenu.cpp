@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -37,13 +38,16 @@ constexpr uint8_t kDefaultChannel = 1;
 constexpr size_t kMaxPeers = 12;
 constexpr uint32_t kHelloIntervalMs = 4000;
 constexpr uint32_t kAckTimeoutMs = 450;
-constexpr uint32_t kFinalAckTimeoutMs = 5000;
+constexpr uint32_t kFinalAckTimeoutMs = 10000;
 constexpr uint32_t kRxTimeoutMs = 6000;
 constexpr uint8_t kTxTries = 3;
 constexpr uint8_t kTxTimeout = 0xFD;
 constexpr uint8_t kTxAborted = 0xFE;
 constexpr size_t kHistoryMaxLines = 60;
-constexpr size_t kHistoryReadBytes = 4096;
+constexpr size_t kHistoryReadBytes = 16 * 1024;
+constexpr uint32_t kPeerClipIntervalMs = 1000;
+constexpr uint32_t kPeerMsgIntervalMs = 3000;
+constexpr uint32_t kPeerCmdIntervalMs = 300;
 constexpr int kMainItems = 6;
 
 constexpr const char* kNamespace = "orbit_espnow";
@@ -66,6 +70,9 @@ struct Peer {
     char name[ep::kMaxName + 1] = {};
     int8_t rssi = -127;
     uint32_t lastSeen = 0;
+    uint32_t lastClipMs = 0;
+    uint32_t lastMsgMs = 0;
+    uint32_t lastCmdMs = 0;
 };
 
 struct AckSlot {
@@ -97,6 +104,20 @@ struct PendingCmd {
     bool ignored = false;
 };
 
+// Lavoro di finalizzazione spostato dal callback WiFi al task UI: il callback
+// non tocca SD (ne' rinomina ne' sidecar) e non blocca la radio.
+struct FinalizeJob {
+    bool pending = false;
+    uint32_t session = 0;
+    uint16_t lastSeq = 0;
+    bool noAck = false;
+    uint8_t mac[6] = {};
+    std::string tmpPath;
+    std::string displayName;
+    uint32_t fileSize = 0;
+    uint32_t expectedCrc = 0;
+};
+
 enum class CmdKind { Invalid, Beep, Led, Msg };
 
 struct CommandSpec {
@@ -108,6 +129,8 @@ struct CommandSpec {
 };
 
 SemaphoreHandle_t g_mutex = nullptr;
+SemaphoreHandle_t g_sdMutex = nullptr;
+std::atomic<int> g_callbacksActive{0};
 
 struct Guard {
     Guard() {
@@ -120,10 +143,35 @@ struct Guard {
             xSemaphoreGive(g_mutex);
         }
     }
+    Guard(const Guard&) = delete;
+    Guard& operator=(const Guard&) = delete;
+};
+
+// Un solo lock per tutte le operazioni SD del modulo: callback WiFi, browser,
+// inbox, storico e trasferimenti non possono intrecciarsi sul filesystem.
+struct SdGuard {
+    SdGuard() {
+        if (g_sdMutex != nullptr) {
+            xSemaphoreTake(g_sdMutex, portMAX_DELAY);
+        }
+    }
+    ~SdGuard() {
+        if (g_sdMutex != nullptr) {
+            xSemaphoreGive(g_sdMutex);
+        }
+    }
+    SdGuard(const SdGuard&) = delete;
+    SdGuard& operator=(const SdGuard&) = delete;
+};
+
+struct CallbackScope {
+    CallbackScope() { g_callbacksActive.fetch_add(1, std::memory_order_relaxed); }
+    ~CallbackScope() { g_callbacksActive.fetch_sub(1, std::memory_order_relaxed); }
+    CallbackScope(const CallbackScope&) = delete;
+    CallbackScope& operator=(const CallbackScope&) = delete;
 };
 
 volatile bool g_ready = false;
-volatile bool g_finalizing = false;
 bool g_radioInit = false;
 bool g_wifiStarted = false;
 bool g_prefsOpen = false;
@@ -141,15 +189,20 @@ int g_peerCount = 0;
 
 AckSlot g_ack[3];
 uint32_t g_txSession = 0;
+uint8_t g_txMac[6] = {};
+bool g_txBroadcast = false;
 
 RxState g_rx;
+FinalizeJob g_finalize;
 uint32_t g_lastRxSession = 0;
 uint16_t g_lastRxSeq = 0;
 uint32_t g_lastRxAt = 0;
+uint8_t g_lastRxMac[6] = {};
 
 std::string g_clipboard;
 uint32_t g_clipRevision = 0;
 bool g_clipDirty = false;
+uint32_t g_clipNextSaveAt = 0;
 
 PendingCmd g_pending[4];
 int g_pendingCount = 0;
@@ -197,6 +250,37 @@ std::string cleanText(const uint8_t* data, size_t len, size_t maxLen) {
 std::string cleanText(const std::string& value, size_t maxLen) {
     return cleanText(reinterpret_cast<const uint8_t*>(value.data()), value.size(),
                      maxLen);
+}
+
+// Comandi: nessuna normalizzazione. Spazi iniziali/finali, maiuscole e
+// caratteri di controllo restano e fanno fallire il matching esatto.
+std::string strictPrintable(const uint8_t* data, size_t len, size_t maxLen) {
+    if (data == nullptr || len > maxLen) {
+        return std::string();
+    }
+    std::string out;
+    out.reserve(len);
+    for (size_t i = 0; i < len; ++i) {
+        const uint8_t c = data[i];
+        if (c < 0x20 || c >= 0x7F) {
+            return std::string();
+        }
+        out.push_back(static_cast<char>(c));
+    }
+    return out;
+}
+
+// Clipboard: conserva gli spazi, scarta i caratteri non stampabili.
+std::string printableText(const uint8_t* data, size_t len, size_t maxLen) {
+    std::string out;
+    out.reserve(std::min(len, maxLen));
+    for (size_t i = 0; i < len && out.size() < maxLen; ++i) {
+        const uint8_t c = data[i];
+        if (c >= 0x20 && c < 0x7F) {
+            out.push_back(static_cast<char>(c));
+        }
+    }
+    return out;
 }
 
 std::string cleanPeerName(const uint8_t* data, size_t len) {
@@ -377,9 +461,13 @@ std::vector<Peer> snapshotPeers() {
     return std::vector<Peer>(copy, copy + count);
 }
 
-void beginTx(uint32_t session) {
+void beginTx(uint32_t session, const uint8_t* targetMac, bool broadcast) {
     Guard guard;
     g_txSession = session;
+    g_txBroadcast = broadcast;
+    const uint8_t* target =
+        (broadcast || targetMac == nullptr) ? kBroadcastMac : targetMac;
+    std::memcpy(g_txMac, target, 6);
     for (AckSlot& slot : g_ack) {
         slot = AckSlot{};
     }
@@ -494,6 +582,7 @@ void sendHello() {
 // --- Ricezione file ---------------------------------------------------------
 
 void closeRxLocked() {
+    SdGuard sd;
     if (g_rx.file) {
         g_rx.file.flush();
         g_rx.file.close();
@@ -514,6 +603,7 @@ bool checkRxTimeoutLocked() {
     return false;
 }
 
+// Richiede SdGuard: il chiamante serializza con le altre operazioni SD.
 std::string uniqueInboxPath(const std::string& name) {
     const std::string base = std::string(kInboxDir) + "/" + name;
     if (!storage::exists(base, true)) {
@@ -535,6 +625,7 @@ std::string uniqueInboxPath(const std::string& name) {
     return fallback;
 }
 
+// Richiede SdGuard: il chiamante serializza con le altre operazioni SD.
 bool fileCrc(const std::string& path, uint32_t& crcOut, uint32_t& sizeOut) {
     File file = storage::openRead(path, true);
     if (!file) {
@@ -569,21 +660,25 @@ bool openRxLocked(const uint8_t* mac, uint32_t session, const uint8_t* nameData,
                   size_t nameLen, uint32_t fileSize, uint32_t fileCrc) {
     const std::string name = cleanFileName(nameData, nameLen);
     char tmp[64] = {};
-    for (int attempt = 0; attempt < 8; ++attempt) {
-        std::snprintf(tmp, sizeof(tmp), "%s/rx_%08lX_%d.part", kTmpDir,
-                      static_cast<unsigned long>(session), attempt);
-        if (!storage::exists(tmp, true)) {
-            break;
+    File file;
+    {
+        SdGuard sd;
+        for (int attempt = 0; attempt < 8; ++attempt) {
+            std::snprintf(tmp, sizeof(tmp), "%s/rx_%08lX_%d.part", kTmpDir,
+                          static_cast<unsigned long>(session), attempt);
+            if (!storage::exists(tmp, true)) {
+                break;
+            }
+            tmp[0] = '\0';
         }
-        tmp[0] = '\0';
-    }
-    if (tmp[0] == '\0') {
-        return false;
-    }
-    storage::mkdir(kTmpDir, true);
-    File file = storage::openWrite(tmp, true);
-    if (!file) {
-        return false;
+        if (tmp[0] == '\0') {
+            return false;
+        }
+        storage::mkdir(kTmpDir, true);
+        file = storage::openWrite(tmp, true);
+        if (!file) {
+            return false;
+        }
     }
 
     g_rx.active = true;
@@ -603,58 +698,74 @@ bool openRxLocked(const uint8_t* mac, uint32_t session, const uint8_t* nameData,
     return true;
 }
 
-void finalizeReceive() {
-    const uint32_t session = g_rx.session;
-    const uint16_t lastSeq = g_rx.totalChunks - 1;
-    const bool noAck = g_rx.noAck;
-    uint8_t mac[6];
-    std::memcpy(mac, g_rx.mac, 6);
-
-    uint32_t crc = 0;
-    uint32_t size = 0;
-    const bool readOk = fileCrc(g_rx.tmpPath, crc, size);
-    uint8_t status = ep::StOk;
-    if (!readOk) {
-        status = ep::StIo;
-    } else if (size != g_rx.fileSize || crc != g_rx.expectedCrc) {
-        status = ep::StCrc;
+// Verifica CRC, rinomina e sidecar: eseguita dal task UI, mai dal callback
+// WiFi. Tutte le operazioni SD sono sotto SdGuard.
+void serviceFinalize() {
+    FinalizeJob job;
+    {
+        Guard guard;
+        if (!g_finalize.pending) {
+            return;
+        }
+        job = g_finalize;
     }
 
-    if (status == ep::StOk) {
-        const std::string finalPath = uniqueInboxPath(g_rx.displayName);
-        if (!SD.rename(g_rx.tmpPath.c_str(), finalPath.c_str())) {
+    uint8_t status = ep::StOk;
+    std::string receivedName;
+    uint32_t crc = 0;
+    uint32_t size = 0;
+    {
+        SdGuard sd;
+        if (!fileCrc(job.tmpPath, crc, size)) {
             status = ep::StIo;
-        } else {
-            char meta[64];
-            std::snprintf(meta, sizeof(meta), "%08lX %lu\n",
-                          static_cast<unsigned long>(crc),
-                          static_cast<unsigned long>(size));
-            if (!storage::writeText(finalPath + ".crc", meta, true)) {
-                storage::removeFile(finalPath, true);
+        } else if (size != job.fileSize || crc != job.expectedCrc) {
+            status = ep::StCrc;
+        }
+        if (status == ep::StOk) {
+            const std::string finalPath = uniqueInboxPath(job.displayName);
+            if (!SD.rename(job.tmpPath.c_str(), finalPath.c_str())) {
                 status = ep::StIo;
             } else {
-                setNotice("Ricevuto: " + baseName(finalPath), 4000);
-                Guard guard;
-                g_beepPending = true;
+                char meta[64];
+                std::snprintf(meta, sizeof(meta), "%08lX %lu\n",
+                              static_cast<unsigned long>(crc),
+                              static_cast<unsigned long>(size));
+                if (!storage::writeText(finalPath + ".crc", meta, true)) {
+                    storage::removeFile(finalPath, true);
+                    status = ep::StIo;
+                } else {
+                    receivedName = baseName(finalPath);
+                }
             }
+        }
+        if (status != ep::StOk) {
+            storage::removeFile(job.tmpPath, true);
         }
     }
 
-    if (status != ep::StOk) {
-        storage::removeFile(g_rx.tmpPath, true);
+    {
+        Guard guard;
+        g_finalize = FinalizeJob{};
+    }
+
+    if (status == ep::StOk) {
+        setNotice("Ricevuto: " + receivedName, 4000);
+        Guard guard;
+        g_beepPending = true;
+    } else {
         setNotice(status == ep::StCrc ? "!CRC errato: file rifiutato"
                                       : "!Ricezione fallita",
                   4000);
     }
 
-    replyAck(mac, session, ep::AckFinal, lastSeq, status, noAck);
-    if (!noAck) {
-        // L'ACK finale e' l'unica conferma end-to-end: se il primo frame si
-        // perde il mittente mostrerebbe un falso "conferma assente".
-        delay(80);
-        replyAck(mac, session, ep::AckFinal, lastSeq, status, noAck);
+    replyAck(job.mac, job.session, ep::AckFinal, job.lastSeq, status, job.noAck);
+    if (!job.noAck) {
+        // Siamo nel task UI: il piccolo delay non blocca la radio. Il secondo
+        // frame riduce il falso "conferma assente" se il primo si perde.
+        delay(40);
+        replyAck(job.mac, job.session, ep::AckFinal, job.lastSeq, status,
+                 job.noAck);
     }
-    g_finalizing = false;
 }
 
 void handleMeta(const uint8_t* mac, const ep::Packet& packet) {
@@ -688,8 +799,10 @@ void handleMeta(const uint8_t* mac, const ep::Packet& packet) {
         status = ep::StSize;
     } else {
         Guard guard;
-        if (g_finalizing ||
-            (g_rx.active && g_rx.session != packet.session)) {
+        if (g_finalize.pending ||
+            (g_rx.active &&
+             (g_rx.session != packet.session ||
+              std::memcmp(mac, g_rx.mac, 6) != 0))) {
             status = ep::StBusy;
         } else if (g_rx.active && g_rx.session == packet.session) {
             duplicate = true;
@@ -717,14 +830,17 @@ void handleData(const uint8_t* mac, const ep::Packet& packet) {
 
     {
         Guard guard;
-        if (!g_rx.active) {
-            // ACK del blocco finale perso: il peer puo' ritrasmetterlo anche
-            // mentre stiamo ancora verificando il CRC del file.
-            if (packet.session == g_lastRxSession &&
-                packet.seq == g_lastRxSeq &&
-                static_cast<uint32_t>(millis() - g_lastRxAt) < 10000) {
-                finishedDuplicate = true;
-            }
+        // ACK del blocco finale perso: il peer puo' ritrasmetterlo anche
+        // mentre la finalizzazione e' in coda nel task UI o e' gia' finita.
+        if (packet.session == g_lastRxSession &&
+            packet.seq == g_lastRxSeq &&
+            std::memcmp(mac, g_lastRxMac, 6) == 0 &&
+            static_cast<uint32_t>(millis() - g_lastRxAt) < 10000) {
+            finishedDuplicate = true;
+        } else if (!g_rx.active) {
+            // nessun trasferimento in corso: ignora
+        } else if (std::memcmp(mac, g_rx.mac, 6) != 0) {
+            return;  // un altro peer non puo' iniettare blocchi nella sessione
         } else if (g_rx.session != packet.session) {
             return;
         } else {
@@ -744,22 +860,42 @@ void handleData(const uint8_t* mac, const ep::Packet& packet) {
                         : ep::kChunkSize;
                 if (packet.len != expectLen) {
                     status = ep::StSize;
-                } else if (g_rx.file.write(packet.payload, packet.len) !=
-                           packet.len) {
-                    status = ep::StIo;
                 } else {
-                    g_rx.expected++;
-                    g_rx.received += packet.len;
-                    g_rx.lastMs = millis();
-                    if (g_rx.expected >= g_rx.totalChunks) {
-                        g_rx.file.flush();
-                        g_rx.file.close();
-                        g_rx.active = false;
-                        g_finalizing = true;
-                        g_lastRxSession = g_rx.session;
-                        g_lastRxSeq = packet.seq;
-                        g_lastRxAt = millis();
-                        completed = true;
+                    bool writeOk = false;
+                    {
+                        SdGuard sd;
+                        writeOk =
+                            g_rx.file.write(packet.payload, packet.len) ==
+                            packet.len;
+                    }
+                    if (!writeOk) {
+                        status = ep::StIo;
+                    } else {
+                        g_rx.expected++;
+                        g_rx.received += packet.len;
+                        g_rx.lastMs = millis();
+                        if (g_rx.expected >= g_rx.totalChunks) {
+                            {
+                                SdGuard sd;
+                                g_rx.file.flush();
+                                g_rx.file.close();
+                            }
+                            g_rx.active = false;
+                            g_finalize.session = g_rx.session;
+                            g_finalize.lastSeq = packet.seq;
+                            g_finalize.noAck = g_rx.noAck;
+                            std::memcpy(g_finalize.mac, g_rx.mac, 6);
+                            g_finalize.tmpPath = g_rx.tmpPath;
+                            g_finalize.displayName = g_rx.displayName;
+                            g_finalize.fileSize = g_rx.fileSize;
+                            g_finalize.expectedCrc = g_rx.expectedCrc;
+                            g_finalize.pending = true;
+                            g_lastRxSession = g_rx.session;
+                            g_lastRxSeq = packet.seq;
+                            g_lastRxAt = millis();
+                            std::memcpy(g_lastRxMac, g_rx.mac, 6);
+                            completed = true;
+                        }
                     }
                 }
             }
@@ -774,111 +910,122 @@ void handleData(const uint8_t* mac, const ep::Packet& packet) {
         return;
     }
     replyAck(mac, packet.session, ep::AckData, packet.seq, status, noAck);
-    if (completed && status == ep::StOk) {
-        finalizeReceive();
-    }
+    // La verifica CRC e la pubblicazione avvengono nel task UI tramite
+    // serviceFinalize(): il callback resta leggero e non tocca SD.
+    (void)completed;
 }
 
 void handleAck(const uint8_t* mac, const ep::Packet& packet) {
     if (packet.len != 1 || packet.flags > ep::AckFinal) {
         return;
     }
-    touchPeer(mac, nullptr);
-    Guard guard;
-    if (packet.session != g_txSession) {
-        return;
-    }
-    AckSlot& slot = g_ack[packet.flags];
-    slot.valid = true;
-    slot.session = packet.session;
-    slot.seq = packet.seq;
-    slot.status = packet.payload[0];
-}
-
-std::vector<std::string> splitTokens(const std::string& text) {
-    std::vector<std::string> tokens;
-    std::string current;
-    for (char c : text) {
-        if (c == ' ') {
-            if (!current.empty()) {
-                tokens.push_back(current);
-                current.clear();
-            }
-        } else {
-            current.push_back(c);
+    bool accepted = false;
+    {
+        Guard guard;
+        // MAC binding: solo il peer a cui stiamo inviando puo' confermare.
+        if (g_txBroadcast || std::memcmp(mac, g_txMac, 6) != 0 ||
+            packet.session != g_txSession) {
+            return;
         }
+        AckSlot& slot = g_ack[packet.flags];
+        slot.valid = true;
+        slot.session = packet.session;
+        slot.seq = packet.seq;
+        slot.status = packet.payload[0];
+        accepted = true;
     }
-    if (!current.empty()) {
-        tokens.push_back(current);
+    if (accepted) {
+        touchPeer(mac, nullptr);
     }
-    return tokens;
 }
 
-std::string lowerCopy(const std::string& value) {
-    std::string out = value;
-    for (char& c : out) {
-        if (c >= 'A' && c <= 'Z') {
-            c = static_cast<char>(c - 'A' + 'a');
+bool parseByteToken(const std::string& token, uint8_t& out) {
+    if (token.empty() || token.size() > 3) {
+        return false;
+    }
+    int value = 0;
+    for (char c : token) {
+        if (c < '0' || c > '9') {
+            return false;
         }
+        value = value * 10 + (c - '0');
     }
-    return out;
+    if (value > 255) {
+        return false;
+    }
+    out = static_cast<uint8_t>(value);
+    return true;
 }
 
+// Whitelist a matching esatto: niente trim di spazi iniziali, niente
+// case-insensitive, niente newline. "BEEP", " beep" e "beep\n" sono invalidi.
 CommandSpec parseCommand(const std::string& raw) {
     CommandSpec spec;
-    const std::vector<std::string> tokens = splitTokens(cleanText(raw, ep::kMaxCommand));
-    if (tokens.empty()) {
-        return spec;
-    }
-    const std::string head = lowerCopy(tokens[0]);
-    if (head == "beep") {
-        if (tokens.size() == 1) {
-            spec.kind = CmdKind::Beep;
-        }
-        return spec;
-    }
-    if (head == "led") {
-        if (tokens.size() == 2 && lowerCopy(tokens[1]) == "off") {
-            spec.kind = CmdKind::Led;
+    for (char c : raw) {
+        const unsigned char u = static_cast<unsigned char>(c);
+        if (u < 0x20 || u >= 0x7F) {
             return spec;
         }
-        if (tokens.size() == 4) {
-            long values[3] = {0, 0, 0};
-            bool ok = true;
-            for (int i = 0; i < 3; ++i) {
-                if (!textinput::parseInt(tokens[i + 1], values[i]) ||
-                    values[i] < 0 || values[i] > 255) {
-                    ok = false;
-                    break;
-                }
-            }
-            if (ok) {
-                spec.kind = CmdKind::Led;
-                spec.r = static_cast<uint8_t>(values[0]);
-                spec.g = static_cast<uint8_t>(values[1]);
-                spec.b = static_cast<uint8_t>(values[2]);
-            }
-        }
+    }
+    if (raw == "beep") {
+        spec.kind = CmdKind::Beep;
         return spec;
     }
-    if (head == "msg" && tokens.size() >= 2) {
-        std::string text;
-        for (size_t i = 1; i < tokens.size(); ++i) {
-            if (!text.empty()) {
-                text.push_back(' ');
-            }
-            text += tokens[i];
-            if (text.size() > 80) {
-                text.resize(80);
-                break;
-            }
+    if (raw == "led off") {
+        spec.kind = CmdKind::Led;
+        return spec;
+    }
+    if (raw.rfind("led ", 0) == 0) {
+        const std::string args = raw.substr(4);
+        if (args.empty() || args.front() == ' ' || args.back() == ' ') {
+            return spec;
         }
-        if (!text.empty()) {
-            spec.kind = CmdKind::Msg;
-            spec.text = text;
+        const size_t first = args.find(' ');
+        if (first == std::string::npos) {
+            return spec;
         }
+        const size_t second = args.find(' ', first + 1);
+        if (second == std::string::npos ||
+            args.find(' ', second + 1) != std::string::npos) {
+            return spec;
+        }
+        uint8_t r = 0;
+        uint8_t g = 0;
+        uint8_t b = 0;
+        if (!parseByteToken(args.substr(0, first), r) ||
+            !parseByteToken(args.substr(first + 1, second - first - 1), g) ||
+            !parseByteToken(args.substr(second + 1), b)) {
+            return spec;
+        }
+        spec.kind = CmdKind::Led;
+        spec.r = r;
+        spec.g = g;
+        spec.b = b;
+        return spec;
+    }
+    if (raw.rfind("msg ", 0) == 0) {
+        if (raw.size() <= 4 || raw[4] == ' ') {
+            return spec;
+        }
+        spec.kind = CmdKind::Msg;
+        spec.text = raw.substr(4, 80);
     }
     return spec;
+}
+
+bool commandSelfTest() {
+    return parseCommand("beep").kind == CmdKind::Beep &&
+           parseCommand("BEEP").kind == CmdKind::Invalid &&
+           parseCommand(" beep").kind == CmdKind::Invalid &&
+           parseCommand("beep ").kind == CmdKind::Invalid &&
+           parseCommand("beep\n").kind == CmdKind::Invalid &&
+           parseCommand("led off").kind == CmdKind::Led &&
+           parseCommand("led 0 220 80").kind == CmdKind::Led &&
+           parseCommand("led 0 220 256").kind == CmdKind::Invalid &&
+           parseCommand("led 0 220").kind == CmdKind::Invalid &&
+           parseCommand("msg ciao").kind == CmdKind::Msg &&
+           parseCommand("msg").kind == CmdKind::Invalid &&
+           parseCommand("MSG ciao").kind == CmdKind::Invalid;
 }
 
 void handleCommand(const uint8_t* mac, const ep::Packet& packet) {
@@ -893,9 +1040,9 @@ void handleCommand(const uint8_t* mac, const ep::Packet& packet) {
     const std::string sender =
         cleanPeerName(packet.payload + 1, static_cast<size_t>(nameLen));
     const std::string text =
-        cleanText(packet.payload + 1 + nameLen,
-                  packet.len - 1 - static_cast<size_t>(nameLen),
-                  ep::kMaxCommand);
+        strictPrintable(packet.payload + 1 + nameLen,
+                        packet.len - 1 - static_cast<size_t>(nameLen),
+                        ep::kMaxCommand);
     if (text.empty()) {
         return;
     }
@@ -903,6 +1050,23 @@ void handleCommand(const uint8_t* mac, const ep::Packet& packet) {
     const CommandSpec spec = parseCommand(text);
 
     Guard guard;
+    const int peerSlot = findPeerLocked(mac);
+    const uint32_t now = millis();
+    if (peerSlot >= 0) {
+        if (g_peers[peerSlot].lastCmdMs != 0 &&
+            now - g_peers[peerSlot].lastCmdMs < kPeerCmdIntervalMs) {
+            return;  // flood generico di comandi
+        }
+        g_peers[peerSlot].lastCmdMs = now;
+        if (spec.kind == CmdKind::Msg &&
+            g_peers[peerSlot].lastMsgMs != 0 &&
+            now - g_peers[peerSlot].lastMsgMs < kPeerMsgIntervalMs) {
+            return;  // rate limit piu' severo per i messaggi
+        }
+        if (spec.kind == CmdKind::Msg) {
+            g_peers[peerSlot].lastMsgMs = now;
+        }
+    }
     if (g_pendingCount >= static_cast<int>(sizeof(g_pending) / sizeof(g_pending[0]))) {
         return;
     }
@@ -925,19 +1089,33 @@ void handleClipboard(const uint8_t* mac, const ep::Packet& packet) {
     const std::string sender =
         cleanPeerName(packet.payload + 1, static_cast<size_t>(nameLen));
     const std::string text =
-        cleanText(packet.payload + 1 + nameLen,
-                  packet.len - 1 - static_cast<size_t>(nameLen),
-                  ep::kMaxClipboard);
+        printableText(packet.payload + 1 + nameLen,
+                      packet.len - 1 - static_cast<size_t>(nameLen),
+                      ep::kMaxClipboard);
     touchPeer(mac, sender.empty() ? nullptr : sender.c_str());
     if (text.empty()) {
         return;
     }
     Guard guard;
+    // Confronto PRIMA di marcare dirty: un peer che ripete lo stesso testo
+    // non deve generare scritture NVS ne' notifiche.
+    if (text == g_clipboard) {
+        return;
+    }
+    const int slot = findPeerLocked(mac);
+    const uint32_t now = millis();
+    if (slot >= 0 && g_peers[slot].lastClipMs != 0 &&
+        now - g_peers[slot].lastClipMs < kPeerClipIntervalMs) {
+        return;  // rate limit per peer
+    }
+    if (slot >= 0) {
+        g_peers[slot].lastClipMs = now;
+    }
     g_clipboard = text;
     g_clipRevision++;
     g_clipDirty = true;
     g_notice = "Clipboard da " + (sender.empty() ? std::string("peer") : sender);
-    g_noticeUntil = millis() + 3000;
+    g_noticeUntil = now + 3000;
     g_beepPending = true;
 }
 
@@ -976,6 +1154,7 @@ void handleClipboardRequest(const uint8_t* mac, const ep::Packet& packet) {
 }
 
 void onReceive(const uint8_t* mac, const uint8_t* data, int len) {
+    CallbackScope scope;
     if (!g_ready || mac == nullptr || data == nullptr || len <= 0) {
         return;
     }
@@ -1021,6 +1200,7 @@ void onReceive(const uint8_t* mac, const uint8_t* data, int len) {
 }
 
 void snifferCallback(void* buffer, wifi_promiscuous_pkt_type_t type) {
+    CallbackScope scope;
     if (buffer == nullptr || type != WIFI_PKT_MGMT) {
         return;
     }
@@ -1077,23 +1257,59 @@ bool addBroadcastPeer() {
 }
 
 void abortReceiveForExit() {
-    // La verifica CRC di un file da 512 KB avviene nel task WiFi: attende
-    // prima di chiudere la radio, altrimenti il callback userebbe un File
-    // mentre deinit lo sta smontando.
-    for (int i = 0; i < 100 && g_finalizing; ++i) {
-        delay(50);
+    // Il lavoro pesante e' gia' nel task UI: qui si chiude solo un eventuale
+    // parziale e si scarta un finalize rimasto in coda (es. SD assente).
+    // Aspetta i callback gia' entrati: g_ready e' false, quindi non ne
+    // arrivano di nuovi e il wait ha una fine pratica.
+    for (int i = 0; i < 200 && g_callbacksActive.load() > 0; ++i) {
+        delay(5);
     }
     Guard guard;
     if (g_rx.active) {
         closeRxLocked();
     }
+    if (g_finalize.pending) {
+        SdGuard sd;
+        if (!g_finalize.tmpPath.empty()) {
+            storage::removeFile(g_finalize.tmpPath, true);
+        }
+        g_finalize = FinalizeJob{};
+    }
 }
 
-bool startRadio() {
+bool initLocks() {
     if (g_mutex == nullptr) {
         g_mutex = xSemaphoreCreateMutex();
     }
-    if (g_mutex == nullptr) {
+    if (g_sdMutex == nullptr) {
+        g_sdMutex = xSemaphoreCreateMutex();
+    }
+    return g_mutex != nullptr && g_sdMutex != nullptr;
+}
+
+void destroyLocksIfSafe() {
+    bool pending = false;
+    if (g_mutex != nullptr) {
+        Guard guard;
+        pending = g_finalize.pending;
+    }
+    if (!g_radioInit && !g_wifiStarted && g_callbacksActive.load() == 0 &&
+        !pending) {
+        if (g_sdMutex != nullptr) {
+            vSemaphoreDelete(g_sdMutex);
+            g_sdMutex = nullptr;
+        }
+        if (g_mutex != nullptr) {
+            vSemaphoreDelete(g_mutex);
+            g_mutex = nullptr;
+        }
+    } else {
+        logger::warn("ESP-NOW: lock non distrutti (callback/finalize attivi)");
+    }
+}
+
+bool startRadio() {
+    if (!initLocks()) {
         return false;
     }
 
@@ -1102,6 +1318,10 @@ bool startRadio() {
     stopSniffer();
     {
         Guard guard;
+        if (g_rx.active) {
+            closeRxLocked();
+        }
+        g_finalize = FinalizeJob{};
         g_peerCount = 0;
     }
 
@@ -1137,13 +1357,24 @@ bool startRadio() {
 }
 
 void stopRadio() {
-    g_ready = false;
     stopSniffer();
+    // Prova a chiudere un file gia' completo prima di spegnere la radio.
+    serviceFinalize();
+    g_ready = false;
     abortReceiveForExit();
     if (g_radioInit) {
         esp_now_unregister_recv_cb();
         esp_now_deinit();
         g_radioInit = false;
+    }
+    // Deinit non deve lasciare callback che usano i lock mentre li
+    // distruggiamo. Se dopo l'attesa ce n'e' ancora uno, i mutex restano
+    // vivi (li rilascia il processo) invece di causare use-after-free.
+    for (int i = 0; i < 200 && g_callbacksActive.load() > 0; ++i) {
+        delay(10);
+    }
+    if (g_callbacksActive.load() > 0) {
+        logger::warn("ESP-NOW: callback ancora attivo, mutex non distrutti");
     }
     if (g_wifiStarted) {
         WiFi.disconnect();
@@ -1165,18 +1396,35 @@ bool saveClipboardIfDirty() {
         if (!g_clipDirty) {
             return true;
         }
-        g_clipDirty = false;
+        if (g_clipNextSaveAt != 0 &&
+            static_cast<int32_t>(millis() - g_clipNextSaveAt) < 0) {
+            return false;  // backoff dopo un errore NVS
+        }
         text = g_clipboard;
     }
     if (!g_prefsOpen) {
+        g_clipNextSaveAt = millis() + 5000;
         return false;
     }
+
+    bool ok = true;
     if (text.empty()) {
         g_prefs.remove("clip");
     } else {
-        g_prefs.putString("clip", text.c_str());
+        ok = g_prefs.putString("clip", text.c_str()) == text.size();
     }
-    return true;
+    if (ok) {
+        Guard guard;
+        // dirty = testo non ancora persistito. Si azzera SOLO dopo putString
+        // riuscita; se nel frattempo e' arrivato un testo nuovo resta dirty.
+        if (g_clipboard == text) {
+            g_clipDirty = false;
+        }
+        g_clipNextSaveAt = 0;
+    } else {
+        g_clipNextSaveAt = millis() + 5000;
+    }
+    return ok;
 }
 
 bool loadConfig() {
@@ -1212,6 +1460,7 @@ bool loadConfig() {
     g_channel = channel;
     g_clipboard = clipboard;
     g_clipDirty = false;
+    g_clipNextSaveAt = 0;
     return true;
 }
 
@@ -1225,6 +1474,7 @@ void ensureDirs() {
     if (!storage::hasSD()) {
         return;
     }
+    SdGuard sd;
     storage::mkdir("/espnow", true);
     storage::mkdir(kInboxDir, true);
     storage::mkdir(kTmpDir, true);
@@ -1236,6 +1486,53 @@ void ensureDirs() {
             storage::removeFile(std::string(kTmpDir) + "/" + entry.name, true);
         }
     }
+}
+
+enum class TailResult { Missing, Ok, Error };
+
+// Legge la coda del file (max maxBytes). Richiede SdGuard.
+TailResult readTextTailLocked(const std::string& path, size_t maxBytes,
+                              std::string& out) {
+    out.clear();
+    File file = storage::openRead(path, true);
+    if (!file) {
+        return storage::exists(path, true) ? TailResult::Error
+                                            : TailResult::Missing;
+    }
+    const size_t size = static_cast<size_t>(file.size());
+    const size_t start = size > maxBytes ? size - maxBytes : 0;
+    if (start > 0 && !file.seek(start)) {
+        file.close();
+        return TailResult::Error;
+    }
+    out.reserve(std::min(size - start, maxBytes));
+    uint8_t buffer[256];
+    size_t total = 0;
+    while (total < maxBytes) {
+        const size_t want = std::min(sizeof(buffer), maxBytes - total);
+        const int got = file.read(buffer, want);
+        if (got < 0) {
+            file.close();
+            return TailResult::Error;
+        }
+        if (got == 0) {
+            break;
+        }
+        out.append(reinterpret_cast<const char*>(buffer),
+                   static_cast<size_t>(got));
+        total += static_cast<size_t>(got);
+    }
+    file.close();
+    if (start > 0) {
+        // La coda puo' iniziare a meta' riga: scarta il primo frammento.
+        const size_t newline = out.find('\n');
+        if (newline == std::string::npos) {
+            out.clear();
+        } else {
+            out.erase(0, newline + 1);
+        }
+    }
+    return TailResult::Ok;
 }
 
 std::vector<std::string> splitLines(const std::string& text) {
@@ -1264,38 +1561,63 @@ void logCommand(bool tx, const std::string& who, const std::string& text) {
     if (!storage::hasSD()) {
         return;
     }
-    storage::mkdir("/espnow", true);
-    std::string history;
-    storage::readText(kHistoryPath, history, kHistoryReadBytes, true);
-    std::vector<std::string> lines = splitLines(history);
-    while (lines.size() >= kHistoryMaxLines) {
-        lines.erase(lines.begin());
-    }
-    const std::string clean = cleanText(text, 64);
-    char stamp[16];
-    std::snprintf(stamp, sizeof(stamp), "[%lus]",
-                  static_cast<unsigned long>(millis() / 1000));
-    lines.push_back(std::string(stamp) + (tx ? " TX " : " RX ") +
-                    (who.empty() ? "peer" : who) + ": " +
-                    (clean.empty() ? "-" : clean));
     std::string out;
-    for (const std::string& line : lines) {
-        out += line;
-        out.push_back('\n');
+    bool writeOk = false;
+    {
+        SdGuard sd;
+        storage::mkdir("/espnow", true);
+        std::string history;
+        const TailResult result =
+            readTextTailLocked(kHistoryPath, kHistoryReadBytes, history);
+        if (result == TailResult::Error) {
+            logger::warn("ESP-NOW: storico non leggibile, non lo sovrascrivo");
+            return;
+        }
+        std::vector<std::string> lines = splitLines(history);
+        while (lines.size() >= kHistoryMaxLines) {
+            lines.erase(lines.begin());
+        }
+        // Testo esatto (spazi inclusi) per distinguere " beep" da "beep".
+        std::string clean = text.size() > 64 ? text.substr(0, 64) : text;
+        char stamp[16];
+        std::snprintf(stamp, sizeof(stamp), "[%lus]",
+                      static_cast<unsigned long>(millis() / 1000));
+        lines.push_back(std::string(stamp) + (tx ? " TX " : " RX ") +
+                        (who.empty() ? "peer" : who) + ": " +
+                        (clean.empty() ? "-" : clean));
+        for (const std::string& line : lines) {
+            out += line;
+            out.push_back('\n');
+        }
+        writeOk = storage::writeText(kHistoryPath, out, true);
     }
-    storage::writeText(kHistoryPath, out, true);
+    if (!writeOk) {
+        logger::warn("ESP-NOW: scrittura storico fallita");
+    }
 }
 
 void showHistory() {
-    std::string history;
-    if (!storage::hasSD() ||
-        !storage::readText(kHistoryPath, history, kHistoryReadBytes, true)) {
+    if (!storage::hasSD()) {
         ui::message("Storico comandi", {"Nessun comando registrato."},
                     "ESP-NOW > Comandi");
         return;
     }
+    std::string history;
+    TailResult result = TailResult::Error;
+    {
+        SdGuard sd;
+        result =
+            readTextTailLocked(kHistoryPath, kHistoryReadBytes, history);
+    }
+    if (result == TailResult::Error) {
+        // File grande/illeggibile: non dire "nessun comando", sarebbe falso.
+        ui::message("Storico comandi",
+                    {"!Storico non leggibile.", "Controlla la microSD."},
+                    "ESP-NOW > Comandi");
+        return;
+    }
     std::vector<std::string> lines = splitLines(history);
-    if (lines.empty()) {
+    if (result == TailResult::Missing || lines.empty()) {
         ui::message("Storico comandi", {"Nessun comando registrato."},
                     "ESP-NOW > Comandi");
         return;
@@ -1326,9 +1648,8 @@ void processPending(const PendingCmd& pending) {
     const CommandSpec spec = parseCommand(text);
     switch (spec.kind) {
         case CmdKind::Beep:
-            M5Cardputer.Speaker.tone(1800, 80);
-            delay(90);
-            M5Cardputer.Speaker.tone(2300, 80);
+            // Un solo tono breve: nessun delay bloccante nel task UI.
+            M5Cardputer.Speaker.tone(1900, 120);
             setNotice("Beep remoto", 1200);
             break;
         case CmdKind::Led:
@@ -1336,9 +1657,10 @@ void processPending(const PendingCmd& pending) {
             setNotice("LED remoto", 1200);
             break;
         case CmdKind::Msg:
+            // Nessuna modale bloccante: un flood di msg non puo' congelare
+            // la UI. Il testo resta visibile come banner per qualche secondo.
             M5Cardputer.Speaker.tone(2400, 60);
-            ui::message("Messaggio da " + from,
-                        wrapLines(spec.text, 38, 5), "ESP-NOW");
+            setNotice(from + ": " + shorten(spec.text, 28), 6000);
             break;
         case CmdKind::Invalid:
             break;
@@ -1347,6 +1669,7 @@ void processPending(const PendingCmd& pending) {
 
 void serviceBackground() {
     saveClipboardIfDirty();
+    serviceFinalize();
     bool timedOut = false;
     {
         Guard guard;
@@ -1425,11 +1748,15 @@ bool sendClipboardText(const std::string& raw) {
     if (!g_ready || text.empty()) {
         return false;
     }
+    bool changed = false;
     {
         Guard guard;
-        g_clipboard = text;
-        g_clipRevision++;
-        g_clipDirty = true;
+        if (text != g_clipboard) {
+            g_clipboard = text;
+            g_clipRevision++;
+            g_clipDirty = true;
+            changed = true;
+        }
     }
     const std::string name = ownName();
     ep::Packet packet{};
@@ -1440,7 +1767,9 @@ bool sendClipboardText(const std::string& raw) {
     std::memcpy(packet.payload + 1, name.data(), name.size());
     std::memcpy(packet.payload + 1 + name.size(), text.data(), text.size());
     const bool sent = sendBroadcast(packet);
-    saveClipboardIfDirty();
+    if (changed) {
+        saveClipboardIfDirty();
+    }
     return sent;
 }
 
@@ -1567,11 +1896,17 @@ void transferFile(const std::string& path, uint32_t declaredSize,
                     "ESP-NOW");
         return;
     }
-    if (!storage::hasSD() || !storage::exists(path, true)) {
+    bool exists = false;
+    uint32_t size = 0;
+    {
+        SdGuard sd;
+        exists = storage::exists(path, true);
+        size = static_cast<uint32_t>(storage::fileSize(path, true));
+    }
+    if (!storage::hasSD() || !exists) {
         ui::message("Invia file", {"!File non trovato.", path}, "ESP-NOW");
         return;
     }
-    const uint32_t size = static_cast<uint32_t>(storage::fileSize(path, true));
     if (size == 0 || size > ep::kMaxFileBytes || size != declaredSize) {
         ui::message("Invia file", {"!File non valido o troppo grande.",
                                    "Limite: 512 KB."},
@@ -1587,7 +1922,12 @@ void transferFile(const std::string& path, uint32_t declaredSize,
 
     uint32_t fileCrcValue = 0;
     uint32_t crcSize = 0;
-    if (!fileCrc(path, fileCrcValue, crcSize) || crcSize != size) {
+    bool crcOk = false;
+    {
+        SdGuard sd;
+        crcOk = fileCrc(path, fileCrcValue, crcSize);
+    }
+    if (!crcOk || crcSize != size) {
         ui::message("Invia file", {"!Lettura del file fallita."}, "ESP-NOW");
         return;
     }
@@ -1610,7 +1950,7 @@ void transferFile(const std::string& path, uint32_t declaredSize,
     if (session == 0) {
         session = 1;
     }
-    beginTx(session);
+    beginTx(session, target, broadcast);
 
     ep::Packet meta{};
     meta.type = ep::TypeFileMeta;
@@ -1643,7 +1983,11 @@ void transferFile(const std::string& path, uint32_t declaredSize,
         }
     }
 
-    File file = storage::openRead(path, true);
+    File file;
+    {
+        SdGuard sd;
+        file = storage::openRead(path, true);
+    }
     if (!file) {
         ui::message("Invia file", {"!Impossibile riaprire il file."}, "ESP-NOW");
         return;
@@ -1658,7 +2002,11 @@ void transferFile(const std::string& path, uint32_t declaredSize,
             seq + 1 == totalChunks
                 ? static_cast<size_t>(size - static_cast<uint32_t>(seq) * ep::kChunkSize)
                 : ep::kChunkSize;
-        const int got = file.read(buffer, want);
+        int got = 0;
+        {
+            SdGuard sd;
+            got = file.read(buffer, want);
+        }
         if (got != static_cast<int>(want)) {
             failed = true;
             break;
@@ -1697,7 +2045,10 @@ void transferFile(const std::string& path, uint32_t declaredSize,
             drawTransfer(targetLabel, fileName, sent, size, seq, totalChunks);
         }
     }
-    file.close();
+    {
+        SdGuard sd;
+        file.close();
+    }
     drawTransfer(targetLabel, fileName, sent, size,
                  sent >= size ? static_cast<uint16_t>(totalChunks - 1) : 0,
                  totalChunks);
@@ -1736,10 +2087,15 @@ void transferFile(const std::string& path, uint32_t declaredSize,
                         "ESP-NOW");
         } else if (finalStatus == kTxAborted) {
             ui::message("Invia file", {"Invio annullato."}, "ESP-NOW");
-        } else {
+        } else if (finalStatus == kTxTimeout) {
             ui::message("Invia file",
                         {">File trasmesso.", "!Conferma finale assente.",
                          "Verifica sull'altro dispositivo."},
+                        "ESP-NOW");
+        } else {
+            ui::message("Invia file",
+                        {"!Il peer ha rifiutato il file.",
+                         ackFailureText(finalStatus)},
                         "ESP-NOW");
         }
     }
@@ -1758,8 +2114,14 @@ std::string joinPath(const std::string& base, const std::string& name) {
 void chooseRecipient(const std::string& path, uint32_t size);
 
 void chooseFile(const std::string& path) {
-    const uint32_t size = static_cast<uint32_t>(storage::fileSize(path, true));
-    if (!storage::exists(path, true) || size == 0) {
+    uint32_t size = 0;
+    bool exists = false;
+    {
+        SdGuard sd;
+        exists = storage::exists(path, true);
+        size = static_cast<uint32_t>(storage::fileSize(path, true));
+    }
+    if (!exists || size == 0) {
         ui::message("Scegli file", {"!File non leggibile.", path}, "ESP-NOW");
         return;
     }
@@ -1784,7 +2146,11 @@ void browseFiles(const std::string& path, int depth) {
                     "ESP-NOW");
         return;
     }
-    std::vector<storage::Entry> entries = storage::listEntries(path, true);
+    std::vector<storage::Entry> entries;
+    {
+        SdGuard sd;
+        entries = storage::listEntries(path, true);
+    }
     if (entries.size() > 150) {
         entries.resize(150);
     }
@@ -1833,16 +2199,25 @@ void chooseRecipient(const std::string& path, uint32_t size) {
 void verifyInboxFile(const std::string& path) {
     uint32_t crc = 0;
     uint32_t size = 0;
-    if (!fileCrc(path, crc, size)) {
+    bool crcOk = false;
+    std::string meta;
+    bool metaRead = false;
+    {
+        SdGuard sd;
+        crcOk = fileCrc(path, crc, size);
+        if (crcOk) {
+            metaRead = storage::readText(path + ".crc", meta, 64, true);
+        }
+    }
+    if (!crcOk) {
         ui::message("Verifica file", {"!Lettura del file fallita.", path},
                     "ESP-NOW > Inbox");
         return;
     }
-    std::string meta;
     unsigned int expectedCrc = 0;
     unsigned long expectedSize = 0;
     const bool haveMeta =
-        storage::readText(path + ".crc", meta, 64, true) &&
+        metaRead &&
         std::sscanf(meta.c_str(), "%x %lu", &expectedCrc, &expectedSize) == 2;
 
     std::vector<std::string> lines;
@@ -1867,7 +2242,11 @@ void verifyInboxFile(const std::string& path) {
 }
 
 void deleteInboxFile() {
-    std::vector<storage::Entry> entries = storage::listEntries(kInboxDir, true);
+    std::vector<storage::Entry> entries;
+    {
+        SdGuard sd;
+        entries = storage::listEntries(kInboxDir, true);
+    }
     std::vector<storage::Entry> files;
     for (const storage::Entry& entry : entries) {
         if (!entry.isDir && !isCrcSidecar(entry.name)) {
@@ -1887,8 +2266,11 @@ void deleteInboxFile() {
                              "ESP-NOW > Inbox")) {
                 return;
             }
-            storage::removeFile(path, true);
-            storage::removeFile(path + ".crc", true);
+            {
+                SdGuard sd;
+                storage::removeFile(path, true);
+                storage::removeFile(path + ".crc", true);
+            }
             ui::message("Cancella file", {">File rimosso.", entry.name},
                         "ESP-NOW > Inbox");
         });
@@ -1901,7 +2283,11 @@ void inboxMenu() {
         ui::message("Inbox", {"!microSD non montata."}, "ESP-NOW");
         return;
     }
-    std::vector<storage::Entry> entries = storage::listEntries(kInboxDir, true);
+    std::vector<storage::Entry> entries;
+    {
+        SdGuard sd;
+        entries = storage::listEntries(kInboxDir, true);
+    }
     std::vector<storage::Entry> files;
     for (const storage::Entry& entry : entries) {
         if (entry.isDir || isCrcSidecar(entry.name)) {
@@ -1976,7 +2362,10 @@ void commandMenu() {
                          "ESP-NOW > Comandi")) {
             return;
         }
-        storage::removeFile(kHistoryPath, true);
+        {
+            SdGuard sd;
+            storage::removeFile(kHistoryPath, true);
+        }
         ui::message("Storico comandi", {">Storico cancellato."},
                     "ESP-NOW > Comandi");
     });
@@ -2318,6 +2707,11 @@ void runMenu() {
                     "Menu principale");
         return;
     }
+    if (!commandSelfTest()) {
+        ui::message("ESP-NOW", {"!Autotest whitelist comandi fallito."},
+                    "Menu principale");
+        return;
+    }
     if (!ui::legalWarning(
             "ESP-NOW mesh",
             {"Frame ESP-NOW in chiaro sul canale scelto.",
@@ -2327,6 +2721,11 @@ void runMenu() {
         return;
     }
 
+    if (!initLocks()) {
+        ui::message("ESP-NOW", {"!Allocazione lock fallita."},
+                    "Menu principale");
+        return;
+    }
     loadConfig();
     ensureDirs();
     g_prevMode = WiFi.getMode();
@@ -2340,10 +2739,7 @@ void runMenu() {
                     {"!Radio non avviata.", "Chiudi gli altri moduli radio",
                      "e riprova."},
                     "Menu principale");
-        if (g_mutex != nullptr) {
-            vSemaphoreDelete(g_mutex);
-            g_mutex = nullptr;
-        }
+        destroyLocksIfSafe();
         return;
     }
 
@@ -2355,10 +2751,7 @@ void runMenu() {
                 g_prefs.end();
                 g_prefsOpen = false;
             }
-            if (g_mutex != nullptr) {
-                vSemaphoreDelete(g_mutex);
-                g_mutex = nullptr;
-            }
+            destroyLocksIfSafe();
         }
     } cleanup;
 

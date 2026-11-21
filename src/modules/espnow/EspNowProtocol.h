@@ -11,7 +11,7 @@ namespace espnow {
 namespace proto {
 
 constexpr uint8_t kMagic = 0x4F;  // 'O'
-constexpr uint8_t kVersion = 1;
+constexpr uint8_t kVersion = 2;   // CRC esteso a type/flags/session/seq
 
 constexpr size_t kHeaderSize = 16;
 constexpr size_t kMaxPayload = 200;  // ESP_NOW_MAX_DATA_LEN e' 250
@@ -119,7 +119,11 @@ inline size_t encodePacket(const Packet& packet, uint8_t* out, size_t capacity) 
     writeU32(out + 4, packet.session);
     writeU16(out + 8, packet.seq);
     writeU16(out + 10, packet.len);
-    writeU32(out + 12, crc32(packet.payload, packet.len));
+    // Il CRC copre i primi 12 byte (magic, versione, tipo, flags, sessione,
+    // seq, lunghezza) e il payload. Il campo CRC (12..15) resta escluso.
+    uint32_t crc = crc32Update(crc32Begin(), out, 12);
+    crc = crc32Update(crc, packet.payload, packet.len);
+    writeU32(out + 12, crc32End(crc));
     std::memcpy(out + kHeaderSize, packet.payload, packet.len);
     return kHeaderSize + packet.len;
 }
@@ -140,7 +144,9 @@ inline bool decodePacket(const uint8_t* in, size_t size, Packet& out) {
     if (out.len > kMaxPayload || size != kHeaderSize + out.len) {
         return false;
     }
-    if (crc32(in + kHeaderSize, out.len) != out.crc) {
+    uint32_t crc = crc32Update(crc32Begin(), in, 12);
+    crc = crc32Update(crc, in + kHeaderSize, out.len);
+    if (crc32End(crc) != out.crc) {
         return false;
     }
     if (out.len > 0) {
@@ -194,6 +200,16 @@ inline bool selfTest() {
         return false;  // CRC payload errato
     }
     buffer[size - 1] ^= 0xFF;
+
+    // Il CRC ora copre anche questi campi dell'header.
+    const size_t headerOffsets[] = {2, 3, 4, 8};
+    for (size_t offset : headerOffsets) {
+        buffer[offset] ^= 0x01;
+        if (decodePacket(buffer, size, decoded)) {
+            return false;
+        }
+        buffer[offset] ^= 0x01;
+    }
 
     Packet oversized{};
     oversized.len = static_cast<uint16_t>(kMaxPayload + 1);
