@@ -12,6 +12,9 @@ namespace storage {
 struct Entry {
     std::string name;
     bool isDir = false;
+    // true se la voce e' stata trovata sulla microSD: permette di riaprire il
+    // file sul backend giusto senza un exists() di prova.
+    bool onSd = false;
     size_t size = 0;
 };
 
