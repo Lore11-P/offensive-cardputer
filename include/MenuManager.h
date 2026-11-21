@@ -34,6 +34,11 @@ public:
     // Ritornare true se il tasto e' stato gestito.
     void setTextHandler(std::function<bool(char)> handler);
 
+    // Contesto del menu radice: i moduli che dichiarano "Menu principale"
+    // (o "ORBIT") come padre mostrano il hub da cui sono stati aperti.
+    // nullptr = nessuno.
+    static void setRootContext(const char* context);
+
     // Ciclo di navigazione bloccante fino a ESC (o selezione di una voce,
     // che esegue la callback e poi torna al menu).
     void run(bool allowBack = true);

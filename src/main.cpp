@@ -2,8 +2,9 @@
 //  ORBIT OS v1.21.0 - entry point
 //  M5Stack Cardputer ADV (ESP32-S3FN8, 8 MB flash)
 //
-//  Menu principale -> moduli separati. Ogni modulo e' compilabile a parte con
-//  i flag ENABLE_MODULE_* definiti in platformio.ini.
+//  Menu principale a hub: pochi gruppi coerenti, ogni modulo resta invariato.
+//  Ogni modulo e' compilabile a parte con i flag ENABLE_MODULE_* definiti in
+//  platformio.ini.
 // ============================================================================
 
 #include <Arduino.h>
@@ -17,155 +18,35 @@
 #include "Navigation.h"
 #include "PowerTimer.h"
 #include "Storage.h"
-#include "Ui.h"
-
-#if ENABLE_MODULE_BLE
-#include "modules/ble/BleSpam.h"
-#endif
-#if ENABLE_MODULE_CHAT && ENABLE_MODULE_BLE
-#include "modules/chat/Chat.h"
-#endif
-#if ENABLE_MODULE_WIFI
-#include "modules/wifi/WifiMenu.h"
-#endif
-#if ENABLE_MODULE_IR
-#include "modules/ir/IrMenu.h"
-#endif
-#if ENABLE_MODULE_GAMES
-#include "modules/games/GamesMenu.h"
-#endif
-#if ENABLE_MODULE_SETTINGS
-#include "modules/settings/SettingsMenu.h"
-#endif
-#if ENABLE_MODULE_SD
-#include "modules/sd/SdMenu.h"
-#endif
-#if ENABLE_MODULE_RADAR
-#include "modules/radar/RadarMenu.h"
-#endif
-#if ENABLE_MODULE_RADIO
-#include "modules/radio/RadioMenu.h"
-#endif
-#if ENABLE_MODULE_MUSIC
-#include "modules/music/MusicMenu.h"
-#endif
-#if ENABLE_MODULE_PCAPTOOLS
-#include "modules/pcap/PcapMenu.h"
-#endif
-#if ENABLE_MODULE_BADUSB
-#include "modules/badusb/BadUsbMenu.h"
-#endif
-#if ENABLE_MODULE_AUDIO
-#include "modules/audio/AudioMenu.h"
-#endif
-#if ENABLE_MODULE_BLEHID
-#include "modules/blehid/BleHidMenu.h"
-#endif
-#if ENABLE_MODULE_TOOLS
-#include "modules/tools/ToolsMenu.h"
-#endif
-#if ENABLE_MODULE_WIFILAB
-#include "modules/wifilab/WifiLabMenu.h"
-#endif
-#if ENABLE_MODULE_WPASEC
-#include "modules/wpasec/WpaSecMenu.h"
-#endif
-#if ENABLE_MODULE_SENSORS
-#include "modules/sensors/SensorsMenu.h"
-#endif
-#if ENABLE_MODULE_WIFIEXT
-#include "modules/wifiext/WifiExtMenu.h"
-#endif
-#if ENABLE_MODULE_ESPNOW
-#include "modules/espnow/EspNowMenu.h"
-#endif
+#include "modules/hub/HubMenus.h"
 
 namespace {
 
-std::function<void()> guardedModule(const char* name, config::Module module,
-                                    void (*entry)()) {
-    return [name, module, entry]() {
-        if (!config::moduleEnabled(module)) {
-            ui::message("Modulo disattivato",
-                        {std::string(name) + " e' disattivato a runtime.",
-                         "Attivalo da Impostazioni > Moduli attivi."},
-                        "Menu principale");
-            return;
-        }
-        entry();
-    };
-}
-
 void buildAndRunMainMenu() {
     MenuManager menu(fw::kTitle);
-    menu.setHint("ESC=indietro  </>=scorri  ENTER=apri");
+    menu.setHint(";.,/=scorri  ENTER=apri");
     menu.setCarousel();
 
-#if ENABLE_MODULE_BLE
-    menu.addItem("BLE", "ble", guardedModule("BLE", config::Module::Ble, ble::runMenu));
+#if ENABLE_MODULE_WIFI || ENABLE_MODULE_WIFILAB || ENABLE_MODULE_WIFIEXT || \
+    ENABLE_MODULE_WPASEC || ENABLE_MODULE_ESPNOW
+    menu.addItem("Rete", "globe", hub::networkMenu);
 #endif
-#if ENABLE_MODULE_CHAT && ENABLE_MODULE_BLE
-    menu.addItem("Chat", "chat", guardedModule("Chat", config::Module::Chat, chat::runMenu));
+#if ENABLE_MODULE_BLE || ENABLE_MODULE_BLEHID || (ENABLE_MODULE_CHAT && ENABLE_MODULE_BLE)
+    menu.addItem("Bluetooth", "ble", hub::bluetoothMenu);
 #endif
-#if ENABLE_MODULE_BLEHID
-    menu.addItem("BLE HID", "ble", [] { blehid::runMenu(); });
+#if ENABLE_MODULE_RADAR || ENABLE_MODULE_PCAPTOOLS
+    menu.addItem("Analisi RF", "scan", hub::analysisMenu);
 #endif
-#if ENABLE_MODULE_WIFI
-    menu.addItem("WiFi", "wifi", guardedModule("WiFi", config::Module::Wifi, wifi::runMenu));
+#if ENABLE_MODULE_RADIO || ENABLE_MODULE_MUSIC || ENABLE_MODULE_AUDIO
+    menu.addItem("Media", "music", hub::mediaMenu);
 #endif
-#if ENABLE_MODULE_WIFILAB
-    menu.addItem("WiFi Lab", "wifi", [] { wifilab::runMenu(); });
-#endif
-#if ENABLE_MODULE_WIFIEXT
-    menu.addItem("WiFi+", "wifi", [] { wifiext::runMenu(); });
-#endif
-#if ENABLE_MODULE_WPASEC
-    menu.addItem("WPA-SEC", "lock", [] { wpasec::runMenu(); });
-#endif
-#if ENABLE_MODULE_ESPNOW
-    menu.addItem("ESP-NOW", "chat", [] { espnow::runMenu(); });
-#endif
-#if ENABLE_MODULE_RADAR
-    menu.addItem("Radar", "radar", guardedModule("Radar", config::Module::Radar, radar::runMenu));
-#endif
-#if ENABLE_MODULE_RADIO
-    menu.addItem("Radio", "tv", guardedModule("Radio", config::Module::Radio, radio::runMenu));
-#endif
-#if ENABLE_MODULE_MUSIC
-    menu.addItem("Musica", "music", guardedModule("Musica", config::Module::Music, music::runMenu));
-#endif
-#if ENABLE_MODULE_AUDIO
-    menu.addItem("Audio", "music", [] { audio::runMenu(); });
-#endif
-#if ENABLE_MODULE_PCAPTOOLS
-    menu.addItem("Capture", "capture",
-                 guardedModule("Capture", config::Module::PcapTools, pcaptools_ui::runMenu));
-#endif
-#if ENABLE_MODULE_BADUSB
-    menu.addItem("BadUSB", "usb",
-                 guardedModule("BadUSB", config::Module::BadUsb, badusb::runMenu));
-#endif
-#if ENABLE_MODULE_IR
-    menu.addItem("Infrarossi", "ir", guardedModule("IR", config::Module::Ir, ir::runMenu));
+#if ENABLE_MODULE_TOOLS || ENABLE_MODULE_SENSORS || ENABLE_MODULE_IR || ENABLE_MODULE_BADUSB
+    menu.addItem("Strumenti", "tools", hub::toolsMenu);
 #endif
 #if ENABLE_MODULE_GAMES
-    menu.addItem("Giochi", "games", guardedModule("Giochi", config::Module::Games, games::runMenu));
+    menu.addItem("Giochi", "games", hub::gamesEntry);
 #endif
-#if ENABLE_MODULE_SD
-    menu.addItem("SD", "sd", guardedModule("SD", config::Module::Sd, sd_module::runMenu));
-#endif
-#if ENABLE_MODULE_TOOLS
-    menu.addItem("Utility", "settings", [] { tools::runMenu(); });
-#endif
-#if ENABLE_MODULE_SENSORS
-    menu.addItem("Sensori", "radar", [] { sensors::runMenu(); });
-#endif
-#if ENABLE_MODULE_SETTINGS
-    menu.addItem("Impostazioni", "settings", settings_module::run);
-#else
-    menu.addItem("Impostazioni", "settings",
-                 [] { ui::message("Impostazioni", {"Modulo non compilato."}, "Menu principale"); });
-#endif
+    menu.addItem("Sistema", "chip", hub::systemMenu);
 
     menu.run(false);
 }
@@ -178,6 +59,12 @@ void setup() {
 
     auto cfg = M5.config();
     M5Cardputer.begin(cfg, true);
+
+    // Torcia spenta subito: dopo un reset o un panic il LED RGB non deve
+    // restare acceso. M5.Led si inizializza alla prima chiamata.
+    M5.Led.setBrightness(63);
+    M5.Led.setAllColor(0, 0, 0);
+    M5.Led.display();
 
     // Filesystem prima della configurazione (import opzionale di /config.json).
     storage::begin();
