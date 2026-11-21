@@ -11,8 +11,18 @@
 // e il volume condiviso tra i due moduli.
 namespace audioout {
 
-// Decoder condiviso, creato alla prima richiesta.
+// Decoder condiviso, creato alla prima richiesta. Da usare solo dopo un
+// beginPlayback() riuscito (o dopo decoderReady()): non restituisce un
+// riferimento valido se l'allocazione e' fallita.
 Audio& decoder();
+
+// Alloca il decoder se non esiste, con new (std::nothrow). false se la heap
+// non basta: in quel caso i chiamanti devono rinunciare alla riproduzione.
+bool decoderReady();
+
+// Stato del decoder senza costruirlo: usare questa funzione nelle schermate
+// informative per non installare I2S0 (~40 KB) solo per leggere lo stato.
+bool decoderRunning();
 
 // Volume nella scala del decoder (0..21), persistente per la sessione.
 int volume();
@@ -52,6 +62,7 @@ uint32_t stopRecording();  // byte PCM scritti; 0 se non si e' mai registrato
 bool recording();
 uint32_t recordingBytes();       // PCM finora (file + ring non ancora scritto)
 uint32_t recordingSampleRate();
+uint32_t recordingDropped();     // campioni scartati per ring pieno
 bool recordingError();           // scrittura SD fallita durante la cattura
 
 }  // namespace audioout

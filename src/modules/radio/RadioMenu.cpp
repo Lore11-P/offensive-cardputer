@@ -20,6 +20,7 @@
 #include <Arduino.h>
 #include <M5Cardputer.h>
 #include <SD.h>
+#include <esp_sntp.h>
 #include <stdio.h>
 #include <time.h>
 
@@ -161,7 +162,11 @@ std::string toDisplayAscii(const std::string& in) {
             continue;
         }
         if (i + len > in.size()) {
-            break;
+            // Stringa Latin-1 o UTF-8 troncato a fine buffer: meglio un
+            // carattere traslitterato che perderlo.
+            appendAscii(out, c);
+            ++i;
+            continue;
         }
         bool valid = true;
         for (size_t k = 1; k < len; ++k) {
@@ -342,11 +347,12 @@ std::string clockText(uint32_t bytes, uint32_t rate) {
 
 // Nome radio_YYYYmmdd_HHMMSS.wav; se l'orologio non e' ancora sincronizzato
 // usa il tempo dall'avvio, e in caso di collisione aggiunge _2, _3, ...
+// Restituisce "" se non trova un nome libero (nessuna sovrascrittura).
 std::string makeRecordingPath() {
     char stamp[32];
     const time_t now = time(nullptr);
     struct tm parts;
-    localtime_r(&now, &parts);
+    gmtime_r(&now, &parts);  // UTC: nessuna dipendenza dal TZ globale
     if (parts.tm_year + 1900 >= 2024) {
         strftime(stamp, sizeof(stamp), "%Y%m%d_%H%M%S", &parts);
     } else {
@@ -357,11 +363,14 @@ std::string makeRecordingPath() {
                       static_cast<unsigned>(uptime % 60U));
     }
     const std::string base = std::string("/audio/rec/radio_") + stamp;
-    std::string path = base + ".wav";
-    for (int n = 2; n < 100 && storage::exists(path, true); ++n) {
-        path = base + "_" + std::to_string(n) + ".wav";
+    for (int n = 1; n <= 1000; ++n) {
+        const std::string candidate =
+            n == 1 ? base + ".wav" : base + "_" + std::to_string(n) + ".wav";
+        if (!storage::exists(candidate, true)) {
+            return candidate;
+        }
     }
-    return path;
+    return {};
 }
 
 void drawMarquee(int y, const std::string& text, uint16_t color) {
@@ -384,7 +393,8 @@ void drawMarquee(int y, const std::string& text, uint16_t color) {
 }
 
 void drawPlayer(const Station& station, bool recActive, uint32_t recBytes,
-                uint32_t recRate, const std::string& notice, bool noticeActive) {
+                uint32_t recRate, uint32_t recDropped, const std::string& notice,
+                bool noticeActive) {
     Audio& audio = audioout::decoder();
     const bool running = audio.isRunning();
 
@@ -451,6 +461,9 @@ void drawPlayer(const Station& station, bool recActive, uint32_t recBytes,
                       error ? display::kDanger : display::kAccent, 0);
     } else if (recActive) {
         std::string line = "REC " + clockText(recBytes, recRate);
+        if (recDropped > 0) {
+            line += "  drop " + std::to_string(recDropped);
+        }
         if (storage::hasSD()) {
             line += "   SD libera " + freeText(sdFreeBytes());
         }
@@ -470,6 +483,15 @@ void playStation(const std::vector<Station>& stations, int stationIndex) {
         return;
     }
     const Station& station = stations[stationIndex];
+    if (station.url.rfind("https://", 0) == 0) {
+        ui::message("Web Radio",
+                    {"!HTTPS non supportato in sicurezza.",
+                     "Senza PSRAM il TLS del decoder puo'",
+                     "esaurire la heap e riavviare.",
+                     "Usa un URL http:// nella playlist."},
+                    "Radio");
+        return;
+    }
     if (!wifisetup::ensureConnected(true, "Radio")) {
         ui::message("Web Radio", {"!Wi-Fi non connesso.", "Configura la rete da qui o da",
                                   "Impostazioni > Rete WiFi."},
@@ -477,11 +499,17 @@ void playStation(const std::vector<Station>& stations, int stationIndex) {
         return;
     }
 
-    // Orologio per i nomi dei WAV: SNTP in background, la radio e' comunque
-    // online. Se non risponde si usa il tempo dall'avvio.
+    // Orologio per i nomi dei WAV: avvia SNTP senza toccare il TZ globale
+    // (altri moduli, es. Tools, possono averlo configurato). I nomi usano
+    // gmtime_r, quindi sono sempre UTC. Se SNTP non risponde si usa uptime.
     static bool sntpStarted = false;
     if (!sntpStarted) {
-        configTime(0, 0, "pool.ntp.org", "time.google.com");
+        if (!esp_sntp_enabled()) {
+            esp_sntp_setoperatingmode(ESP_SNTP_OPMODE_POLL);
+            esp_sntp_setservername(0, "pool.ntp.org");
+            esp_sntp_setservername(1, "time.google.com");
+            esp_sntp_init();
+        }
         sntpStarted = true;
     }
 
@@ -511,6 +539,7 @@ void playStation(const std::vector<Station>& stations, int stationIndex) {
     bool streamLost = false;
     bool savedOnExit = false;
     uint32_t savedBytes = 0;
+    uint32_t lastDropped = 0;
     std::string recPath;
     std::string notice;
     uint32_t noticeUntil = 0;
@@ -536,16 +565,23 @@ void playStation(const std::vector<Station>& stations, int stationIndex) {
                 return;
             }
             recPath = makeRecordingPath();
+            if (recPath.empty()) {
+                showNotice("!Troppi file REC, riprova", 3500);
+                return;
+            }
             if (!audioout::startRecording(recPath.c_str())) {
                 showNotice("!Registrazione non avviata", 3500);
                 return;
             }
             recActive = true;
+            lastDropped = 0;
             showNotice("REC avviata", 1500);
         } else {
             savedBytes = audioout::stopRecording();
             recActive = false;
-            if (savedBytes > 0) {
+            if (audioout::recordingError()) {
+                showNotice("!Errore SD: WAV incompleto", 4000);
+            } else if (savedBytes > 0) {
                 showNotice("WAV salvato: " + fileName(recPath), 3500);
             } else {
                 showNotice("!Registrazione vuota", 3000);
@@ -584,6 +620,15 @@ void playStation(const std::vector<Station>& stations, int stationIndex) {
                 showNotice("WAV salvato: " + fileName(recPath), 3500);
             }
         }
+        if (recActive) {
+            const uint32_t dropped = audioout::recordingDropped();
+            if (dropped > lastDropped) {
+                lastDropped = dropped;
+                showNotice("!Ring REC pieno: " + std::to_string(dropped) +
+                               " campioni persi",
+                           3000);
+            }
+        }
 
         // Il decoder spegne isRunning() se il flusso cade (404, rete assente):
         // senza questo controllo la schermata direbbe "in onda" per sempre.
@@ -597,7 +642,8 @@ void playStation(const std::vector<Station>& stations, int stationIndex) {
             const bool noticeActive =
                 !notice.empty() && static_cast<int32_t>(millis() - noticeUntil) < 0;
             drawPlayer(station, recActive, audioout::recordingBytes(),
-                       audioout::recordingSampleRate(), notice, noticeActive);
+                       audioout::recordingSampleRate(), audioout::recordingDropped(),
+                       notice, noticeActive);
         }
         delay(2);
     }
@@ -614,8 +660,10 @@ void playStation(const std::vector<Station>& stations, int stationIndex) {
     logger::info("Radio: fermata dall'utente");
 
     if (savedOnExit) {
-        ui::message("Web Radio", {"Registrazione salvata:", recPath,
-                                  sizeText(savedBytes)},
+        ui::message("Web Radio",
+                    {"Registrazione salvata:", recPath,
+                     audioout::recordingError() ? "!WAV incompleto (errore SD)"
+                                                : sizeText(savedBytes)},
                     "Radio");
     } else if (streamLost) {
         ui::message("Web Radio", {"!Flusso interrotto.", station.url}, "Radio");
@@ -689,7 +737,7 @@ void browseStations(std::vector<Station>& stations) {
                 display::text(10, y + 3, "WiFi", color, 2);
             }
         }
-        display::footer("INVIO=ascolta  R=ricarica  ESC=esci",
+        display::footer("INVIO=ascolta  R=ricarica  ESC",
                         g_sourceTag + " " + std::to_string(stationCount));
         display::push();
 
@@ -721,8 +769,8 @@ void browseStations(std::vector<Station>& stations) {
             reloadPlaylist();
         } else if (selected == statusRow) {
             std::vector<std::string> lines;
-            lines.push_back(audioout::decoder().isRunning() ? ">Decoder attivo"
-                                                           : ">Decoder fermo");
+            lines.push_back(audioout::decoderRunning() ? ">Decoder attivo"
+                                                       : ">Decoder fermo");
             lines.push_back("Volume: " + std::to_string(audioout::volume()) + "/21");
             lines.push_back("Playlist: " + std::to_string(stationCount) + " stazioni (" +
                             g_sourceNote + ")");
@@ -731,6 +779,8 @@ void browseStations(std::vector<Station>& stations) {
             } else {
                 lines.push_back("!microSD assente");
             }
+            lines.push_back("Max 40 stazioni, file 8 KB");
+            lines.push_back("URL 220 B, nome 48 B");
             lines.push_back("Stream HTTP MP3/AAC, niente TLS.");
             ui::message("Web Radio", lines, "Radio");
         } else if (selected == wifiRow) {
