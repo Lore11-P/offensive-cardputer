@@ -6,6 +6,9 @@
 extern "C" int ble_hs_id_set_rnd(const uint8_t* rnd_addr);
 
 #include <algorithm>
+#include <cstdarg>
+#include <cstdio>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -26,15 +29,82 @@ extern "C" int ble_hs_id_set_rnd(const uint8_t* rnd_addr);
 namespace ble {
 namespace {
 
+constexpr size_t kScanMax = 40;
+
 struct ScanResult {
-    std::string name;
-    std::string address;
+    char name[20] = {0};
+    char address[18] = {0};
     int rssi = 0;
 };
 
-std::vector<ScanResult> g_results;
+// Array fisso: il vecchio std::vector allocava due stringhe per ogni
+// advertising ricevuto (task NimBLE), frammentando l'heap durante lo scan.
+ScanResult g_results[kScanMax];
+size_t g_resultCount = 0;
 // Serializza onResult() (task NimBLE) con il lettore (task principale).
 SemaphoreHandle_t g_resultsMtx = nullptr;
+
+void textFormat(int x, int y, uint16_t color, uint8_t font, const char* fmt,
+                ...) {
+    char buffer[96];
+    va_list args;
+    va_start(args, fmt);
+    std::vsnprintf(buffer, sizeof(buffer), fmt, args);
+    va_end(args);
+    static std::string text;
+    text.assign(buffer);
+    display::text(x, y, text, color, font);
+}
+
+void textCenteredFormat(int y, uint16_t color, uint8_t font, const char* fmt,
+                        ...) {
+    char buffer[96];
+    va_list args;
+    va_start(args, fmt);
+    std::vsnprintf(buffer, sizeof(buffer), fmt, args);
+    va_end(args);
+    static std::string text;
+    text.assign(buffer);
+    display::textCentered(y, text, color, font);
+}
+
+void formatAddress(char out[18], const uint8_t address[6]) {
+    std::snprintf(out, 18, "%02X:%02X:%02X:%02X:%02X:%02X", address[5],
+                  address[4], address[3], address[2], address[1], address[0]);
+}
+
+// Nome dall'AD raw, senza la std::string temporanea di getName().
+void copyDeviceName(NimBLEAdvertisedDevice* device, char* out, size_t cap) {
+    out[0] = '\0';
+    if (device == nullptr || cap < 2) {
+        return;
+    }
+    const uint8_t* payload = device->getPayload();
+    const size_t len = device->getPayloadLength();
+    if (payload == nullptr) {
+        return;
+    }
+    const uint8_t types[2] = {0x09, 0x08};
+    for (uint8_t wanted : types) {
+        size_t pos = 0;
+        while (pos + 1 < len) {
+            const uint8_t fieldLen = payload[pos];
+            if (fieldLen == 0 || pos + 1 + fieldLen > len) {
+                break;
+            }
+            if (payload[pos + 1] == wanted && fieldLen > 1) {
+                size_t textLen = fieldLen - 1;
+                if (textLen >= cap) {
+                    textLen = cap - 1;
+                }
+                std::memcpy(out, payload + pos + 2, textLen);
+                out[textLen] = '\0';
+                return;
+            }
+            pos += 1 + fieldLen;
+        }
+    }
+}
 
 class ScanCallbacks : public NimBLEAdvertisedDeviceCallbacks {
 public:
@@ -42,15 +112,21 @@ public:
         if (device == nullptr) {
             return;
         }
-        const std::string address = device->getAddress().toString();
+        char address[18];
+        formatAddress(address, device->getAddress().getNative());
+        char name[20];
+        copyDeviceName(device, name, sizeof(name));
+
         if (g_resultsMtx) {
             xSemaphoreTake(g_resultsMtx, portMAX_DELAY);
         }
-        for (auto& existing : g_results) {
-            if (existing.address == address) {
-                existing.rssi = std::max(existing.rssi, device->getRSSI());
-                if (device->haveName()) {
-                    existing.name = device->getName();
+        for (size_t i = 0; i < g_resultCount; ++i) {
+            if (std::strcmp(g_results[i].address, address) == 0) {
+                g_results[i].rssi = std::max(g_results[i].rssi, device->getRSSI());
+                if (name[0] != '\0') {
+                    std::strncpy(g_results[i].name, name,
+                                 sizeof(g_results[i].name) - 1);
+                    g_results[i].name[sizeof(g_results[i].name) - 1] = '\0';
                 }
                 if (g_resultsMtx) {
                     xSemaphoreGive(g_resultsMtx);
@@ -58,12 +134,12 @@ public:
                 return;
             }
         }
-        if (g_results.size() < 40) {
-            ScanResult result;
-            result.address = address;
-            result.name = device->haveName() ? device->getName() : "(senza nome)";
+        if (g_resultCount < kScanMax) {
+            ScanResult& result = g_results[g_resultCount++];
+            std::strncpy(result.address, address, sizeof(result.address) - 1);
+            std::strncpy(result.name, name[0] != '\0' ? name : "(senza nome)",
+                         sizeof(result.name) - 1);
             result.rssi = device->getRSSI();
-            g_results.push_back(result);
         }
         if (g_resultsMtx) {
             xSemaphoreGive(g_resultsMtx);
@@ -87,8 +163,8 @@ void drawScanProgress(int round, int total, size_t found, bool interrupted) {
                           interrupted ? display::kWarning : display::kAccent, 2);
     display::progressBar(20, 58, 200, 8,
                          static_cast<float>(round) / std::max(total, 1));
-    display::textCentered(76, "Dispositivi trovati: " + std::to_string(found),
-                          display::kText, 2);
+    textCenteredFormat(76, display::kText, 2, "Dispositivi trovati: %u",
+                       static_cast<unsigned>(found));
     display::textCentered(96, "Avvicina i dispositivi per il segnale",
                           display::kTextDim, 0);
     display::footer("ESC = interrompi");
@@ -99,7 +175,7 @@ void runScanner() {
     ensureBle();
     if (g_resultsMtx) {
         xSemaphoreTake(g_resultsMtx, portMAX_DELAY);
-        g_results.clear();
+        g_resultCount = 0;
         xSemaphoreGive(g_resultsMtx);
     }
 
@@ -136,7 +212,7 @@ void runScanner() {
         size_t found = 0;
         if (g_resultsMtx) {
             xSemaphoreTake(g_resultsMtx, portMAX_DELAY);
-            found = g_results.size();
+            found = g_resultCount;
             xSemaphoreGive(g_resultsMtx);
         }
         drawScanProgress(round, kRounds, found, false);
@@ -163,16 +239,15 @@ void runScanner() {
         }
     }
 
-    // Stacca i callback prima di leggere la lista: nessun callback puo' piu'
-    // toccare g_results e il puntatore allo stack di questa funzione non resta
-    // appeso nello scanner globale.
+    // Callback staccati e scanner fermo: la lista non e' piu' condivisa, si
+    // puo' ordinare in place senza copiarla.
     scan->stop();
     scan->setAdvertisedDeviceCallbacks(nullptr, false);
 
-    std::vector<ScanResult> found;
+    size_t foundCount = 0;
     if (g_resultsMtx) {
         xSemaphoreTake(g_resultsMtx, portMAX_DELAY);
-        found = g_results;
+        foundCount = g_resultCount;
         xSemaphoreGive(g_resultsMtx);
     }
 
@@ -180,11 +255,11 @@ void runScanner() {
         logger::info("BLE scanner interrotto dall'utente");
     }
     logger::info("BLE scanner: %u dispositivi, stack=%s heap=%u",
-                 static_cast<unsigned>(found.size()),
+                 static_cast<unsigned>(foundCount),
                  NimBLEDevice::getInitialized() ? "ok" : "non init",
                  static_cast<unsigned>(ESP.getFreeHeap()));
 
-    if (found.empty()) {
+    if (foundCount == 0) {
         ui::message("BLE Scanner",
                     {aborted ? "!Scansione interrotta." : "!Nessun dispositivo rilevato.",
                      "Verifica che il BLE sia attivo nelle vicinanze.",
@@ -193,24 +268,25 @@ void runScanner() {
         return;
     }
 
-    std::sort(found.begin(), found.end(),
+    std::sort(g_results, g_results + foundCount,
               [](const ScanResult& a, const ScanResult& b) {
                   return a.rssi > b.rssi;
               });
 
     MenuManager menu("Dispositivi BLE", "BLE");
-    for (const auto& result : found) {
+    for (size_t i = 0; i < foundCount; ++i) {
+        const ScanResult& result = g_results[i];
         std::string name = result.name;
         if (name.size() > 18) {
             name = name.substr(0, 18) + "~";
         }
         const std::string label =
             name + "  " + std::to_string(result.rssi) + "dBm";
-        ScanResult copy = result;
+        const ScanResult copy = result;
         menu.addItem(label, "ble", [copy] {
             ui::message("Dettagli BLE",
-                        {"Nome: " + copy.name,
-                         "MAC: " + copy.address,
+                        {"Nome: " + std::string(copy.name),
+                         "MAC: " + std::string(copy.address),
                          "RSSI: " + std::to_string(copy.rssi) + " dBm"},
                         "BLE");
         });
@@ -230,16 +306,16 @@ void drawSpam(const char* payloadName, uint32_t packets, uint32_t remainingMs,
     display::header("BLE Spam", "BLE");
     display::text(8, 28, "Payload:", display::kTextDim, 0);
     display::text(8, 40, payloadName, display::kAccent, 2);
-    display::text(8, 62, "Pacchetti: " + std::to_string(packets),
-                  display::kText, 0);
+    textFormat(8, 62, display::kText, 0, "Pacchetti: %u",
+               static_cast<unsigned>(packets));
     display::text(8, 74, "MAC casuale:", display::kTextDim, 0);
     display::text(80, 74, macText, display::kInfo, 0);
     const float fraction =
         totalMs == 0 ? 0.0f
                      : 1.0f - static_cast<float>(remainingMs) / totalMs;
     display::progressBar(8, 92, 150, 8, fraction, display::kDanger);
-    display::text(166, 93, std::to_string(remainingMs / 1000) + "s",
-                  display::kText, 0);
+    textFormat(166, 93, display::kText, 0, "%us",
+               static_cast<unsigned>(remainingMs / 1000));
     display::text(8, 108, "Solo dispositivi propri / ambiente isolato",
                   display::kWarning, 0);
     display::footer("ESC = interrompi");
@@ -289,6 +365,17 @@ void runSpam(const std::string& label,
     uint8_t lastMac[6] = {0};
     const char* currentName = payloads[0]->name;
 
+    // AD precompilati una sola volta: prima ogni pacchetto costruiva una
+    // std::string solo per passarla a addData().
+    std::vector<NimBLEAdvertisementData> adData;
+    adData.reserve(payloads.size());
+    for (const BlePayload* payload : payloads) {
+        adData.emplace_back();
+        adData.back().addData(
+            reinterpret_cast<char*>(const_cast<uint8_t*>(payload->data)),
+            payload->size);
+    }
+
     navigation::waitRelease();
 
     while (millis() - start < durationMs) {
@@ -312,12 +399,8 @@ void runSpam(const std::string& label,
             if (!randomize) {
                 ++index;
             }
-            const BlePayload* payload = payloads[next];
-            currentName = payload->name;
-            NimBLEAdvertisementData data;
-            data.addData(std::string(reinterpret_cast<const char*>(payload->data),
-                                     payload->size));
-            advertising->setAdvertisementData(data);
+            currentName = payloads[next]->name;
+            advertising->setAdvertisementData(adData[next]);
             if (advertising->start(0)) {
                 ++packets;
             } else {
@@ -382,12 +465,20 @@ std::vector<const BlePayload*> samsungPayloads() {
 }
 
 std::vector<const BlePayload*> allPayloads() {
-    std::vector<const BlePayload*> list = applePayloads();
-    const std::vector<std::vector<const BlePayload*>> groups = {
-        samsungPayloads(), googlePayloads(), windowsPayloads()};
-    for (const auto& group : groups) {
-        list.insert(list.end(), group.begin(), group.end());
-    }
+    std::vector<const BlePayload*> list;
+    list.reserve(sizeof(kApplePayloads) / sizeof(kApplePayloads[0]) +
+                 sizeof(kSamsungPayloads) / sizeof(kSamsungPayloads[0]) +
+                 sizeof(kGooglePayloads) / sizeof(kGooglePayloads[0]) +
+                 sizeof(kWindowsPayloads) / sizeof(kWindowsPayloads[0]));
+    const auto append = [&list](const BlePayload* items, size_t count) {
+        for (size_t i = 0; i < count; ++i) {
+            list.push_back(&items[i]);
+        }
+    };
+    append(kApplePayloads, sizeof(kApplePayloads) / sizeof(kApplePayloads[0]));
+    append(kSamsungPayloads, sizeof(kSamsungPayloads) / sizeof(kSamsungPayloads[0]));
+    append(kGooglePayloads, sizeof(kGooglePayloads) / sizeof(kGooglePayloads[0]));
+    append(kWindowsPayloads, sizeof(kWindowsPayloads) / sizeof(kWindowsPayloads[0]));
     return list;
 }
 

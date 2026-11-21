@@ -8,6 +8,8 @@
 #include <esp_wifi.h>
 
 #include <algorithm>
+#include <cstdarg>
+#include <cstring>
 #include <new>
 #include <string>
 #include <vector>
@@ -47,36 +49,72 @@ struct Network {
     int auth = 0;
 };
 
-const char* securityName(int auth) {
-    switch (auth) {
-        case WIFI_AUTH_OPEN:
-            return "aperta";
-        case WIFI_AUTH_WEP:
-            return "WEP";
-        case WIFI_AUTH_WPA_PSK:
-            return "WPA";
-        case WIFI_AUTH_WPA2_PSK:
-            return "WPA2";
-        case WIFI_AUTH_WPA_WPA2_PSK:
-            return "WPA/WPA2";
-        case WIFI_AUTH_WPA2_ENTERPRISE:
-            return "WPA2 Enterprise";
-        case WIFI_AUTH_WPA3_PSK:
-            return "WPA3";
-        case WIFI_AUTH_WPA2_WPA3_PSK:
-            return "WPA2/WPA3";
-        case WIFI_AUTH_WAPI_PSK:
-            return "WAPI";
-        default:
-            return "sconosciuta";
-    }
-}
-
 std::string shortened(const std::string& text, size_t maxLen) {
     if (text.size() <= maxLen) {
         return text;
     }
     return text.substr(0, maxLen - 1) + "~";
+}
+
+// Riempie uno scratch riusato: nei cicli di disegno evita una malloc per riga.
+const std::string& shortenInto(std::string& scratch, const std::string& text,
+                               size_t maxLen) {
+    if (text.size() <= maxLen) {
+        scratch = text;
+    } else {
+        scratch.assign(text, 0, maxLen - 1);
+        scratch += '~';
+    }
+    return scratch;
+}
+
+const std::string& shortenInto(std::string& scratch, const char* text,
+                               size_t maxLen) {
+    scratch.assign(text != nullptr ? text : "");
+    if (scratch.size() > maxLen) {
+        scratch.resize(maxLen - 1);
+        scratch += '~';
+    }
+    return scratch;
+}
+
+// Testo formattato senza allocazioni ripetute: lo std::string e' statico e
+// conserva la capacita' tra una chiamata e l'altra.
+void textFormat(int x, int y, uint16_t color, uint8_t font, const char* fmt,
+                ...) {
+    char buffer[96];
+    va_list args;
+    va_start(args, fmt);
+    std::vsnprintf(buffer, sizeof(buffer), fmt, args);
+    va_end(args);
+    static std::string text;
+    text.assign(buffer);
+    display::text(x, y, text, color, font);
+}
+
+void textCenteredFormat(int y, uint16_t color, uint8_t font, const char* fmt,
+                        ...) {
+    char buffer[96];
+    va_list args;
+    va_start(args, fmt);
+    std::vsnprintf(buffer, sizeof(buffer), fmt, args);
+    va_end(args);
+    static std::string text;
+    text.assign(buffer);
+    display::textCentered(y, text, color, font);
+}
+
+// Pool riusato dalle schermate di scansione: conserva la capacita' tra una
+// apertura e l'altra invece di riallocare a ogni voice del menu.
+std::vector<Network> g_networks;
+
+// Spegne sempre il promiscuo nello stesso ordine, cosi' nessun percorso di
+// uscita lascia la radio accesa o il callback appeso.
+void stopPromiscuous() {
+    esp_wifi_set_promiscuous(false);
+    esp_wifi_set_promiscuous_rx_cb(nullptr);
+    esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE);
+    WiFi.mode(WIFI_OFF);
 }
 
 bool collectNetworks(std::vector<Network>& networks) {
@@ -146,8 +184,10 @@ bool collectNetworks(std::vector<Network>& networks) {
         return false;
     }
 
+    networks.reserve(count > 0 ? static_cast<size_t>(count) : 0);
     for (int i = 0; i < count; ++i) {
-        Network network;
+        networks.emplace_back();
+        Network& network = networks.back();
         network.ssid = WiFi.SSID(i).c_str();
         if (network.ssid.empty()) {
             network.ssid = "(nascosta)";
@@ -156,7 +196,6 @@ bool collectNetworks(std::vector<Network>& networks) {
         network.rssi = WiFi.RSSI(i);
         network.channel = WiFi.channel(i);
         network.auth = static_cast<int>(WiFi.encryptionType(i));
-        networks.push_back(network);
     }
     WiFi.scanDelete();
     WiFi.mode(WIFI_OFF);
@@ -237,6 +276,7 @@ int chooseIndex(const std::string& title, const std::string& parent,
 
         display::clear();
         display::header(title, parent);
+        std::string rowText;
         for (int row = 0; row < visible; ++row) {
             const int index = top + row;
             if (index >= static_cast<int>(labels.size())) {
@@ -250,7 +290,7 @@ int chooseIndex(const std::string& title, const std::string& parent,
                 display::g().fillRect(2, y + 6, 2, kRowH - 12,
                                       display::kAccent);
             }
-            display::text(10, y + 6, shortened(labels[index], 28),
+            display::text(10, y + 6, shortenInto(rowText, labels[index], 28),
                           isSelected ? display::kWhite : display::kText, 2);
         }
 
@@ -274,27 +314,27 @@ int chooseIndex(const std::string& title, const std::string& parent,
 }
 
 void runScanner() {
-    std::vector<Network> networks;
-    if (!collectNetworks(networks)) {
+    if (!collectNetworks(g_networks)) {
         return;
     }
-    if (networks.empty()) {
+    if (g_networks.empty()) {
         ui::message("WiFi Scanner", {"Nessuna rete trovata."}, "WiFi");
         return;
     }
 
     MenuManager menu("Reti WiFi", "WiFi");
-    for (const auto& network : networks) {
+    for (size_t i = 0; i < g_networks.size(); ++i) {
+        const Network& network = g_networks[i];
         std::string label =
             shortened(network.ssid, 16) + "  " + std::to_string(network.rssi) +
             "dBm" + (network.auth == WIFI_AUTH_OPEN ? "  *" : "");
-        Network copy = network;
-        menu.addItem(label, "wifi", [copy] {
+        menu.addItem(label, "wifi", [i] {
+            const Network& copy = g_networks[i];
             ui::message("Dettagli rete",
                         {"SSID: " + copy.ssid,
                          "BSSID: " + copy.bssid,
                          "Canale: " + std::to_string(copy.channel),
-                         "Sicurezza: " + std::string(securityName(copy.auth)),
+                         "Sicurezza: " + std::string(wifisetup::securityName(copy.auth)),
                          "RSSI: " + std::to_string(copy.rssi) + " dBm"},
                         "WiFi");
         });
@@ -409,7 +449,7 @@ void runChannelAnalyzer() {
     esp_wifi_set_promiscuous_rx_cb(nullptr);
     esp_wifi_set_promiscuous_rx_cb(channelAnalyzerCb);
     if (esp_wifi_set_promiscuous(true) != ESP_OK) {
-        WiFi.mode(WIFI_OFF);
+        stopPromiscuous();
         ui::message("Channel Analyzer",
                     {"Modalita' promiscua non disponibile."}, "WiFi");
         return;
@@ -443,9 +483,8 @@ void runChannelAnalyzer() {
             }
             display::clear();
             display::header("Channel Analyzer", "WiFi");
-            display::text(8, 24,
-                          "Frame totali: " + std::to_string(g_channelTotal),
-                          display::kText, 0);
+            textFormat(8, 24, display::kText, 0, "Frame totali: %u",
+                       static_cast<unsigned>(g_channelTotal));
             constexpr int kBarTop = 38;
             constexpr int kBarMaxH = 58;
             for (int i = 0; i < 13; ++i) {
@@ -459,13 +498,12 @@ void runChannelAnalyzer() {
                                           i + 1 == channel ? display::kAccent
                                                             : display::kInfo);
                 }
-                display::text(x + 5, kBarTop + kBarMaxH + 2,
-                              std::to_string(i + 1), display::kTextDim, 0);
+                textFormat(x + 5, kBarTop + kBarMaxH + 2, display::kTextDim, 0,
+                           "%d", i + 1);
             }
-            display::text(8, 108,
-                          "Canale corrente: " + std::to_string(channel) +
-                              "   ` = esci",
-                          display::kTextDim, 0);
+            textFormat(8, 108, display::kTextDim, 0,
+                       "Canale corrente: %u   ` = esci",
+                       static_cast<unsigned>(channel));
             display::push();
             lastDraw = now;
         }
@@ -475,10 +513,7 @@ void runChannelAnalyzer() {
         delay(250);
     }
 
-    esp_wifi_set_promiscuous(false);
-    esp_wifi_set_promiscuous_rx_cb(nullptr);
-    esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE);
-    WiFi.mode(WIFI_OFF);
+    stopPromiscuous();
 }
 
 volatile uint32_t g_jamFrames[13] = {0};
@@ -513,7 +548,7 @@ void runJamDetect() {
     esp_wifi_set_promiscuous_rx_cb(jamDetectCb);
     esp_wifi_set_promiscuous_filter(&filter);
     if (esp_wifi_set_promiscuous(true) != ESP_OK) {
-        WiFi.mode(WIFI_OFF);
+        stopPromiscuous();
         ui::message("Jam Detect",
                     {"Modalita' promiscua non disponibile."}, "WiFi");
         return;
@@ -551,13 +586,12 @@ void runJamDetect() {
             display::text(8, 26,
                           alarm ? "DEAUTH RILEVATO" : "Nessun jam evidente",
                           alarm ? display::kDanger : display::kInfo, 2);
-            display::text(8, 50,
-                          "Canale " + std::to_string(channel) + ": " +
-                              std::to_string(delta) + " deauth/400ms",
-                          display::kText, 0);
-            display::text(8, 66,
-                          "Totale deauth: " + std::to_string(g_jamCurrent),
-                          display::kTextDim, 0);
+            textFormat(8, 50, display::kText, 0,
+                       "Canale %u: %u deauth/400ms",
+                       static_cast<unsigned>(channel),
+                       static_cast<unsigned>(delta));
+            textFormat(8, 66, display::kTextDim, 0, "Totale deauth: %u",
+                       static_cast<unsigned>(g_jamCurrent));
             for (int i = 0; i < 13; ++i) {
                 const int x = 8 + i * 17;
                 const uint32_t count = g_jamDeauth[i];
@@ -568,8 +602,7 @@ void runJamDetect() {
                                           count > 0 ? display::kDanger
                                                     : display::kPanel);
                 }
-                display::text(x + 5, 110, std::to_string(i + 1),
-                              display::kTextDim, 0);
+                textFormat(x + 5, 110, display::kTextDim, 0, "%d", i + 1);
             }
             display::footer("ESC = esci");
             display::push();
@@ -579,10 +612,7 @@ void runJamDetect() {
         channel = static_cast<uint8_t>(channel % 13 + 1);
     }
 
-    esp_wifi_set_promiscuous(false);
-    esp_wifi_set_promiscuous_rx_cb(nullptr);
-    esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE);
-    WiFi.mode(WIFI_OFF);
+    stopPromiscuous();
 }
 
 constexpr int kSnifferSlots = 8;
@@ -676,7 +706,7 @@ void runSniffer() {
 
     esp_wifi_set_promiscuous_rx_cb(snifferCb);
     if (esp_wifi_set_promiscuous(true) != ESP_OK) {
-        WiFi.mode(WIFI_OFF);
+        stopPromiscuous();
         delete[] g_sniffSlots;
         g_sniffSlots = nullptr;
         ui::message("Sniffer", {"Modalita' promiscua non disponibile."},
@@ -686,8 +716,10 @@ void runSniffer() {
     esp_wifi_set_promiscuous_filter(nullptr);
 
     // Estrazione live: gli EAPOL vengono copiati dal ring e analizzati qui sul
-    // task principale, mai nel callback ISR.
-    pcaptools::LiveCollector live;
+    // task principale, mai nel callback ISR. Collettore statico: l'unico buffer
+    // interno (~3 KB) viene allocato una volta e riusato a ogni sessione,
+    // invece di malloc/free a ogni apertura dello sniffer.
+    static pcaptools::LiveCollector live;
     live.reset();
 
     storage::mkdir("/captures", true);
@@ -702,9 +734,7 @@ void runSniffer() {
                   static_cast<unsigned long>(captureId));
     File file = storage::openWrite(capturePath, true);
     if (!file) {
-        esp_wifi_set_promiscuous(false);
-        esp_wifi_set_promiscuous_rx_cb(nullptr);
-        WiFi.mode(WIFI_OFF);
+        stopPromiscuous();
         delete[] g_sniffSlots;
         g_sniffSlots = nullptr;
         ui::message("Sniffer", {"Impossibile creare il file PCAP."}, "WiFi");
@@ -740,7 +770,7 @@ void runSniffer() {
         // senza un limite il ciclo esterno (tasti, cambio canale, disegno) non
         // verrebbe mai raggiunto.
         for (int drain = 0; drain < kSnifferSlots; ++drain) {
-            SnifferSlot slot;
+            static SnifferSlot slot;  // 1,6 KB in BSS, non sullo stack del loop
             bool have = false;
             portENTER_CRITICAL(&g_sniffMux);
             if (g_sniffTail != g_sniffHead) {
@@ -793,24 +823,18 @@ void runSniffer() {
         if (now - lastDraw > 200) {
             display::clear();
             display::header("Sniffer 802.11", "WiFi");
-            display::text(8, 28, std::string("File: ") + capturePath,
-                          display::kTextDim, 0);
-            display::text(8, 46,
-                          "Frame: " + std::to_string(g_sniffTotal),
-                          display::kAccent, 2);
-            display::text(8, 70,
-                          "Scritti: " + std::to_string(written),
-                          display::kText, 0);
-            display::text(8, 84,
-                          "Persi: " + std::to_string(g_sniffDropped),
-                          display::kTextDim, 0);
-            display::text(8, 100,
-                          "Canale " + std::to_string(channel) +
-                              "   ` = interrompi",
-                          display::kTextDim, 0);
-            display::text(8, 114,
-                          "Cand. hc22000: " + std::to_string(live.entries()),
-                          display::kTextDim, 0);
+            textFormat(8, 28, display::kTextDim, 0, "File: %s", capturePath);
+            textFormat(8, 46, display::kAccent, 2, "Frame: %u",
+                       static_cast<unsigned>(g_sniffTotal));
+            textFormat(8, 70, display::kText, 0, "Scritti: %u",
+                       static_cast<unsigned>(written));
+            textFormat(8, 84, display::kTextDim, 0, "Persi: %u",
+                       static_cast<unsigned>(g_sniffDropped));
+            textFormat(8, 100, display::kTextDim, 0,
+                       "Canale %u   ` = interrompi",
+                       static_cast<unsigned>(channel));
+            textFormat(8, 114, display::kTextDim, 0, "Cand. hc22000: %u",
+                       static_cast<unsigned>(live.entries()));
             display::push();
             lastDraw = now;
         }
@@ -819,10 +843,7 @@ void runSniffer() {
 
     file.flush();
     file.close();
-    esp_wifi_set_promiscuous(false);
-    esp_wifi_set_promiscuous_rx_cb(nullptr);
-    esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE);
-    WiFi.mode(WIFI_OFF);
+    stopPromiscuous();
     delete[] g_sniffSlots;
     g_sniffSlots = nullptr;
     logger::info("Sniffer terminato: %u frame in %s",
@@ -858,6 +879,11 @@ std::string hostMac(const uint8_t mac[6]) {
     std::snprintf(text, sizeof(text), "%02X:%02X:%02X:%02X:%02X:%02X",
                   mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     return text;
+}
+
+void hostMacInto(char out[18], const uint8_t mac[6]) {
+    std::snprintf(out, 18, "%02X:%02X:%02X:%02X:%02X:%02X", mac[0], mac[1],
+                  mac[2], mac[3], mac[4], mac[5]);
 }
 
 void readArpHosts(struct netif* netif, std::vector<HostEntry>& hosts) {
@@ -896,6 +922,9 @@ void runPortScan(const HostEntry& host) {
     };
     std::vector<uint16_t> open;
     const size_t total = sizeof(kPorts) / sizeof(kPorts[0]);
+    open.reserve(total);
+    const std::string hostLine =
+        std::string(host.ip.toString().c_str()) + "  " + hostMac(host.mac);
 
     navigation::waitRelease();
     for (size_t i = 0; i < total; ++i) {
@@ -911,15 +940,11 @@ void runPortScan(const HostEntry& host) {
         }
         display::clear();
         display::header("Port scan", "Scan Hosts");
-        display::text(8, 30,
-                      std::string(host.ip.toString().c_str()) + "  " +
-                          hostMac(host.mac),
-                      display::kAccent, 0);
-        display::text(8, 50,
-                      "Porta " + std::to_string(kPorts[i]) + "  (" +
-                          std::to_string(i + 1) + "/" + std::to_string(total) +
-                          ")",
-                      display::kText, 0);
+        display::text(8, 30, hostLine, display::kAccent, 0);
+        textFormat(8, 50, display::kText, 0, "Porta %u  (%u/%u)",
+                   static_cast<unsigned>(kPorts[i]),
+                   static_cast<unsigned>(i + 1),
+                   static_cast<unsigned>(total));
         display::progressBar(8, 70, 180, 8,
                              static_cast<float>(i + 1) / total,
                              display::kInfo);
@@ -938,7 +963,7 @@ void runPortScan(const HostEntry& host) {
         }
     }
     ui::message("Port scan",
-                {"Host: " + std::string(host.ip.toString().c_str()),
+                {"Host: " + hostLine,
                  "MAC: " + hostMac(host.mac), "Porte aperte:", ports},
                 "Scan Hosts");
 }
@@ -986,6 +1011,7 @@ void runScanHosts() {
     }
 
     std::vector<HostEntry> hosts;
+    hosts.reserve(256);
     uint32_t scanned = 0;
     const uint32_t total = last >= first ? last - first + 1 : 0;
     uint32_t lastDraw = 0;
@@ -1017,18 +1043,16 @@ void runScanHosts() {
             display::clear();
             display::header("Scan Hosts", "WiFi");
             display::textCentered(40, "Scansione ARP", display::kAccent, 2);
-            display::textCentered(64,
-                                  std::to_string(scanned) + " / " +
-                                      std::to_string(total) + " host",
-                                  display::kText, 0);
+            textCenteredFormat(64, display::kText, 0, "%u / %u host",
+                               static_cast<unsigned>(scanned),
+                               static_cast<unsigned>(total));
             display::progressBar(20, 84, 200, 8,
                                  total == 0 ? 0.0f
                                             : static_cast<float>(scanned) /
                                                   static_cast<float>(total),
                                  display::kInfo);
-            display::textCentered(104,
-                                  "Trovati: " + std::to_string(hosts.size()),
-                                  display::kTextDim, 0);
+            textCenteredFormat(104, display::kTextDim, 0, "Trovati: %u",
+                               static_cast<unsigned>(hosts.size()));
             display::footer("ESC = interrompi");
             display::push();
             lastDraw = now;
@@ -1046,6 +1070,7 @@ void runScanHosts() {
     }
 
     std::vector<std::string> labels;
+    labels.reserve(hosts.size());
     for (const auto& host : hosts) {
         labels.push_back(std::string(host.ip.toString().c_str()) + "  " +
                          hostMac(host.mac) +
@@ -1129,7 +1154,7 @@ void runTcpConsole(const std::string& title, uint16_t defaultPort) {
             }
             client.write(static_cast<uint8_t>(c));
         }
-        lastWord = state.word;
+        lastWord.assign(state.word.begin(), state.word.end());
 
         while (client.available()) {
             const int value = client.read();
@@ -1154,14 +1179,13 @@ void runTcpConsole(const std::string& title, uint16_t defaultPort) {
         if (now - lastDraw > 100) {
             display::clear();
             display::header(title, "WiFi");
-            display::text(6, 22,
-                          fields[0].value + ":" + std::to_string(port) +
-                              (client.connected() ? "" : "  [chiuso]"),
-                          display::kTextDim, 0);
+            textFormat(6, 22, display::kTextDim, 0, "%s:%ld%s",
+                       fields[0].value.c_str(), port,
+                       client.connected() ? "" : "  [chiuso]");
             for (int i = 0; i < 7; ++i) {
                 display::text(6, 36 + i * 11, lines[i], display::kText, 0);
             }
-            display::text(6, 117, "> " + current, display::kAccent, 0);
+            textFormat(6, 117, display::kAccent, 0, "> %s", current.c_str());
             display::footer("scrivi + INVIO   ESC = esci");
             display::push();
             lastDraw = now;
@@ -1203,6 +1227,9 @@ void runTcpListener() {
     server.begin();
     WiFiClient client;
     std::string buffer;
+    std::string lineRing[5];
+    std::string currentLine;
+    size_t lineTotal = 0;
     uint32_t lastDraw = 0;
 
     navigation::waitRelease();
@@ -1234,34 +1261,34 @@ void runTcpListener() {
         if (now - lastDraw > 150) {
             display::clear();
             display::header("TCP Listener", "WiFi");
-            display::text(8, 26,
-                          "IP: " + std::string(WiFi.localIP().toString().c_str()) +
-                              ":" + std::to_string(port),
-                          display::kAccent, 0);
+            textFormat(8, 26, display::kAccent, 0, "IP: %s:%u",
+                       WiFi.localIP().toString().c_str(),
+                       static_cast<unsigned>(port));
             display::text(8, 42,
                           client && client.connected() ? "Client connesso"
                                                        : "In ascolto...",
                           display::kText, 0);
-            std::vector<std::string> lines;
-            std::string currentLine;
+            // Ring di 5 righe riusate: nessun vector ricreato a ogni frame.
+            lineTotal = 0;
+            currentLine.clear();
             for (char c : buffer) {
                 if (c == '\n') {
-                    lines.push_back(currentLine);
+                    lineRing[lineTotal % 5] = currentLine;
+                    ++lineTotal;
                     currentLine.clear();
                 } else {
                     currentLine.push_back(c);
                 }
             }
             if (!currentLine.empty()) {
-                lines.push_back(currentLine);
+                lineRing[lineTotal % 5] = currentLine;
+                ++lineTotal;
             }
-            const int firstLine =
-                lines.size() > 5 ? static_cast<int>(lines.size()) - 5 : 0;
-            for (int i = 0; firstLine + i < static_cast<int>(lines.size()) &&
-                            i < 5;
-                 ++i) {
-                display::text(8, 64 + i * 11, lines[firstLine + i],
-                              display::kText, 0);
+            const size_t shown = lineTotal < 5 ? lineTotal : 5;
+            size_t first = lineTotal > shown ? lineTotal - shown : 0;
+            for (size_t i = 0; i < shown; ++i) {
+                display::text(8, 64 + static_cast<int>(i) * 11,
+                              lineRing[(first + i) % 5], display::kText, 0);
             }
             display::footer("ESC = interrompi");
             display::push();
@@ -1277,6 +1304,17 @@ void runTcpListener() {
 }
 
 #if ENABLE_OFFENSIVE
+void networkLabels(const std::vector<Network>& networks,
+                   std::vector<std::string>& labels) {
+    labels.clear();
+    labels.reserve(networks.size());
+    for (const auto& network : networks) {
+        labels.push_back(shortened(network.ssid, 18) + "  ch" +
+                         std::to_string(network.channel) + "  " +
+                         std::to_string(network.rssi) + "dBm");
+    }
+}
+
 bool parseBssid(const std::string& text, uint8_t out[6]) {
     int values[6] = {0};
     if (sscanf(text.c_str(), "%x:%x:%x:%x:%x:%x", &values[0], &values[1],
@@ -1297,14 +1335,17 @@ void drawDeauth(const Network& network, uint32_t packets, uint32_t txFail,
     display::clear();
     display::header("Deauth WiFi", "WiFi");
     display::text(8, 30, "Target:", display::kTextDim, 0);
-    display::text(8, 42, shortened(network.ssid, 28), display::kAccent, 2);
-    display::text(8, 64, "BSSID " + network.bssid, display::kText, 0);
-    display::text(8, 76, "Canale " + std::to_string(network.channel),
-                  display::kText, 0);
-    display::text(120, 76,
-                  "OK " + std::to_string(packets) +
-                      (txFail ? "  KO " + std::to_string(txFail) : ""),
-                  txFail ? display::kWarning : display::kText, 0);
+    static std::string name;
+    display::text(8, 42, shortenInto(name, network.ssid, 28), display::kAccent, 2);
+    textFormat(8, 64, display::kText, 0, "BSSID %s", network.bssid.c_str());
+    textFormat(8, 76, display::kText, 0, "Canale %d", network.channel);
+    if (txFail) {
+        textFormat(120, 76, display::kWarning, 0, "OK %u  KO %u",
+                   static_cast<unsigned>(packets), static_cast<unsigned>(txFail));
+    } else {
+        textFormat(120, 76, display::kText, 0, "OK %u",
+                   static_cast<unsigned>(packets));
+    }
     display::progressBar(8, 92, 180, 8,
                          1.0f - static_cast<float>(remainingMs) / 60000.0f,
                          display::kDanger);
@@ -1321,7 +1362,7 @@ constexpr uint32_t kNetCutTrollOnlineMs = 5000;
 struct NetCutDevice {
     IPAddress ip;
     uint8_t mac[6] = {0};
-    std::string macStr;
+    char macStr[18] = {0};
     bool isVip = false;
     bool isCut = false;
 };
@@ -1442,10 +1483,11 @@ void netcutReadArpTable() {
         if (allZero || allFf) {
             continue;
         }
-        const std::string mac = hostMac(ethRet->addr);
+        char mac[18];
+        hostMacInto(mac, ethRet->addr);
         bool found = false;
         for (NetCutDevice& dev : g_netCutDevices) {
-            if (dev.macStr == mac) {
+            if (std::strcmp(dev.macStr, mac) == 0) {
                 dev.ip = IPAddress(ipRet->addr);
                 found = true;
                 break;
@@ -1458,9 +1500,9 @@ void netcutReadArpTable() {
         NetCutDevice dev;
         dev.ip = IPAddress(ipRet->addr);
         memcpy(dev.mac, ethRet->addr, 6);
-        dev.macStr = mac;
+        hostMacInto(dev.macStr, dev.mac);
         for (const std::string& vip : g_netCutVips) {
-            if (vip == mac) {
+            if (vip == dev.macStr) {
                 dev.isVip = true;
                 break;
             }
@@ -1540,19 +1582,14 @@ int netcutScan() {
             }
             display::clear();
             display::header("NetCut Scan", "WiFi");
-            display::text(8, 30,
-                          "SSID: " + std::string(WiFi.SSID().c_str()),
-                          display::kText, 0);
-            display::text(8, 46,
-                          "GW: " +
-                              std::string(
-                                  IPAddress(info.gw.addr).toString().c_str()),
-                          display::kText, 0);
-            display::text(8, 64,
-                          std::to_string(scanned) + "/" +
-                              std::to_string(totalHosts) + "  trovati: " +
-                              std::to_string(g_netCutDevices.size()),
-                          display::kAccent, 0);
+            textFormat(8, 30, display::kText, 0, "SSID: %s",
+                       WiFi.SSID().c_str());
+            textFormat(8, 46, display::kText, 0, "GW: %s",
+                       IPAddress(info.gw.addr).toString().c_str());
+            textFormat(8, 64, display::kAccent, 0, "%u/%u  trovati: %u",
+                       static_cast<unsigned>(scanned),
+                       static_cast<unsigned>(totalHosts),
+                       static_cast<unsigned>(g_netCutDevices.size()));
             display::progressBar(
                 8, 82, 200, 8,
                 totalHosts == 0 ? 1.0f
@@ -1670,10 +1707,8 @@ void netcutActiveAll() {
             display::header("NetCut attivo", "WiFi");
             display::textCentered(44, "ARP poisoning in corso",
                                   display::kDanger, 2);
-            display::textCentered(66, "Dispositivi: " +
-                                          std::to_string(
-                                              g_netCutDevices.size()),
-                                  display::kText, 0);
+            textCenteredFormat(66, display::kText, 0, "Dispositivi: %u",
+                               static_cast<unsigned>(g_netCutDevices.size()));
             display::textCentered(82, "` = termina e ripristina",
                                   display::kWarning, 0);
             display::footer("Solo reti autorizzate");
@@ -1703,11 +1738,8 @@ void netcutActiveSingle(int idx) {
         if (now - lastDraw > 250) {
             display::clear();
             display::header("NetCut", "WiFi");
-            display::text(8, 34,
-                          std::string(g_netCutDevices[idx]
-                                          .ip.toString()
-                                          .c_str()),
-                          display::kAccent, 2);
+            textFormat(8, 34, display::kAccent, 2, "%s",
+                       g_netCutDevices[idx].ip.toString().c_str());
             display::text(8, 58, g_netCutDevices[idx].macStr,
                           display::kText, 0);
             display::text(8, 82, "` = termina e ripristina",
@@ -1750,11 +1782,8 @@ void netcutTroll(int idx) {
         if (now - lastDraw > 250) {
             display::clear();
             display::header("NetCut Troll", "WiFi");
-            display::text(8, 34,
-                          std::string(g_netCutDevices[idx]
-                                          .ip.toString()
-                                          .c_str()),
-                          display::kAccent, 2);
+            textFormat(8, 34, display::kAccent, 2, "%s",
+                       g_netCutDevices[idx].ip.toString().c_str());
             display::text(8, 58, offline ? "OFFLINE" : "ONLINE",
                           offline ? display::kDanger : display::kInfo, 2);
             display::text(8, 82, "` = termina e ripristina",
@@ -1775,7 +1804,7 @@ void netcutToggleVip(int idx) {
     NetCutDevice& dev = g_netCutDevices[idx];
     dev.isVip = !dev.isVip;
     const auto it = std::find(g_netCutVips.begin(), g_netCutVips.end(),
-                              dev.macStr);
+                              std::string(dev.macStr));
     if (dev.isVip) {
         if (it == g_netCutVips.end()) {
             g_netCutVips.push_back(dev.macStr);
@@ -1897,22 +1926,17 @@ void runNetCut() {
 }
 
 void runDeauth() {
-    std::vector<Network> networks;
-    if (!collectNetworks(networks) || networks.empty()) {
+    if (!collectNetworks(g_networks) || g_networks.empty()) {
         return;
     }
     std::vector<std::string> labels;
-    for (const auto& network : networks) {
-        labels.push_back(shortened(network.ssid, 18) + "  ch" +
-                         std::to_string(network.channel) + "  " +
-                         std::to_string(network.rssi) + "dBm");
-    }
+    networkLabels(g_networks, labels);
     const int choice = chooseIndex("Target deauth", "WiFi", labels,
                                    "ENTER=seleziona  `=indietro");
     if (choice < 0) {
         return;
     }
-    const Network target = networks[choice];
+    const Network target = g_networks[choice];
 
     if (!ui::legalWarning("Deauth WiFi",
                           {"Invia frame 802.11 di disconnessione.",
@@ -1939,9 +1963,7 @@ void runDeauth() {
 
     uint8_t bssid[6] = {0};
     if (!parseBssid(target.bssid, bssid)) {
-        esp_wifi_set_promiscuous(false);
-        esp_wifi_set_promiscuous_rx_cb(nullptr);
-        WiFi.mode(WIFI_OFF);
+        stopPromiscuous();
         ui::message("Deauth", {"BSSID non valido."}, "WiFi");
         return;
     }
@@ -1998,10 +2020,7 @@ void runDeauth() {
         }
     }
 
-    esp_wifi_set_promiscuous(false);
-    esp_wifi_set_promiscuous_rx_cb(nullptr);
-    esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE);
-    WiFi.mode(WIFI_OFF);
+    stopPromiscuous();
     logger::info("Deauth terminato: %u frame", static_cast<unsigned>(packets));
 }
 
@@ -2065,14 +2084,19 @@ void drawBeaconSpam(const char* ssid, uint8_t channel, uint32_t packets,
     display::clear();
     display::header("Beacon Spam", "WiFi Atks");
     display::text(8, 28, "SSID:", display::kTextDim, 0);
-    display::text(8, 40, shortened(ssid != nullptr ? ssid : "", 28),
+    static std::string ssidText;
+    display::text(8, 40,
+                  shortenInto(ssidText, ssid != nullptr ? ssid : "", 28),
                   display::kAccent, 2);
-    display::text(8, 62, "Canale " + std::to_string(channel),
-                  display::kText, 0);
-    display::text(120, 62,
-                  "OK " + std::to_string(packets) +
-                      (txFail ? " KO " + std::to_string(txFail) : ""),
-                  txFail ? display::kWarning : display::kText, 0);
+    textFormat(8, 62, display::kText, 0, "Canale %u",
+               static_cast<unsigned>(channel));
+    if (txFail) {
+        textFormat(120, 62, display::kWarning, 0, "OK %u KO %u",
+                   static_cast<unsigned>(packets), static_cast<unsigned>(txFail));
+    } else {
+        textFormat(120, 62, display::kText, 0, "OK %u",
+                   static_cast<unsigned>(packets));
+    }
     display::progressBar(8, 82, 180, 8,
                          1.0f - static_cast<float>(remainingMs) / 60000.0f,
                          display::kDanger);
@@ -2161,10 +2185,7 @@ void runBeaconSpam() {
         delay(8);
     }
 
-    esp_wifi_set_promiscuous(false);
-    esp_wifi_set_promiscuous_rx_cb(nullptr);
-    esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE);
-    WiFi.mode(WIFI_OFF);
+    stopPromiscuous();
     logger::info("Beacon spam terminato: %u frame",
                  static_cast<unsigned>(packets));
 }
@@ -2173,14 +2194,17 @@ void drawDeauthFlood(size_t targets, size_t index, uint32_t packets,
                      uint32_t txFail, uint32_t remainingMs) {
     display::clear();
     display::header("Deauth Flood", "WiFi Atks");
-    display::text(8, 30, "Reti target: " + std::to_string(targets),
-                  display::kText, 2);
-    display::text(8, 52, "Indice: " + std::to_string(index + 1),
-                  display::kTextDim, 0);
-    display::text(8, 66,
-                  "OK " + std::to_string(packets) +
-                      (txFail ? "  KO " + std::to_string(txFail) : ""),
-                  txFail ? display::kWarning : display::kText, 0);
+    textFormat(8, 30, display::kText, 2, "Reti target: %u",
+               static_cast<unsigned>(targets));
+    textFormat(8, 52, display::kTextDim, 0, "Indice: %u",
+               static_cast<unsigned>(index + 1));
+    if (txFail) {
+        textFormat(8, 66, display::kWarning, 0, "OK %u  KO %u",
+                   static_cast<unsigned>(packets), static_cast<unsigned>(txFail));
+    } else {
+        textFormat(8, 66, display::kText, 0, "OK %u",
+                   static_cast<unsigned>(packets));
+    }
     display::progressBar(8, 84, 180, 8,
                          1.0f - static_cast<float>(remainingMs) / 60000.0f,
                          display::kDanger);
@@ -2193,8 +2217,7 @@ void drawDeauthFlood(size_t targets, size_t index, uint32_t packets,
 }
 
 void runDeauthFlood() {
-    std::vector<Network> networks;
-    if (!collectNetworks(networks) || networks.empty()) {
+    if (!collectNetworks(g_networks) || g_networks.empty()) {
         return;
     }
 
@@ -2203,7 +2226,8 @@ void runDeauthFlood() {
         uint8_t channel;
     };
     std::vector<Target> targets;
-    for (const auto& network : networks) {
+    targets.reserve(24);
+    for (const auto& network : g_networks) {
         Target target;
         if (!parseBssid(network.bssid, target.bssid)) {
             continue;
@@ -2298,10 +2322,7 @@ void runDeauthFlood() {
         }
     }
 
-    esp_wifi_set_promiscuous(false);
-    esp_wifi_set_promiscuous_rx_cb(nullptr);
-    esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE);
-    WiFi.mode(WIFI_OFF);
+    stopPromiscuous();
     logger::info("Deauth flood terminato: %u frame su %u target",
                  static_cast<unsigned>(packets),
                  static_cast<unsigned>(targets.size()));
@@ -2375,20 +2396,21 @@ void drawAccessPoint(const std::string& title, const Network& target,
     display::clear();
     display::header(title, "WiFi");
     display::text(8, 30, "SSID clone:", display::kTextDim, 0);
-    display::text(8, 42, shortened(target.ssid, 28), display::kAccent, 2);
-    display::text(8, 64, std::string("IP portale: ") + ip.toString().c_str(),
-                  display::kText, 0);
-    display::text(8, 76, "Client: " + std::to_string(clients), display::kText, 0);
+    static std::string ssidText;
+    display::text(8, 42, shortenInto(ssidText, target.ssid, 28),
+                  display::kAccent, 2);
+    textFormat(8, 64, display::kText, 0, "IP portale: %s",
+               ip.toString().c_str());
+    textFormat(8, 76, display::kText, 0, "Client: %d", clients);
     if (portal) {
         credLock();
         const size_t credentialCount = g_credentials.size();
         credUnlock();
-        display::text(120, 76,
-                      "Credenziali: " + std::to_string(credentialCount),
-                      display::kInfo, 0);
+        textFormat(120, 76, display::kInfo, 0, "Credenziali: %u",
+                   static_cast<unsigned>(credentialCount));
     }
-    display::text(8, 90, "Uptime: " + std::to_string(uptimeMs / 1000) + "s",
-                  display::kTextDim, 0);
+    textFormat(8, 90, display::kTextDim, 0, "Uptime: %us",
+               static_cast<unsigned>(uptimeMs / 1000));
     display::text(8, 106, "Solo test autorizzati - dati in RAM", display::kWarning,
                   0);
     display::footer("ESC = interrompi AP");
@@ -2478,16 +2500,11 @@ void runFakeAccessPoint(const Network& target, bool portal) {
 }
 
 void runEvilTwin() {
-    std::vector<Network> networks;
-    if (!collectNetworks(networks) || networks.empty()) {
+    if (!collectNetworks(g_networks) || g_networks.empty()) {
         return;
     }
     std::vector<std::string> labels;
-    for (const auto& network : networks) {
-        labels.push_back(shortened(network.ssid, 18) + "  ch" +
-                         std::to_string(network.channel) + "  " +
-                         std::to_string(network.rssi) + "dBm");
-    }
+    networkLabels(g_networks, labels);
     const int choice = chooseIndex("SSID da clonare", "WiFi", labels,
                                    "ENTER=seleziona  `=indietro");
     if (choice < 0) {
@@ -2503,20 +2520,15 @@ void runEvilTwin() {
     credLock();
     g_credentials.clear();
     credUnlock();
-    runFakeAccessPoint(networks[choice], false);
+    runFakeAccessPoint(g_networks[choice], false);
 }
 
 void runEvilPortal() {
-    std::vector<Network> networks;
-    if (!collectNetworks(networks) || networks.empty()) {
+    if (!collectNetworks(g_networks) || g_networks.empty()) {
         return;
     }
     std::vector<std::string> labels;
-    for (const auto& network : networks) {
-        labels.push_back(shortened(network.ssid, 18) + "  ch" +
-                         std::to_string(network.channel) + "  " +
-                         std::to_string(network.rssi) + "dBm");
-    }
+    networkLabels(g_networks, labels);
     const int choice = chooseIndex("Portale: SSID da usare", "WiFi", labels,
                                    "ENTER=seleziona  `=indietro");
     if (choice < 0) {
@@ -2532,7 +2544,7 @@ void runEvilPortal() {
     credLock();
     g_credentials.clear();
     credUnlock();
-    runFakeAccessPoint(networks[choice], true);
+    runFakeAccessPoint(g_networks[choice], true);
 }
 
 void runAttacksMenu() {

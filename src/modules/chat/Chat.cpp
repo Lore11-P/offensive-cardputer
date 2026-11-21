@@ -7,9 +7,10 @@
 #include <mbedtls/sha256.h>
 
 #include <algorithm>
+#include <cstdarg>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
-#include <map>
 #include <string>
 #include <vector>
 
@@ -50,20 +51,57 @@ constexpr uint8_t kControlResponse = 2;
 constexpr uint8_t kControlPresence = 3;
 
 struct ChatMessage {
-    std::string sender;
-    std::string text;
+    char sender[kNickLen + 1] = {};
+    char text[kTextLen + 1] = {};
     bool mine = false;
+};
+
+// Copia troncata su buffer fisso: nessuna allocazione, usabile dentro le
+// sezioni critiche (interrupt disabilitati).
+void copyFixed(char* out, size_t cap, const char* text) {
+    if (out == nullptr || cap == 0) {
+        return;
+    }
+    size_t written = 0;
+    if (text != nullptr) {
+        while (written + 1 < cap && text[written] != '\0') {
+            out[written] = text[written];
+            ++written;
+        }
+    }
+    out[written] = '\0';
+}
+
+constexpr size_t kMaxPeers = 16;
+constexpr size_t kMaxCounters = 16;
+
+struct PeerEntry {
+    uint8_t addr[6] = {};
+    uint32_t lastMs = 0;
+    bool used = false;
+};
+
+struct CounterEntry {
+    uint8_t addr[6] = {};
+    uint16_t counter = 0;
+    bool used = false;
 };
 
 enum class NameCheck { Unique, Taken, Error };
 
-std::vector<ChatMessage> g_messages;
-std::map<std::string, uint16_t> g_lastCounter;
-std::map<std::string, uint32_t> g_peers;
+// Array fissi al posto di vector/map: la chat riceve nel task NimBLE e ogni
+// nodo di std::map era una malloc. I limiti sono dichiarati, non impliciti.
+ChatMessage g_messages[kHistoryMax];
+size_t g_messageStart = 0;
+size_t g_messageCount = 0;
+PeerEntry g_peers[kMaxPeers];
+CounterEntry g_counters[kMaxCounters];
 portMUX_TYPE g_lock = portMUX_INITIALIZER_UNLOCKED;
 volatile bool g_dirty = true;
 uint16_t g_counter = 0;
-std::string g_selfAddress;
+uint8_t g_selfAddr[6] = {};
+char g_selfNick[kNickLen + 1] = {};
+char g_selfRecipient[kNickLen + 1] = {};
 volatile bool g_nameQueryActive = false;
 volatile bool g_nameQueryTaken = false;
 volatile uint32_t g_nameQueryId = 0;
@@ -81,6 +119,29 @@ void ensureBle() {
     if (!NimBLEDevice::getInitialized()) {
         NimBLEDevice::init("CardputerFW");
     }
+}
+
+void textFormat(int x, int y, uint16_t color, uint8_t font, const char* fmt,
+                ...) {
+    char buffer[96];
+    va_list args;
+    va_start(args, fmt);
+    std::vsnprintf(buffer, sizeof(buffer), fmt, args);
+    va_end(args);
+    static std::string text;
+    text.assign(buffer);
+    display::text(x, y, text, color, font);
+}
+
+// Identita' in forma fissa: nessuna config::chatNickname() (std::string per
+// valore) dentro i callback.
+void refreshIdentity() {
+    const std::string nick = config::chatNickname();
+    std::snprintf(g_selfNick, sizeof(g_selfNick), "%s", nick.c_str());
+    const std::string recipient = config::chatRecipient();
+    std::snprintf(g_selfRecipient, sizeof(g_selfRecipient), "%s",
+                  recipient.c_str());
+    std::memcpy(g_selfAddr, NimBLEDevice::getAddress().getNative(), 6);
 }
 
 std::string trimRight(std::string value) {
@@ -123,30 +184,67 @@ void sha256(const std::string& value, uint8_t out[32]) {
     sha256(reinterpret_cast<const uint8_t*>(value.data()), value.size(), out);
 }
 
-std::string keyMaterial(const std::string& sender,
-                        const std::string& recipient) {
-    return canonicalName(sender) + '\x1F' + canonicalName(recipient);
+void sha256(const char* value, uint8_t out[32]) {
+    sha256(reinterpret_cast<const uint8_t*>(value), std::strlen(value), out);
+}
+
+// Canonicalizzazione su buffer fisso: printable + trimRight + minuscolo.
+void canonicalInto(const char* value, char out[kNickLen + 1]) {
+    size_t len = std::strlen(value);
+    while (len > 0 && (value[len - 1] == ' ' || value[len - 1] == '\0')) {
+        --len;
+    }
+    size_t written = 0;
+    for (size_t i = 0; i < len && written < kNickLen; ++i) {
+        char c = value[i];
+        if (c < 0x20 || c >= 0x7F) {
+            continue;
+        }
+        if (c >= 'A' && c <= 'Z') {
+            c = static_cast<char>(c - 'A' + 'a');
+        }
+        out[written++] = c;
+    }
+    out[written] = '\0';
+}
+
+constexpr size_t kMaterialMax = 2 * (kNickLen + 1) + 1;
+
+void keyMaterial(const char* sender, const char* recipient,
+                 char out[kMaterialMax]) {
+    char a[kNickLen + 1];
+    char b[kNickLen + 1];
+    canonicalInto(sender, a);
+    canonicalInto(recipient, b);
+    std::snprintf(out, kMaterialMax, "%s%c%s", a, 0x1F, b);
 }
 
 // shortcut: la chiave AES e' solo SHA-256 dei due nickname, senza segreto
 // condiviso ne' ECDH/pairing: chi conosce i nickname puo' decifrare. Per una
 // riservatezza reale serve uno scambio X25519 con fingerprint verificato.
-void deriveKey(const std::string& sender, const std::string& recipient,
-               uint8_t key[32]) {
-    sha256(keyMaterial(sender, recipient), key);
+void deriveKey(const char* sender, const char* recipient, uint8_t key[32]) {
+    char material[kMaterialMax];
+    keyMaterial(sender, recipient, material);
+    sha256(material, key);
 }
 
-void deriveIv(const std::string& sender, const std::string& recipient,
-              uint16_t counter, uint8_t iv[16]) {
+void deriveIv(const char* sender, const char* recipient, uint16_t counter,
+              uint8_t iv[16]) {
+    char material[kMaterialMax];
+    keyMaterial(sender, recipient, material);
+    char withCounter[kMaterialMax + 12];
+    std::snprintf(withCounter, sizeof(withCounter), "%s%c%u", material, 0x1F,
+                  static_cast<unsigned>(counter));
     uint8_t hash[32];
-    sha256(keyMaterial(sender, recipient) + '\x1F' + std::to_string(counter),
-           hash);
+    sha256(withCounter, hash);
     std::memcpy(iv, hash, 16);
 }
 
-void nameTag(const std::string& name, uint8_t tag[kTagLen]) {
+void nameTag(const char* name, uint8_t tag[kTagLen]) {
+    char canonical[kNickLen + 1];
+    canonicalInto(name, canonical);
     uint8_t hash[32];
-    sha256(canonicalName(name), hash);
+    sha256(canonical, hash);
     std::memcpy(tag, hash, kTagLen);
 }
 
@@ -155,8 +253,8 @@ bool encryptText(const std::string& sender, const std::string& recipient,
                  uint8_t cipher[kCipherLen]) {
     uint8_t key[32];
     uint8_t iv[16];
-    deriveKey(sender, recipient, key);
-    deriveIv(sender, recipient, counter, iv);
+    deriveKey(sender.c_str(), recipient.c_str(), key);
+    deriveIv(sender.c_str(), recipient.c_str(), counter, iv);
 
     uint8_t plain[kCipherLen] = {};
     const size_t len = std::min(text.size(), kTextLen);
@@ -175,9 +273,8 @@ bool encryptText(const std::string& sender, const std::string& recipient,
     return rc == 0;
 }
 
-bool decryptText(const std::string& sender, const std::string& recipient,
-                 uint16_t counter, const uint8_t cipher[kCipherLen],
-                 std::string& text) {
+bool decryptText(const char* sender, const char* recipient, uint16_t counter,
+                 const uint8_t cipher[kCipherLen], char text[kTextLen + 1]) {
     uint8_t key[32];
     uint8_t iv[16];
     deriveKey(sender, recipient, key);
@@ -206,9 +303,19 @@ bool decryptText(const std::string& sender, const std::string& recipient,
         }
     }
 
-    text.assign(reinterpret_cast<const char*>(plain), kCipherLen - pad);
-    text = printable(trimRight(text));
-    return !text.empty();
+    size_t len = kCipherLen - pad;
+    while (len > 0 && (plain[len - 1] == ' ' || plain[len - 1] == '\0')) {
+        --len;
+    }
+    size_t written = 0;
+    for (size_t i = 0; i < len; ++i) {
+        const char c = static_cast<char>(plain[i]);
+        if (c >= 0x20 && c < 0x7F) {
+            text[written++] = c;
+        }
+    }
+    text[written] = '\0';
+    return written > 0;
 }
 
 uint16_t readU16(const uint8_t* data) {
@@ -235,21 +342,34 @@ void writeU32(uint8_t* data, uint32_t value) {
     data[3] = static_cast<uint8_t>((value >> 24) & 0xFF);
 }
 
-bool parseMessagePacket(const std::string& data, uint16_t& counter,
-                        std::string& sender, uint8_t tag[kTagLen],
+void fieldName(const uint8_t* raw, size_t len, char out[kNickLen + 1]) {
+    size_t end = std::min(len, kNickLen);
+    while (end > 0 && (raw[end - 1] == ' ' || raw[end - 1] == '\0')) {
+        --end;
+    }
+    size_t written = 0;
+    for (size_t i = 0; i < end; ++i) {
+        const char c = static_cast<char>(raw[i]);
+        if (c >= 0x20 && c < 0x7F) {
+            out[written++] = c;
+        }
+    }
+    out[written] = '\0';
+}
+
+bool parseMessagePacket(const uint8_t* raw, size_t len, uint16_t& counter,
+                        char sender[kNickLen + 1], uint8_t tag[kTagLen],
                         uint8_t cipher[kCipherLen]) {
-    if (data.size() < kPacketLen) {
+    if (raw == nullptr || len < kPacketLen) {
         return false;
     }
-    const uint8_t* raw = reinterpret_cast<const uint8_t*>(data.data());
     if (readU16(raw) != kCompanyId || raw[2] != kMagicMessage) {
         return false;
     }
 
-    sender.assign(reinterpret_cast<const char*>(raw + 3), kNickLen);
-    sender = printable(trimRight(sender));
-    if (sender.empty()) {
-        sender = "???";
+    fieldName(raw + 3, kNickLen, sender);
+    if (sender[0] == '\0') {
+        std::snprintf(sender, kNickLen + 1, "%s", "???");
     }
     std::memcpy(tag, raw + 3 + kNickLen, kTagLen);
     counter = readU16(raw + 3 + kNickLen + kTagLen);
@@ -257,22 +377,44 @@ bool parseMessagePacket(const std::string& data, uint16_t& counter,
     return true;
 }
 
-bool parseControlPacket(const std::string& data, uint8_t& type,
-                        std::string& name, uint32_t& queryId) {
-    if (data.size() < kPacketLen) {
+bool parseControlPacket(const uint8_t* raw, size_t len, uint8_t& type,
+                        char name[kNickLen + 1], uint32_t& queryId) {
+    if (raw == nullptr || len < kPacketLen) {
         return false;
     }
-    const uint8_t* raw = reinterpret_cast<const uint8_t*>(data.data());
     if (readU16(raw) != kCompanyId || raw[2] != kMagicControl) {
         return false;
     }
     type = raw[3];
-    name.assign(reinterpret_cast<const char*>(raw + 4), kNickLen);
-    name = printable(trimRight(name));
+    fieldName(raw + 4, kNickLen, name);
     queryId = readU32(raw + 4 + kNickLen);
-    return !name.empty() &&
+    return name[0] != '\0' &&
            (type == kControlQuery || type == kControlResponse ||
             type == kControlPresence);
+}
+
+// Estrae il manufacturer data (AD type 0xFF) dal payload grezzo, senza la
+// std::string restituita da getManufacturerData().
+bool readManufacturerData(const uint8_t* payload, size_t len, uint8_t* out,
+                          size_t cap, size_t& outLen) {
+    size_t pos = 0;
+    while (pos + 1 < len) {
+        const uint8_t fieldLen = payload[pos];
+        if (fieldLen == 0 || pos + 1 + fieldLen > len) {
+            break;
+        }
+        if (payload[pos + 1] == 0xFF && fieldLen > 1) {
+            const size_t valueLen = fieldLen - 1;
+            if (valueLen > cap) {
+                return false;
+            }
+            std::memcpy(out, payload + pos + 2, valueLen);
+            outLen = valueLen;
+            return true;
+        }
+        pos += 1 + fieldLen;
+    }
+    return false;
 }
 
 std::vector<uint8_t> buildMessagePacket(const std::string& text,
@@ -290,7 +432,7 @@ std::vector<uint8_t> buildMessagePacket(const std::string& text,
     std::memset(data.data() + 3 + sender.size(), ' ', kNickLen - sender.size());
 
     uint8_t tag[kTagLen];
-    nameTag(recipient, tag);
+    nameTag(recipient.c_str(), tag);
     std::memcpy(data.data() + 3 + kNickLen, tag, kTagLen);
     writeU16(data.data() + 3 + kNickLen + kTagLen, counter);
 
@@ -302,19 +444,16 @@ std::vector<uint8_t> buildMessagePacket(const std::string& text,
     return data;
 }
 
-std::vector<uint8_t> buildControlPacket(uint8_t type, const std::string& name,
-                                        uint32_t queryId) {
+std::vector<uint8_t> buildControlPacket(uint8_t type, const char* name,
+                                       uint32_t queryId) {
     std::vector<uint8_t> data(kPacketLen, 0);
     writeU16(data.data(), kCompanyId);
     data[2] = kMagicControl;
     data[3] = type;
 
-    std::string target = name;
-    if (target.size() > kNickLen) {
-        target.resize(kNickLen);
-    }
-    std::memcpy(data.data() + 4, target.data(), target.size());
-    std::memset(data.data() + 4 + target.size(), ' ', kNickLen - target.size());
+    const size_t targetLen = std::min(std::strlen(name), kNickLen);
+    std::memcpy(data.data() + 4, name, targetLen);
+    std::memset(data.data() + 4 + targetLen, ' ', kNickLen - targetLen);
     writeU32(data.data() + 4 + kNickLen, queryId);
     return data;
 }
@@ -340,15 +479,15 @@ bool publishPacket(const std::vector<uint8_t>& payload) {
     return advertising->start(0, nullptr, nullptr);
 }
 
-bool publishControl(uint8_t type, const std::string& name, uint32_t queryId) {
+bool publishControl(uint8_t type, const char* name, uint32_t queryId) {
     return publishPacket(buildControlPacket(type, name, queryId));
 }
 
-void beginNameQuery(const std::string& name, uint32_t queryId) {
-    const std::string canonical = canonicalName(name);
+void beginNameQuery(const char* name, uint32_t queryId) {
+    char canonical[kNickLen + 1];
+    canonicalInto(name, canonical);
     portENTER_CRITICAL(&g_lock);
-    std::snprintf(g_nameQueryName, sizeof(g_nameQueryName), "%s",
-                  canonical.c_str());
+    copyFixed(g_nameQueryName, sizeof(g_nameQueryName), canonical);
     g_nameQueryId = queryId;
     g_nameQueryTaken = false;
     g_nameQueryActive = true;
@@ -368,34 +507,65 @@ void endNameQuery() {
     portEXIT_CRITICAL(&g_lock);
 }
 
-bool touchPeerLocked(const std::string& address, uint32_t now) {
-    auto it = g_peers.find(address);
-    if (it != g_peers.end() && now - it->second <= kPeerTimeoutMs) {
-        it->second = now;
-        return false;
+bool sameAddress(const uint8_t a[6], const uint8_t b[6]) {
+    return std::memcmp(a, b, 6) == 0;
+}
+
+bool touchPeerLocked(const uint8_t address[6], uint32_t now) {
+    int freeSlot = -1;
+    int oldestSlot = -1;
+    for (int i = 0; i < static_cast<int>(kMaxPeers); ++i) {
+        PeerEntry& peer = g_peers[i];
+        if (!peer.used) {
+            if (freeSlot < 0) {
+                freeSlot = i;
+            }
+            continue;
+        }
+        if (sameAddress(peer.addr, address)) {
+            const bool fresh = now - peer.lastMs > kPeerTimeoutMs;
+            peer.lastMs = now;
+            return fresh;
+        }
+        if (oldestSlot < 0 || peer.lastMs < g_peers[oldestSlot].lastMs) {
+            oldestSlot = i;
+        }
     }
-    g_peers[address] = now;
+    const int slot = freeSlot >= 0 ? freeSlot : oldestSlot;
+    if (slot < 0) {
+        return true;
+    }
+    PeerEntry& peer = g_peers[slot];
+    std::memcpy(peer.addr, address, 6);
+    peer.lastMs = now;
+    peer.used = true;
     return true;
 }
 
-void notifyPeerLocked(const std::string& name, uint32_t now) {
+void notifyPeerLocked(const char* name, uint32_t now) {
     if (!config::chatNotifyEnabled()) {
         return;
     }
-    std::snprintf(g_notifyName, sizeof(g_notifyName), "%s", name.c_str());
+    copyFixed(g_notifyName, sizeof(g_notifyName), name);
     g_notifyUntil = now + kNotifyDurationMs;
     g_notifyBeepPending = true;
     g_dirty = true;
 }
 
-void handleControlPacket(uint8_t type, const std::string& name,
-                         uint32_t queryId, const std::string& address) {
+bool canonicalEquals(const char* a, const char* b) {
+    char left[kNickLen + 1];
+    char right[kNickLen + 1];
+    canonicalInto(a, left);
+    canonicalInto(b, right);
+    return std::strcmp(left, right) == 0;
+}
+
+void handleControlPacket(uint8_t type, const char* name, uint32_t queryId,
+                         const uint8_t address[6]) {
     if (type == kControlQuery) {
-        if (g_chatActive &&
-            canonicalName(name) == canonicalName(config::chatNickname())) {
+        if (g_chatActive && canonicalEquals(name, g_selfNick)) {
             portENTER_CRITICAL(&g_lock);
-            std::snprintf(g_controlResponseName, sizeof(g_controlResponseName),
-                          "%s", name.c_str());
+            copyFixed(g_controlResponseName, sizeof(g_controlResponseName), name);
             g_controlResponseId = queryId;
             g_controlResponsePending = true;
             portEXIT_CRITICAL(&g_lock);
@@ -421,18 +591,19 @@ void handleControlPacket(uint8_t type, const std::string& name,
         return;
     }
 
-    const std::string canonical = canonicalName(name);
+    char canonical[kNickLen + 1];
+    canonicalInto(name, canonical);
     bool matches = false;
     portENTER_CRITICAL(&g_lock);
     if (g_nameQueryActive && queryId == g_nameQueryId &&
-        canonical == g_nameQueryName) {
+        std::strcmp(canonical, g_nameQueryName) == 0) {
         g_nameQueryTaken = true;
         matches = true;
     }
     portEXIT_CRITICAL(&g_lock);
 
     if (matches) {
-        logger::info("Chat BLE: nickname '%s' gia' in uso", name.c_str());
+        logger::info("Chat BLE: nickname '%s' gia' in uso", name);
     }
 }
 
@@ -457,7 +628,7 @@ void publishPresence() {
     if (!config::chatNotifyEnabled()) {
         return;
     }
-    publishControl(kControlPresence, config::chatNickname(), 0);
+    publishControl(kControlPresence, g_selfNick, 0);
     g_nextPresenceAt = millis() + kPresenceIntervalMs;
 }
 
@@ -475,89 +646,126 @@ void serviceNotifications() {
     }
 }
 
+void pushMessageLocked(const char* sender, const char* text, bool mine) {
+    size_t slot;
+    if (g_messageCount < kHistoryMax) {
+        slot = (g_messageStart + g_messageCount) % kHistoryMax;
+        ++g_messageCount;
+    } else {
+        slot = g_messageStart;
+        g_messageStart = (g_messageStart + 1) % kHistoryMax;
+    }
+    ChatMessage& message = g_messages[slot];
+    copyFixed(message.sender, sizeof(message.sender), sender);
+    copyFixed(message.text, sizeof(message.text), text);
+    message.mine = mine;
+    g_dirty = true;
+}
+
+// true se la coppia indirizzo/contatore e' nuova (non un duplicato).
+bool noteCounterLocked(const uint8_t address[6], uint16_t counter) {
+    int freeSlot = -1;
+    for (int i = 0; i < static_cast<int>(kMaxCounters); ++i) {
+        CounterEntry& entry = g_counters[i];
+        if (!entry.used) {
+            if (freeSlot < 0) {
+                freeSlot = i;
+            }
+            continue;
+        }
+        if (sameAddress(entry.addr, address)) {
+            if (entry.counter == counter) {
+                return false;
+            }
+            entry.counter = counter;
+            return true;
+        }
+    }
+    if (freeSlot < 0) {
+        std::memmove(&g_counters[0], &g_counters[1],
+                     sizeof(CounterEntry) * (kMaxCounters - 1));
+        freeSlot = static_cast<int>(kMaxCounters) - 1;
+    }
+    CounterEntry& entry = g_counters[freeSlot];
+    std::memcpy(entry.addr, address, 6);
+    entry.counter = counter;
+    entry.used = true;
+    return true;
+}
+
 class ChatScanCallbacks : public NimBLEAdvertisedDeviceCallbacks {
 public:
     void onResult(NimBLEAdvertisedDevice* device) override {
-        if (device == nullptr || !device->haveManufacturerData()) {
+        if (device == nullptr) {
             return;
         }
 
-        const std::string address = device->getAddress().toString();
-        if (address == g_selfAddress) {
+        const uint8_t* native = device->getAddress().getNative();
+        if (sameAddress(native, g_selfAddr)) {
             return;
         }
 
-        const std::string data = device->getManufacturerData(0);
+        uint8_t data[64];
+        size_t dataLen = 0;
+        if (!readManufacturerData(device->getPayload(),
+                                  device->getPayloadLength(), data,
+                                  sizeof(data), dataLen)) {
+            return;
+        }
+
         uint8_t type = 0;
-        std::string name;
+        char name[kNickLen + 1];
         uint32_t queryId = 0;
-        if (parseControlPacket(data, type, name, queryId)) {
-            handleControlPacket(type, name, queryId, address);
+        if (parseControlPacket(data, dataLen, type, name, queryId)) {
+            handleControlPacket(type, name, queryId, native);
             return;
         }
 
         uint16_t counter = 0;
-        std::string sender;
+        char sender[kNickLen + 1];
         uint8_t tag[kTagLen];
         uint8_t cipher[kCipherLen];
-        if (!parseMessagePacket(data, counter, sender, tag, cipher)) {
+        if (!parseMessagePacket(data, dataLen, counter, sender, tag, cipher)) {
             return;
         }
 
         uint8_t ownTag[kTagLen];
-        nameTag(config::chatNickname(), ownTag);
+        nameTag(g_selfNick, ownTag);
         if (std::memcmp(tag, ownTag, kTagLen) != 0) {
             return;
         }
 
-        std::string text;
-        if (!decryptText(sender, config::chatNickname(), counter, cipher, text)) {
+        char text[kTextLen + 1];
+        if (!decryptText(sender, g_selfNick, counter, cipher, text)) {
             return;
         }
 
         const uint32_t now = millis();
-        // Costruisce il messaggio fuori dalla sezione critica: le stringhe
-        // allocano e non devono bloccare gli altri task.
-        ChatMessage message;
-        message.sender = sender;
-        message.text = text;
-        bool duplicate = false;
+        bool added = false;
         portENTER_CRITICAL(&g_lock);
-        const bool freshPeer = touchPeerLocked(address, now);
+        const bool freshPeer = touchPeerLocked(native, now);
         if (freshPeer) {
             notifyPeerLocked(sender, now);
         }
-        auto it = g_lastCounter.find(address);
-        if (it != g_lastCounter.end() && it->second == counter) {
-            duplicate = true;
-        } else {
-            g_lastCounter[address] = counter;
-            g_messages.push_back(std::move(message));
-            if (g_messages.size() > kHistoryMax) {
-                g_messages.erase(g_messages.begin());
-            }
-            g_dirty = true;
+        if (noteCounterLocked(native, counter)) {
+            pushMessageLocked(sender, text, false);
+            added = true;
         }
         portEXIT_CRITICAL(&g_lock);
 
-        if (!duplicate) {
-            logger::info("Chat BLE: %s: %s", sender.c_str(), text.c_str());
+        if (added) {
+            // Solo metadati: il contenuto dei messaggi non deve finire sul
+            // seriale USB (log persistenti / acquisibili da terzi).
+            logger::info("Chat BLE: messaggio ricevuto, %u byte, ctr=%u",
+                         static_cast<unsigned>(std::strlen(text)),
+                         static_cast<unsigned>(counter));
         }
     }
 };
 
 void addLocalMessage(const std::string& text) {
-    ChatMessage message;
-    message.sender = config::chatNickname();
-    message.text = text;
-    message.mine = true;
-
     portENTER_CRITICAL(&g_lock);
-    g_messages.push_back(std::move(message));
-    if (g_messages.size() > kHistoryMax) {
-        g_messages.erase(g_messages.begin());
-    }
-    g_dirty = true;
+    pushMessageLocked(g_selfNick, text.c_str(), true);
     portEXIT_CRITICAL(&g_lock);
 }
 
@@ -575,66 +783,69 @@ bool publishMessage(const std::string& text, const std::string& recipient) {
 void drawChat() {
     g_dirty = false;
 
-    // Capacita' riservata fuori dalla sezione critica: lo snapshot dentro il
-    // lock non deve allocare il buffer del vector.
-    std::vector<ChatMessage> messages;
-    messages.reserve(kHistoryMax);
+    // Snapshot su array statico: il disegno avviene ogni secondo o su evento,
+    // e le capacita' degli std::string restano allocate tra un frame e l'altro.
+    static ChatMessage messages[kHistoryMax];
+    size_t messageCount = 0;
     size_t peers = 0;
-    std::string notifyName;
+    char notifyName[kNickLen + 1] = {};
 
     portENTER_CRITICAL(&g_lock);
-    messages.assign(g_messages.begin(), g_messages.end());
+    messageCount = g_messageCount;
+    for (size_t i = 0; i < messageCount; ++i) {
+        messages[i] = g_messages[(g_messageStart + i) % kHistoryMax];
+    }
     const uint32_t now = millis();
-    for (auto it = g_peers.begin(); it != g_peers.end();) {
-        if (now - it->second > kPeerTimeoutMs) {
-            it = g_peers.erase(it);
+    for (PeerEntry& peer : g_peers) {
+        if (!peer.used) {
+            continue;
+        }
+        if (now - peer.lastMs > kPeerTimeoutMs) {
+            peer.used = false;
         } else {
             ++peers;
-            ++it;
         }
     }
     if (now < g_notifyUntil) {
-        notifyName = g_notifyName;
+        copyFixed(notifyName, sizeof(notifyName), g_notifyName);
     }
     portEXIT_CRITICAL(&g_lock);
 
     display::clear();
     display::header("Chat BLE", "Menu principale");
 
-    if (!notifyName.empty()) {
-        display::text(4, 24, "! " + notifyName + " e' nel raggio",
-                      display::kAccent, 0);
+    if (notifyName[0] != '\0') {
+        textFormat(4, 24, display::kAccent, 0, "! %s e' nel raggio", notifyName);
+    } else if (peers > 0) {
+        textFormat(4, 24, display::kTextDim, 0, "Tu: %s > %s (%u)", g_selfNick,
+                   g_selfRecipient, static_cast<unsigned>(peers));
     } else {
-        std::string status = "Tu: " + config::chatNickname() + " > " +
-                             config::chatRecipient();
-        if (peers > 0) {
-            status += " (" + std::to_string(peers) + ")";
-        }
-        display::text(4, 24, status, display::kTextDim, 0);
+        textFormat(4, 24, display::kTextDim, 0, "Tu: %s > %s", g_selfNick,
+                   g_selfRecipient);
     }
 
-    if (messages.empty()) {
+    if (messageCount == 0) {
         display::textCentered(52, "Nessun messaggio", display::kText, 2);
         display::textCentered(70, "ENTER = scrivi", display::kTextDim, 0);
     } else {
         constexpr int kLineHeight = 10;
         constexpr int kFirstLineY = 38;
         const int maxLines = (display::height() - 12 - kFirstLineY) / kLineHeight;
-        const size_t start = messages.size() > static_cast<size_t>(maxLines)
-                                 ? messages.size() - static_cast<size_t>(maxLines)
+        const size_t start = messageCount > static_cast<size_t>(maxLines)
+                                 ? messageCount - static_cast<size_t>(maxLines)
                                  : 0;
         int y = kFirstLineY;
-        for (size_t i = start; i < messages.size(); ++i) {
+        char line[64];
+        for (size_t i = start; i < messageCount; ++i) {
             const ChatMessage& message = messages[i];
-            std::string line =
-                (message.mine ? std::string("Tu") : message.sender) + ": " +
-                message.text;
-            if (line.size() > 39) {
-                line.resize(38);
-                line += "~";
+            std::snprintf(line, sizeof(line), "%s: %s",
+                          message.mine ? "Tu" : message.sender, message.text);
+            if (std::strlen(line) > 39) {
+                line[38] = '~';
+                line[39] = '\0';
             }
-            display::text(4, y, line,
-                          message.mine ? display::kAccent : display::kText, 0);
+            textFormat(4, y, message.mine ? display::kAccent : display::kText, 0,
+                       "%s", line);
             y += kLineHeight;
         }
     }
@@ -656,6 +867,8 @@ void composeMessage() {
     }
 
     config::setChatRecipient(fields[0].value);
+    std::snprintf(g_selfRecipient, sizeof(g_selfRecipient), "%s",
+                  config::chatRecipient().c_str());
     const std::string recipient = config::chatRecipient();
     // Il messaggio compare nella chat solo se e' stato realmente trasmesso.
     if (!publishMessage(fields[1].value, recipient)) {
@@ -683,7 +896,7 @@ NameCheck checkNicknameAvailable(const std::string& candidate) {
         advertising->stop();
     }
 
-    g_selfAddress = NimBLEDevice::getAddress().toString();
+    refreshIdentity();
 
     ChatScanCallbacks callbacks;
     scan->setAdvertisedDeviceCallbacks(&callbacks, true);
@@ -699,8 +912,8 @@ NameCheck checkNicknameAvailable(const std::string& candidate) {
     }
 
     const uint32_t queryId = esp_random();
-    beginNameQuery(candidate, queryId);
-    if (!publishControl(kControlQuery, candidate, queryId)) {
+    beginNameQuery(candidate.c_str(), queryId);
+    if (!publishControl(kControlQuery, candidate.c_str(), queryId)) {
         endNameQuery();
         scan->stop();
         scan->setAdvertisedDeviceCallbacks(nullptr, false);
@@ -763,6 +976,16 @@ void editNickname() {
     }
 
     config::setChatNickname(candidate);
+    // Il setter salva ma non riporta l'esito: una seconda save() idempotente
+    // dice se NVS ha davvero accettato i valori.
+    if (!config::save()) {
+        ui::message("Nickname chat",
+                    {">Nickname: " + config::chatNickname(),
+                     "!Salvataggio NVS non riuscito.",
+                     "Il valore vale solo fino al riavvio."},
+                    "Chat");
+        return;
+    }
     ui::message("Nickname chat",
                 {">Nickname: " + config::chatNickname(),
                  "Disponibile e salvato."},
@@ -777,6 +1000,14 @@ void editRecipient() {
         return;
     }
     config::setChatRecipient(fields[0].value);
+    if (!config::save()) {
+        ui::message("Destinatario chat",
+                    {">A: " + config::chatRecipient(),
+                     "!Salvataggio NVS non riuscito.",
+                     "Il valore vale solo fino al riavvio."},
+                    "Chat");
+        return;
+    }
     ui::message("Destinatario chat",
                 {">A: " + config::chatRecipient()}, "Chat");
 }
@@ -796,11 +1027,14 @@ void runChat() {
         return;
     }
 
-    g_selfAddress = NimBLEDevice::getAddress().toString();
+    refreshIdentity();
     g_counter = static_cast<uint16_t>(esp_random());
-    g_peers.clear();
-    g_lastCounter.clear();
-    g_messages.reserve(kHistoryMax);  // nessuna riallocazione in ricezione
+    portENTER_CRITICAL(&g_lock);
+    g_messageStart = 0;
+    g_messageCount = 0;
+    std::memset(g_peers, 0, sizeof(g_peers));
+    std::memset(g_counters, 0, sizeof(g_counters));
+    portEXIT_CRITICAL(&g_lock);
     g_dirty = true;
 
     if (scan->isScanning()) {
@@ -893,13 +1127,17 @@ void runChat() {
 void toggleNotifications() {
     const bool enabled = !config::chatNotifyEnabled();
     config::setChatNotifyEnabled(enabled);
-    ui::message("Notifiche chat",
-                {enabled ? ">Presenza e avvisi attivi."
-                         : ">Presenza e avvisi disattivati.",
-                 enabled ? "Gli altri vedono il tuo nickname."
-                         : "Nessun annuncio: modalita' stealth.",
-                 "L'avviso appare con la Chat aperta."},
-                "Chat");
+    std::vector<std::string> lines = {
+        enabled ? ">Presenza e avvisi attivi."
+                : ">Presenza e avvisi disattivati.",
+        enabled ? "Gli altri vedono il tuo nickname."
+                : "Nessun annuncio: modalita' stealth.",
+        "L'avviso appare con la Chat aperta."};
+    if (!config::save()) {
+        lines.push_back("!Salvataggio NVS non riuscito.");
+        lines.push_back("Il valore vale solo fino al riavvio.");
+    }
+    ui::message("Notifiche chat", lines, "Chat");
 }
 
 void runMenu() {

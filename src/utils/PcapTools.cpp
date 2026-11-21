@@ -1062,6 +1062,17 @@ bool convertToHc22000(const std::string& pcapPath, const std::string& outPath,
   };
 
   while (reader.next(frame)) {
+    // parsePayload() ha gia' classificato il frame: evitare una seconda
+    // parseEapol() su tutti i frame non EAPOL dimezza il lavoro della passata.
+    if (!reader.isEapol()) {
+      if (progress && (++counter & 0x3F) == 0) {
+        if (!progress(1, reader.position(), pcapSize)) {
+          aborted = true;
+          break;
+        }
+      }
+      continue;
+    }
     EapolInfo info;
     if (parseEapol(reader.frame(), reader.frameLen(), reader.dataPad(), info)) {
       ++result.eapol;

@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdarg>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -30,6 +31,29 @@ std::string shortened(const std::string& text, size_t maxLen) {
         return text;
     }
     return text.substr(0, maxLen - 1) + "~";
+}
+
+const std::string& shortenInto(std::string& scratch, const std::string& text,
+                               size_t maxLen) {
+    if (text.size() <= maxLen || maxLen < 2) {
+        scratch = text;
+    } else {
+        scratch.assign(text, 0, maxLen - 1);
+        scratch += '~';
+    }
+    return scratch;
+}
+
+void textFormat(int x, int y, uint16_t color, uint8_t font, const char* fmt,
+                ...) {
+    char buffer[96];
+    va_list args;
+    va_start(args, fmt);
+    std::vsnprintf(buffer, sizeof(buffer), fmt, args);
+    va_end(args);
+    static std::string text;
+    text.assign(buffer);
+    display::text(x, y, text, color, font);
 }
 
 uint16_t stateColor(bool connected) {
@@ -78,11 +102,22 @@ bool loadCredentials(std::string& ssid, std::string& password) {
 bool saveCredentials(const std::string& ssid, const std::string& password) {
     Preferences prefs;
     if (!prefs.begin(kNetNamespace, false)) {
+        logger::warn("WiFi: NVS non disponibile, credenziali non salvate");
         return false;
     }
-    prefs.putString("ssid", ssid.c_str());
-    prefs.putString("pass", password.c_str());
+    const size_t ssidWrote = prefs.putString("ssid", ssid.c_str());
+    const size_t passWrote = prefs.putString("pass", password.c_str());
+    // putString() ritorna la lunghezza scritta, 0 anche per una password
+    // vuota: il valore effettivo si verifica rileggendo le due chiavi.
+    const bool ok = ssidWrote == ssid.size() && passWrote == password.size() &&
+                    prefs.getString("ssid", "") == ssid.c_str() &&
+                    prefs.getString("pass", "") == password.c_str();
     prefs.end();
+    if (!ok) {
+        logger::warn("WiFi: salvataggio credenziali non riuscito per %s",
+                     ssid.c_str());
+        return false;
+    }
     logger::info("WiFi: credenziali salvate per %s", ssid.c_str());
     return true;
 }
@@ -288,9 +323,11 @@ int chooseNetwork(const std::vector<Network>& networks, const std::string& paren
             }
             const Network& network = networks[static_cast<size_t>(index)];
             const bool open = (network.auth == WIFI_AUTH_OPEN);
-            const std::string label = shortened(network.ssid, 18) + "  " +
-                                      std::to_string(network.rssi) + "dBm" + (open ? "  *" : "");
-            display::text(10, y + 3, label, isSelected ? display::kWhite : display::kText, 2);
+            static std::string shortSsid;
+            textFormat(10, y + 3, isSelected ? display::kWhite : display::kText, 2,
+                       "%s  %ddBm%s",
+                       shortenInto(shortSsid, network.ssid, 18).c_str(),
+                       network.rssi, open ? "  *" : "");
         }
         const int trackX = display::width() - 4;
         const int trackY = kHeaderH;
@@ -393,12 +430,19 @@ bool scanAndConnect(const std::string& parent) {
 
     if (connect(network.ssid, password, parent)) {
         // Salva solo a connessione riuscita: una password sbagliata non deve
-        // sovrascrivere credenziali che funzionavano.
-        saveCredentials(network.ssid, password);
+        // sovrascrivere credenziali che funzionavano. Se NVS fallisce la
+        // connessione resta valida ma non va dichiarata salvata.
+        const bool saved = saveCredentials(network.ssid, password);
         std::string ip = WiFi.localIP().toString().c_str();
-        ui::message("WiFi", {">Connesso a " + shortened(network.ssid, 20), "IP: " + ip,
-                             "Credenziali salvate."},
-                    parent);
+        std::vector<std::string> lines = {
+            ">Connesso a " + shortened(network.ssid, 20), "IP: " + ip};
+        if (saved) {
+            lines.push_back("Credenziali salvate.");
+        } else {
+            lines.push_back("!Credenziali non salvate.");
+            lines.push_back("La connessione vale fino al riavvio.");
+        }
+        ui::message("WiFi", lines, parent);
         return true;
     }
     ui::message("WiFi",
@@ -450,16 +494,19 @@ void drawSettingsScreen(const std::string& parent, const std::vector<std::string
     display::clear();
     display::header("Rete WiFi", parent);
 
-    display::text(6, 24, ssid.empty() ? "Nessuna rete salvata" : ("Rete: " + shortened(ssid, 26)),
-                  ssid.empty() ? display::kTextDim : display::kText, 0);
-    std::string status = "Stato: ";
-    if (connected) {
-        status += "connesso ";
-        status += WiFi.localIP().toString().c_str();
+    static std::string shownSsid;
+    if (ssid.empty()) {
+        display::text(6, 24, "Nessuna rete salvata", display::kTextDim, 0);
     } else {
-        status += "non connesso";
+        textFormat(6, 24, display::kText, 0, "Rete: %s",
+                   shortenInto(shownSsid, ssid, 26).c_str());
     }
-    display::text(6, 36, status, stateColor(connected), 0);
+    if (connected) {
+        textFormat(6, 36, stateColor(true), 0, "Stato: connesso %s",
+                   WiFi.localIP().toString().c_str());
+    } else {
+        display::text(6, 36, "Stato: non connesso", stateColor(false), 0);
+    }
 
     for (size_t i = 0; i < actions.size(); ++i) {
         const int y = 52 + static_cast<int>(i) * 18;
@@ -540,14 +587,18 @@ void runSettings(const std::string& parent) {
     const int actionCount = static_cast<int>(actions.size());
     int selected = 0;
     bool connectedHere = false;
+    // Le credenziali cambiano solo dopo un'azione dell'utente: leggerle a ogni
+    // giro (20 ms) apriva NVS e allocava due String per frame.
+    std::string storedSsid;
+    std::string storedPassword;
+    bool stored = loadCredentials(storedSsid, storedPassword);
+    static const std::string kNoSsid;
 
     navigation::waitRelease();
     for (;;) {
-        std::string ssid;
-        std::string password;
-        const bool stored = loadCredentials(ssid, password);
         const bool connected = (WiFi.status() == WL_CONNECTED);
-        drawSettingsScreen(parent, actions, selected, stored ? ssid : std::string(), connected);
+        drawSettingsScreen(parent, actions, selected, stored ? storedSsid : kNoSsid,
+                           connected);
 
         const navigation::EventData ev = navigation::poll();
         if (ev.type == navigation::Event::Back) {
@@ -573,6 +624,7 @@ void runSettings(const std::string& parent) {
                     confirmForget(parent);
                     break;
             }
+            stored = loadCredentials(storedSsid, storedPassword);
             // Se l'azione ha lasciato la radio connessa, la connessione e'
             // stata appena impostata dall'utente: non va buttata giu' all'uscita.
             if (WiFi.status() == WL_CONNECTED) {

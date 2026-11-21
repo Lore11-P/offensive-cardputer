@@ -28,6 +28,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdarg>
 #include <cstdio>
 #include <cstring>
 #include <functional>
@@ -67,7 +68,6 @@ constexpr float kMaxRangeMeters = 30.0f;
 constexpr uint8_t kWifiChannelCount = 13;
 constexpr uint32_t kWifiDwellMs = 140;
 constexpr uint32_t kBleBandSliceMs = 300;
-constexpr uint8_t kBleBandSlices = 3;
 
 constexpr int kMaxDevices = 24;
 constexpr int kFinderSegments = 16;
@@ -89,17 +89,91 @@ constexpr float kBleAdvFreqMhz[3] = {2402.0f, 2426.0f, 2480.0f};
 //  Utility
 // ----------------------------------------------------------------------------
 
-std::string shortened(const std::string& text, size_t maxLen) {
+const std::string& shortenInto(std::string& scratch, const std::string& text,
+                               size_t maxLen) {
     if (text.size() <= maxLen || maxLen < 2) {
-        return text;
+        scratch = text;
+    } else {
+        scratch.assign(text, 0, maxLen - 1);
+        scratch += '~';
     }
-    return text.substr(0, maxLen - 1) + "~";
+    return scratch;
 }
 
-std::string formatFloat(float value, int decimals) {
-    char buffer[24];
-    std::snprintf(buffer, sizeof(buffer), "%.*f", decimals, static_cast<double>(value));
-    return std::string(buffer);
+const std::string& shortenInto(std::string& scratch, const char* text,
+                               size_t maxLen) {
+    scratch.assign(text != nullptr ? text : "");
+    if (scratch.size() > maxLen && maxLen >= 2) {
+        scratch.resize(maxLen - 1);
+        scratch += '~';
+    }
+    return scratch;
+}
+
+// Formattazione su scratch riusato: le schermate del radar ridisegnano a
+// 25-40 fps, quindi ogni std::string temporanea era una malloc per frame.
+void textFormat(int x, int y, uint16_t color, uint8_t font, const char* fmt,
+                ...) {
+    char buffer[96];
+    va_list args;
+    va_start(args, fmt);
+    std::vsnprintf(buffer, sizeof(buffer), fmt, args);
+    va_end(args);
+    static std::string text;
+    text.assign(buffer);
+    display::text(x, y, text, color, font);
+}
+
+void textCenteredFormat(int y, uint16_t color, uint8_t font, const char* fmt,
+                        ...) {
+    char buffer[96];
+    va_list args;
+    va_start(args, fmt);
+    std::vsnprintf(buffer, sizeof(buffer), fmt, args);
+    va_end(args);
+    static std::string text;
+    text.assign(buffer);
+    display::textCentered(y, text, color, font);
+}
+
+// Indirizzo BLE nel formato di NimBLEAddress::toString(), ma senza allocare:
+// getNative() conserva i byte in ordine inverso rispetto alla stampa.
+void formatAddress(char out[18], const uint8_t address[6]) {
+    std::snprintf(out, 18, "%02X:%02X:%02X:%02X:%02X:%02X", address[5],
+                  address[4], address[3], address[2], address[1], address[0]);
+}
+
+// Nome dall'AD raw: stessa precedenza di getName() (complete, poi shortened).
+size_t copyDeviceName(NimBLEAdvertisedDevice* device, char* out, size_t cap) {
+    out[0] = '\0';
+    if (device == nullptr || cap < 2) {
+        return 0;
+    }
+    const uint8_t* payload = device->getPayload();
+    const size_t len = device->getPayloadLength();
+    if (payload == nullptr) {
+        return 0;
+    }
+    for (uint8_t wanted : {static_cast<uint8_t>(0x09), static_cast<uint8_t>(0x08)}) {
+        size_t pos = 0;
+        while (pos + 1 < len) {
+            const uint8_t fieldLen = payload[pos];
+            if (fieldLen == 0 || pos + 1 + fieldLen > len) {
+                break;
+            }
+            if (payload[pos + 1] == wanted && fieldLen > 1) {
+                size_t textLen = fieldLen - 1;
+                if (textLen >= cap) {
+                    textLen = cap - 1;
+                }
+                std::memcpy(out, payload + pos + 2, textLen);
+                out[textLen] = '\0';
+                return textLen;
+            }
+            pos += 1 + fieldLen;
+        }
+    }
+    return 0;
 }
 
 int clampInt(int value, int low, int high) {
@@ -132,7 +206,7 @@ float rssiToMeters(int rssi) {
 struct BleDevice {
     char address[18] = {0};
     char name[20] = {0};
-    int8_t addressType = 0;
+    uint8_t bytes[6] = {0};
     int rssi = kRssiFloor;
     uint32_t lastSeenMs = 0;
     bool used = false;
@@ -141,15 +215,16 @@ struct BleDevice {
 portMUX_TYPE g_deviceMux = portMUX_INITIALIZER_UNLOCKED;
 BleDevice g_devices[kMaxDevices];
 int g_deviceCount = 0;
+// Snapshot riusato dal task UI: 24 slot in BSS invece che sullo stack a ogni
+// frame (la copia avviene sotto critical section, come prima).
+BleDevice g_deviceSnapshot[kMaxDevices];
 
 volatile bool g_trackDevices = false;
 volatile bool g_countAdverts = false;
 volatile uint32_t g_advertCount = 0;
 
-// Finder: bersaglio selezionato. Si usa NimBLEAddress (confronto nativo):
-// toString() stampa i byte in ordine inverso rispetto all'array interno, quindi
-// confrontare i byte della stringa con getNative() non combaciava mai.
-NimBLEAddress g_targetAddress;
+// Finder: bersaglio selezionato, confrontato sui byte nativi del MAC.
+uint8_t g_targetAddr[6] = {0};
 volatile bool g_hasTarget = false;
 volatile int g_targetRssi = kRssiFloor;
 volatile uint32_t g_targetHits = 0;
@@ -192,14 +267,16 @@ void pruneDevices(uint32_t maxAgeMs) {
     portEXIT_CRITICAL(&g_deviceMux);
 }
 
-void rememberDevice(const NimBLEAddress& address, const char* name, int rssi) {
-    // toString() alloca: viene chiamata prima della critical section.
-    const std::string text = address.toString();
+void rememberDevice(const uint8_t address[6], const char* name, int rssi) {
+    // Il testo dell'indirizzo si ricava dai byte nativi: nessuna allocazione
+    // nel callback NimBLE, che gira per ogni advertising ricevuto.
+    char text[18];
+    formatAddress(text, address);
     const uint32_t now = millis();
 
     portENTER_CRITICAL(&g_deviceMux);
     for (int i = 0; i < g_deviceCount; ++i) {
-        if (std::strcmp(g_devices[i].address, text.c_str()) == 0) {
+        if (std::strcmp(g_devices[i].address, text) == 0) {
             if (rssi > g_devices[i].rssi) {
                 g_devices[i].rssi = rssi;
             }
@@ -210,11 +287,12 @@ void rememberDevice(const NimBLEAddress& address, const char* name, int rssi) {
     }
     if (g_deviceCount < kMaxDevices) {
         BleDevice& slot = g_devices[g_deviceCount];
-        std::strncpy(slot.address, text.c_str(), sizeof(slot.address) - 1);
+        std::strncpy(slot.address, text, sizeof(slot.address) - 1);
         slot.address[sizeof(slot.address) - 1] = '\0';
-        std::strncpy(slot.name, name, sizeof(slot.name) - 1);
+        std::strncpy(slot.name, name != nullptr ? name : "(senza nome)",
+                     sizeof(slot.name) - 1);
         slot.name[sizeof(slot.name) - 1] = '\0';
-        slot.addressType = static_cast<int8_t>(address.getType());
+        std::memcpy(slot.bytes, address, 6);
         slot.rssi = rssi;
         slot.lastSeenMs = now;
         slot.used = true;
@@ -233,10 +311,10 @@ public:
             ++g_advertCount;
         }
 
-        const NimBLEAddress& address = device->getAddress();
+        const uint8_t* native = device->getAddress().getNative();
         const int rssi = device->getRSSI();
 
-        if (g_hasTarget && device->getAddress() == g_targetAddress) {
+        if (g_hasTarget && std::memcmp(native, g_targetAddr, 6) == 0) {
             if (rssi > g_targetRssi) {
                 g_targetRssi = rssi;
             }
@@ -245,14 +323,16 @@ public:
         }
 
         if (g_trackDevices) {
-            // getName() ritorna std::string per valore: il c_str() di un
-            // temporaneo pende appena l'espressione finisce.
-            const std::string name =
-                device->haveName() ? device->getName() : std::string("(senza nome)");
-            rememberDevice(address, name.c_str(), rssi);
+            char name[20];
+            copyDeviceName(device, name, sizeof(name));
+            rememberDevice(native, name, rssi);
         }
     }
 };
+
+// Un solo oggetto callback condiviso: lo scanner globale conserva il puntatore
+// tra una schermata e l'altra.
+RadarAdvertiseCallbacks g_scanCallbacks;
 
 void ensureBle() {
     if (NimBLEDevice::getInitialized()) {
@@ -433,6 +513,7 @@ int chooseList(const std::string& title, const std::string& parent,
 
         display::clear();
         display::header(title, parent);
+        std::string rowText;
         for (int row = 0; row < visible; ++row) {
             const int index = top + row;
             if (index >= total) {
@@ -445,7 +526,7 @@ int chooseList(const std::string& title, const std::string& parent,
                                            display::kAccentDark);
                 display::g().fillRect(2, y + 4, 2, kRowH - 8, display::kAccent);
             }
-            display::text(10, y + 3, shortened(labels[index], 36),
+            display::text(10, y + 3, shortenInto(rowText, labels[index], 36),
                           isSelected ? display::kWhite : display::kText, 2);
         }
         const int trackX = display::width() - 4;
@@ -471,6 +552,7 @@ struct DeviceRow {
     std::string label;
     std::string name;
     std::string address;
+    uint8_t bytes[6] = {0};
     int rssi = kRssiFloor;
 };
 
@@ -552,19 +634,25 @@ void drawFinderFrame(const std::string& name, const std::string& address, int rs
     display::header("Find BLE", "Radar");
 
     const uint16_t color = linkLost ? display::kTextDim : levelColor(rssi);
-    display::text(6, 25, shortened(name, 16), display::kText, 2);
+    static std::string shortName;
+    display::text(6, 25, shortenInto(shortName, name, 16), display::kText, 2);
     display::text(6, 41, address, display::kTextDim, 0);
 
-    const std::string rssiText = (rssi <= kRssiFloor) ? "--" : std::to_string(rssi);
-    display::text(6, 52, rssiText, color, 4);
+    if (rssi <= kRssiFloor) {
+        display::text(6, 52, "--", color, 4);
+    } else {
+        textFormat(6, 52, color, 4, "%d", rssi);
+    }
     display::text(6, 84, "dBm", display::kTextDim, 0);
 
     const float meters = rssiToMeters(rssi);
-    std::string distance = "~ " + formatFloat(meters, 1) + " m";
     if (meters >= kMaxRangeMeters) {
-        distance = "> " + formatFloat(kMaxRangeMeters, 0) + " m";
+        textFormat(44, 84, linkLost ? display::kTextDim : display::kText, 2,
+                   "> %.0f m", static_cast<double>(kMaxRangeMeters));
+    } else {
+        textFormat(44, 84, linkLost ? display::kTextDim : display::kText, 2,
+                   "~ %.1f m", static_cast<double>(meters));
     }
-    display::text(44, 84, distance, linkLost ? display::kTextDim : display::kText, 2);
 
     std::string trendText = "-- stabile --";
     uint16_t trendColor = display::kTextDim;
@@ -628,24 +716,28 @@ void drawFinderFrame(const std::string& name, const std::string& address, int rs
         display::g().fillCircle(cx, cy, 2, display::kWhite);
         textCenteredAt(cx, cy + 16, aligned ? "LOCKED" : "segui freccia",
                        aligned ? display::kAccent : display::kTextDim, 0);
-        textCenteredAt(cx, cy + 26, std::to_string(directionCoverage()) + "% giro",
-                       display::kTextDim, 0);
+        textCenteredFormat(cy + 26, display::kTextDim, 0, "%d%% giro",
+                           directionCoverage());
     }
 
     const float fraction = linkLost ? 0.0f : rssiToFraction(rssi);
     drawSegmentBar(6, 118, 128, 4, kFinderSegments, fraction, peakFraction, color);
     display::text(140, 112, sound ? "audio ON" : "audio OFF", display::kTextDim, 0);
-    display::text(196, 112, "hit " + std::to_string(hits), display::kTextDim, 0);
-    display::footer("ENTER=muto  ESC=stop  S" +
-                    std::to_string(config::radarSensitivity()));
+    textFormat(196, 112, display::kTextDim, 0, "hit %u",
+               static_cast<unsigned>(hits));
+    static std::string footerHint;
+    char footerBuffer[40];
+    std::snprintf(footerBuffer, sizeof(footerBuffer),
+                  "ENTER=muto  ESC=stop  S%u",
+                  static_cast<unsigned>(config::radarSensitivity()));
+    footerHint.assign(footerBuffer);
+    display::footer(footerHint);
     display::push();
 }
 
 void runBleFinder() {
     powertimer::Hold hold;  // schermata di monitoraggio: niente spegnimento
     ensureBle();
-    // static: lo scanner globale conserva il puntatore tra una schermata e l'altra
-    static RadarAdvertiseCallbacks callbacks;
     NimBLEScan* scan = NimBLEDevice::getScan();
     if (scan == nullptr) {
         ui::message("Find BLE", {"!NimBLE non disponibile."}, "Radar");
@@ -657,7 +749,7 @@ void runBleFinder() {
     g_hasTarget = false;
     g_countAdverts = false;
     g_trackDevices = true;
-    configureScan(scan, &callbacks, true);
+    configureScan(scan, &g_scanCallbacks, true);
 
     navigation::waitRelease();
     uint32_t started = millis();
@@ -683,9 +775,8 @@ void runBleFinder() {
             display::textCentered(38, "Ricerca dispositivi BLE", display::kAccent, 2);
             display::progressBar(20, 62, 200, 8, static_cast<float>(elapsed) / 5000.0f,
                                  display::kInfo);
-            BleDevice devices[kMaxDevices];
-            const int found = snapshotDevices(devices, kMaxDevices);
-            display::textCentered(80, "Trovati: " + std::to_string(found), display::kText, 2);
+            const int found = snapshotDevices(g_deviceSnapshot, kMaxDevices);
+            textCenteredFormat(80, display::kText, 2, "Trovati: %d", found);
             display::footer("ESC = annulla");
             display::push();
         }
@@ -693,8 +784,7 @@ void runBleFinder() {
     g_trackDevices = false;
     scan->stop();
 
-    BleDevice devices[kMaxDevices];
-    const int found = snapshotDevices(devices, kMaxDevices);
+    const int found = snapshotDevices(g_deviceSnapshot, kMaxDevices);
     if (found == 0) {
         ui::message("Find BLE", {"!Nessun dispositivo rilevato.", "Avvicinati a un beacon o tag."},
                     "Radar");
@@ -703,15 +793,21 @@ void runBleFinder() {
 
     std::vector<DeviceRow> rows;
     rows.reserve(static_cast<size_t>(found));
+    char labelBuffer[48];
+    std::string shortName;
     for (int i = 0; i < found; ++i) {
-        if (!devices[i].used) {
+        if (!g_deviceSnapshot[i].used) {
             continue;
         }
         DeviceRow row;
-        row.name = devices[i].name;
-        row.address = devices[i].address;
-        row.rssi = devices[i].rssi;
-        row.label = shortened(devices[i].name, 18) + "  " + std::to_string(row.rssi) + "dBm";
+        row.name = g_deviceSnapshot[i].name;
+        row.address = g_deviceSnapshot[i].address;
+        row.rssi = g_deviceSnapshot[i].rssi;
+        std::memcpy(row.bytes, g_deviceSnapshot[i].bytes, 6);
+        std::snprintf(labelBuffer, sizeof(labelBuffer), "%s  %ddBm",
+                      shortenInto(shortName, g_deviceSnapshot[i].name, 18).c_str(),
+                      row.rssi);
+        row.label = labelBuffer;
         rows.push_back(row);
     }
     std::sort(rows.begin(), rows.end(),
@@ -729,13 +825,13 @@ void runBleFinder() {
 
     // Fase 2: inseguimento del bersaglio con HUD hot/cold.
     const DeviceRow target = rows[static_cast<size_t>(choice)];
-    g_targetAddress = NimBLEAddress(target.address);
+    std::memcpy(g_targetAddr, target.bytes, 6);
     g_hasTarget = true;
     g_targetRssi = kRssiFloor;
     g_targetHits = 0;
     g_targetLastMs = 0;
     g_trackDevices = false;
-    configureScan(scan, &callbacks, false);  // passivo: non genera traffico extra
+    configureScan(scan, &g_scanCallbacks, false);  // passivo: non genera traffico extra
 
     int ema = kRssiFloor;
     int previousEma = kRssiFloor;
@@ -784,7 +880,7 @@ void runBleFinder() {
             const uint32_t t = millis();
             const bool lost = (g_targetLastMs == 0) ||
                               (t - g_targetLastMs > kFinderLinkTimeoutMs);
-            drawFinderFrame(shortened(target.name, 16), target.address,
+            drawFinderFrame(target.name, target.address,
                             (ema <= kRssiFloor) ? kRssiFloor : ema, trend, peak, lost, sound,
                             g_targetHits);
         };
@@ -929,18 +1025,19 @@ void drawPpi(const BleDevice* devices, int count, uint32_t sweepMs) {
     }
     display::g().fillCircle(cx, cy, 2, display::kNeoYellow);
 
-    display::text(112, 24, "attivi " + std::to_string(active), display::kAccent, 2);
+    textFormat(112, 24, display::kAccent, 2, "attivi %d", active);
     int y = 44;
     int shown = 0;
+    std::string shortName;
     for (int i = 0; i < count && shown < 4; ++i) {
         if (!devices[i].used || (now - devices[i].lastSeenMs) > kRadarBlipTtlMs) {
             continue;
         }
-        const std::string name = shortened(devices[i].name, 16);
-        display::text(112, y, name, display::kText, 0);
-        display::text(112, y + 9, std::to_string(devices[i].rssi) + "dBm  " +
-                                        formatFloat(rssiToMeters(devices[i].rssi), 1) + "m",
-                      levelColor(devices[i].rssi), 0);
+        display::text(112, y, shortenInto(shortName, devices[i].name, 16),
+                      display::kText, 0);
+        textFormat(112, y + 9, levelColor(devices[i].rssi), 0, "%ddBm  %.1fm",
+                   devices[i].rssi,
+                   static_cast<double>(rssiToMeters(devices[i].rssi)));
         y += 20;
         ++shown;
     }
@@ -954,8 +1051,6 @@ void drawPpi(const BleDevice* devices, int count, uint32_t sweepMs) {
 void runBleRadar() {
     powertimer::Hold hold;  // schermata di monitoraggio: niente spegnimento
     ensureBle();
-    // static: lo scanner globale conserva il puntatore tra una schermata e l'altra
-    static RadarAdvertiseCallbacks callbacks;
     NimBLEScan* scan = NimBLEDevice::getScan();
     if (scan == nullptr) {
         ui::message("Radar BLE", {"!NimBLE non disponibile."}, "Radar");
@@ -966,7 +1061,7 @@ void runBleRadar() {
     g_hasTarget = false;
     g_countAdverts = false;
     g_trackDevices = true;
-    configureScan(scan, &callbacks, false);
+    configureScan(scan, &g_scanCallbacks, false);
     // Bussola attiva anche qui: i blip ruotano con il corpo.
     g_compassOk = compass::begin();
 
@@ -985,9 +1080,8 @@ void runBleRadar() {
                 compass::update();
                 g_heading = compass::heading();
             }
-            BleDevice devices[kMaxDevices];
-            const int count = snapshotDevices(devices, kMaxDevices);
-            drawPpi(devices, count, millis());
+            const int count = snapshotDevices(g_deviceSnapshot, kMaxDevices);
+            drawPpi(g_deviceSnapshot, count, millis());
         };
         drawFrame();
         if (scanWindow(scan, kRadarSliceMs, drawFrame).type == navigation::Event::Back) {
@@ -1017,7 +1111,6 @@ void runBleRadar() {
 // ----------------------------------------------------------------------------
 
 volatile uint32_t g_wifiWindowFrames = 0;
-volatile uint32_t g_wifiWindowBytes = 0;
 volatile bool g_sniffing = false;
 
 void wifiSnifferCallback(void* buffer, wifi_promiscuous_pkt_type_t type) {
@@ -1025,9 +1118,7 @@ void wifiSnifferCallback(void* buffer, wifi_promiscuous_pkt_type_t type) {
         return;
     }
     (void)type;
-    const wifi_promiscuous_pkt_t* packet = static_cast<const wifi_promiscuous_pkt_t*>(buffer);
     ++g_wifiWindowFrames;
-    g_wifiWindowBytes += packet->rx_ctrl.sig_len;
 }
 
 struct BandReading {
@@ -1073,111 +1164,6 @@ void endSniffer() {
     g_sniffing = false;
     esp_wifi_set_promiscuous(false);
     WiFi.mode(WIFI_OFF);
-}
-
-void drawBandMeasure(int channelDone, int channelTotal) {
-    display::clear();
-    display::header("Banda 2.4 GHz", "Radar");
-    display::textCentered(44, "Misura canale " + std::to_string(channelDone) + "/" +
-                                  std::to_string(channelTotal),
-                          display::kAccent, 2);
-    display::progressBar(20, 66, 200, 8,
-                         static_cast<float>(channelDone) / static_cast<float>(channelTotal),
-                         display::kInfo);
-    display::textCentered(84, "Sniffer 802.11 passivo", display::kTextDim, 0);
-    display::footer("ESC = annulla");
-    display::push();
-}
-
-// Ritorna false se l'utente interrompe.
-bool measureWifiChannels(BandReading& reading) {
-    reading.wifiMs = 0;
-    for (uint8_t channel = 1; channel <= kWifiChannelCount; ++channel) {
-        navigation::update();
-        if (navigation::poll().type == navigation::Event::Back) {
-            return false;
-        }
-        if (esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE) != ESP_OK) {
-            reading.wifiPps[channel - 1] = 0.0f;
-            continue;
-        }
-        delay(30);  // assestamento del sintetizzatore
-        g_wifiWindowFrames = 0;
-        g_wifiWindowBytes = 0;
-        const uint32_t windowStart = millis();
-        uint32_t lastDraw = windowStart;
-        while (millis() - windowStart < kWifiDwellMs) {
-            navigation::update();
-            if (navigation::poll().type == navigation::Event::Back) {
-                return false;
-            }
-            if (millis() - lastDraw > 60) {
-                lastDraw = millis();
-                drawBandMeasure(channel, kWifiChannelCount);
-            }
-            delay(10);
-        }
-        const uint32_t elapsed = std::max<uint32_t>(1, millis() - windowStart);
-        const float frames = static_cast<float>(g_wifiWindowFrames);
-        reading.wifiPps[channel - 1] = frames * 1000.0f / static_cast<float>(elapsed);
-        reading.wifiMs += elapsed;
-    }
-    return true;
-}
-
-// Accende il ricevitore promiscuo solo per la durata della scansione Wi-Fi.
-bool measureWifiBand(BandReading& reading) {
-    if (!setSnifferActive(true)) {
-        return false;
-    }
-    const bool completed = measureWifiChannels(reading);
-    setSnifferActive(false);
-    return completed;
-}
-
-bool measureBleBand(BandReading& reading) {
-    NimBLEScan* scan = NimBLEDevice::getScan();
-    if (scan == nullptr) {
-        return false;
-    }
-    // static: lo scanner globale conserva il puntatore tra una schermata e l'altra
-    static RadarAdvertiseCallbacks callbacks;
-    g_trackDevices = false;
-    g_hasTarget = false;
-    g_countAdverts = true;
-    configureScan(scan, &callbacks, false);
-
-    g_advertCount = 0;
-    reading.bleMs = 0;
-    const uint32_t start = millis();
-    for (uint8_t slice = 0; slice < kBleBandSlices; ++slice) {
-        navigation::update();
-        if (navigation::poll().type == navigation::Event::Back) {
-            g_countAdverts = false;
-            scan->stop();
-            return false;
-        }
-        if (scanWindow(scan, kBleBandSliceMs).type == navigation::Event::Back) {
-            g_countAdverts = false;
-            scan->stop();
-            return false;
-        }
-    }
-    const uint32_t elapsed = std::max<uint32_t>(1, millis() - start);
-    reading.advTotal = g_advertCount;
-    reading.bleMs = elapsed;
-    const float advPerSecond =
-        static_cast<float>(g_advertCount) * 1000.0f / static_cast<float>(elapsed);
-    g_countAdverts = false;
-    scan->stop();
-
-    // Stima per canale: vedi commento di sezione (ogni evento pubblicitario
-    // viene ripetuto dall'advertiser su tutti e tre i canali, quindi il rate
-    // osservato coincide, in prima approssimazione, con il rate per canale).
-    for (int i = 0; i < 3; ++i) {
-        reading.bleChannelPps[i] = advPerSecond;
-    }
-    return true;
 }
 
 int bandFrequencyToX(float mhz, int left, int right) {
@@ -1240,7 +1226,7 @@ void drawBandChart(const BandReading& reading, int activeChannel, bool blePhase,
             display::g().drawRect(x - 3, kBase - kMaxHeight - 2, 6, kMaxHeight + 3,
                                   display::kNeoCyan);
         }
-        display::text(x - 4, 24, std::to_string(37 + i), display::kNeoCyan, 0);
+        textFormat(x - 4, 24, display::kNeoCyan, 0, "%d", 37 + i);
     }
 
     display::text(6, kBase + 4, "WiFi ch 1", display::kTextDim, 0);
@@ -1248,26 +1234,25 @@ void drawBandChart(const BandReading& reading, int activeChannel, bool blePhase,
     display::text(186, kBase + 4, "11", display::kTextDim, 0);
     display::text(212, kBase + 4, "13", display::kTextDim, 0);
 
-    const std::string phase =
-        blePhase ? std::string("fase BLE")
-                 : ("WiFi ch " + std::to_string(activeChannel) + "/13");
-    display::text(6, 94, phase, blePhase ? display::kNeoCyan : display::kNeoYellow, 0);
+    if (blePhase) {
+        display::text(6, 94, "fase BLE", display::kNeoCyan, 0);
+    } else {
+        textFormat(6, 94, display::kNeoYellow, 0, "WiFi ch %d/13", activeChannel);
+    }
     display::text(86, 94, "BLE 37/38/39 stimati", display::kTextDim, 0);
     display::text(206, 94, "peak", display::kWhite, 0);
 
     const uint32_t totalMs = std::max<uint32_t>(1, reading.wifiMs + reading.bleMs);
     const int wifiShare = static_cast<int>(reading.wifiMs * 100 / totalMs);
     const int bleShare = 100 - wifiShare;
-    const std::string duty = std::string("TDM  WiFi ") + std::to_string(wifiShare) + "%  BLE " +
-                             std::to_string(bleShare) + "%";
-    display::text(6, 104, duty, coexisting ? display::kWarning : display::kText, 0);
+    textFormat(6, 104, coexisting ? display::kWarning : display::kText, 0,
+               "TDM  WiFi %d%%  BLE %d%%", wifiShare, bleShare);
 
     const uint32_t advPerSecond = reading.advTotal * 1000 / std::max<uint32_t>(1, reading.bleMs);
-    display::text(6, 114, "wifi " + std::to_string(static_cast<int>(reading.totalWifiPps)) +
-                              " fr/s",
-                  display::kAccent, 0);
-    display::text(112, 114, "adv " + std::to_string(advPerSecond) + "/s",
-                  display::kNeoCyan, 0);
+    textFormat(6, 114, display::kAccent, 0, "wifi %d fr/s",
+               static_cast<int>(reading.totalWifiPps));
+    textFormat(112, 114, display::kNeoCyan, 0, "adv %u/s",
+               static_cast<unsigned>(advPerSecond));
     display::text(178, 114, coexisting ? "radio unica" : "sequenziale", display::kTextDim, 0);
     display::footer("ESC = stop");
     display::push();
@@ -1282,12 +1267,10 @@ void runBand() {
     }
     ensureBle();
     NimBLEScan* scan = NimBLEDevice::getScan();
-    // static: lo scanner globale conserva il puntatore tra una schermata e l'altra
-    static RadarAdvertiseCallbacks callbacks;
     if (scan != nullptr) {
         g_trackDevices = false;
         g_hasTarget = false;
-        configureScan(scan, &callbacks, false);
+        configureScan(scan, &g_scanCallbacks, false);
     }
 
     // Macchina a stati non bloccante: un canale WiFi per finestra, poi una
@@ -1490,9 +1473,9 @@ void drawCsi(int channel, bool calibrating, int progressPercent, float energy, f
 
     if (calibrating) {
         display::text(112, 30, "calibrazione", display::kWarning, 2);
-        display::text(112, 50, std::to_string(progressPercent) + "%", display::kText, 4);
+        textFormat(112, 50, display::kText, 4, "%d%%", progressPercent);
         display::text(112, 82, "ambiente vuoto", display::kTextDim, 0);
-        display::text(112, 94, "ch " + std::to_string(channel), display::kTextDim, 0);
+        textFormat(112, 94, display::kTextDim, 0, "ch %d", channel);
         display::footer("ESC = annulla");
         display::push();
         return;
@@ -1501,14 +1484,17 @@ void drawCsi(int channel, bool calibrating, int progressPercent, float energy, f
     const char* state = normalized > 0.6f ? "MOVIMENTO" : (normalized > 0.3f ? "variazione"
                                                                              : "quiete");
     display::text(112, 26, state, waveColor, 2);
-    display::text(112, 46, "energia " + std::to_string(static_cast<int>(normalized * 100.0f)) + "%",
-                  display::kText, 0);
-    display::text(112, 58, "soglia " + formatFloat(threshold, 1), display::kTextDim, 0);
-    display::text(112, 70, "base " + formatFloat(baseline, 1), display::kTextDim, 0);
-    display::text(112, 82, "energia " + formatFloat(energy, 1), display::kTextDim, 0);
-    display::text(112, 94, "rssi " + std::to_string(rssi) + " dBm", display::kTextDim, 0);
-    display::text(112, 106, "frame " + std::to_string(frames) + "  ch " + std::to_string(channel),
-                  display::kTextDim, 0);
+    textFormat(112, 46, display::kText, 0, "energia %d%%",
+               static_cast<int>(normalized * 100.0f));
+    textFormat(112, 58, display::kTextDim, 0, "soglia %.1f",
+               static_cast<double>(threshold));
+    textFormat(112, 70, display::kTextDim, 0, "base %.1f",
+               static_cast<double>(baseline));
+    textFormat(112, 82, display::kTextDim, 0, "energia %.1f",
+               static_cast<double>(energy));
+    textFormat(112, 94, display::kTextDim, 0, "rssi %d dBm", rssi);
+    textFormat(112, 106, display::kTextDim, 0, "frame %u  ch %d",
+               static_cast<unsigned>(frames), channel);
     display::footer("ENTER=ricalibra  ,/=canale  ESC=stop");
     display::push();
 }
@@ -1639,20 +1625,13 @@ void runSensitivity() {
         const int level = config::radarSensitivity();
         display::clear();
         display::header("Sensibilita radar", "Radar");
-        display::textCentered(26, "livello " + std::to_string(level) + "/5",
-                              display::kAccent, 2);
-        display::textCentered(50, "tic ogni " +
-                                      std::to_string(beepIntervalMs(level, -70)) +
-                                      " ms  (-70 dBm)",
-                              display::kText, 0);
-        display::textCentered(62, "tic ogni " +
-                                      std::to_string(beepIntervalMs(level, -55)) +
-                                      " ms  (-55 dBm)",
-                              display::kText, 0);
-        display::textCentered(74, "tic ogni " +
-                                      std::to_string(beepIntervalMs(level, -40)) +
-                                      " ms  (-40 dBm)",
-                              display::kText, 0);
+        textCenteredFormat(26, display::kAccent, 2, "livello %d/5", level);
+        textCenteredFormat(50, display::kText, 0, "tic ogni %d ms  (-70 dBm)",
+                           beepIntervalMs(level, -70));
+        textCenteredFormat(62, display::kText, 0, "tic ogni %d ms  (-55 dBm)",
+                           beepIntervalMs(level, -55));
+        textCenteredFormat(74, display::kText, 0, "tic ogni %d ms  (-40 dBm)",
+                           beepIntervalMs(level, -40));
         display::textCentered(94, "1 = solo da vicino   5 = molto reattivo",
                               display::kTextDim, 0);
         display::textCentered(108, ", / = cambia", display::kText, 0);
