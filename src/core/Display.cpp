@@ -596,6 +596,56 @@ void push() {
     }
 }
 
+void push(int x, int y, int w, int h) {
+    if (!s_spriteOk) {
+        return;
+    }
+    const int sw = s_sprite.width();
+    const int sh = s_sprite.height();
+    if (x < 0) {
+        w += x;
+        x = 0;
+    }
+    if (y < 0) {
+        h += y;
+        y = 0;
+    }
+    if (x + w > sw) {
+        w = sw - x;
+    }
+    if (y + h > sh) {
+        h = sh - y;
+    }
+    if (w <= 0 || h <= 0) {
+        return;
+    }
+    const uint8_t* base = static_cast<const uint8_t*>(s_sprite.getBuffer());
+    if (base == nullptr) {
+        return;
+    }
+    // Ogni riga e' contigua: le strisce a piena larghezza si pushano senza
+    // copia, le altre passano da un buffer statico (nessuna allocazione).
+    static uint16_t s_row[240];
+    const int stride = s_sprite.width() * 2;
+    const auto srcDepth = s_sprite.getColorDepth();
+    auto& d = M5Cardputer.Display;
+    const auto dstDepth = d.getColorDepth();
+    d.startWrite();
+    if (w == sw) {
+        for (int r = 0; r < h; ++r) {
+            lgfx::pixelcopy_t pc(base + (y + r) * stride, dstDepth, srcDepth);
+            d.pushImage(0, y + r, w, 1, &pc);
+        }
+    } else if (w <= static_cast<int>(sizeof(s_row) / sizeof(s_row[0]))) {
+        for (int r = 0; r < h; ++r) {
+            std::memcpy(s_row, base + (y + r) * stride + x * 2, static_cast<size_t>(w) * 2);
+            lgfx::pixelcopy_t pc(s_row, dstDepth, srcDepth);
+            d.pushImage(x, y + r, w, 1, &pc);
+        }
+    }
+    d.endWrite();
+}
+
 namespace {
 
 // Font pixel 5x7 disegnato dal codice: nessun font della libreria grafica.
@@ -649,13 +699,37 @@ void drawGlyph(int x, int y, char ch, uint16_t color, uint8_t scale) {
     }
 }
 
+int widthForLen(size_t len, uint8_t font) {
+    if (len == 0) {
+        return 0;
+    }
+    const int adv = advanceFor(font);
+    return static_cast<int>(len) * adv - (adv - 5 * (font == 4 ? 2 : 1));
+}
+
+// Disegna senza costruire std::string: i letterali e i buffer dei chiamanti
+// non producono allocazioni per frame.
+void drawSpan(int x, int y, const char* s, size_t len, uint16_t color, uint8_t font) {
+    const uint8_t scale = (font == 4) ? 2 : 1;
+    const int adv = advanceFor(font);
+    int cx = x;
+    for (size_t i = 0; i < len; ++i) {
+        const char ch = s[i];
+        if (ch != ' ') {
+            drawGlyph(cx, y, ch, color, scale);
+        }
+        cx += adv;
+    }
+}
+
 }  // namespace
 
 int textWidth(const std::string& s, uint8_t font) {
-    if (s.empty()) {
-        return 0;
-    }
-    return static_cast<int>(s.size()) * advanceFor(font) - (advanceFor(font) - 5 * (font == 4 ? 2 : 1));
+    return widthForLen(s.size(), font);
+}
+
+int textWidth(const char* s, uint8_t font) {
+    return s == nullptr ? 0 : widthForLen(std::strlen(s), font);
 }
 
 int textHeight(uint8_t font) {
@@ -663,20 +737,20 @@ int textHeight(uint8_t font) {
 }
 
 void text(int x, int y, const std::string& s, uint16_t color, uint8_t font) {
-    const uint8_t scale = (font == 4) ? 2 : 1;
-    const int adv = advanceFor(font);
-    int cx = x;
-    for (char ch : s) {
-        if (ch == ' ') {
-            cx += adv;
-            continue;
-        }
-        drawGlyph(cx, y, ch, color, scale);
-        cx += adv;
+    drawSpan(x, y, s.data(), s.size(), color, font);
+}
+
+void text(int x, int y, const char* s, uint16_t color, uint8_t font) {
+    if (s != nullptr) {
+        drawSpan(x, y, s, std::strlen(s), color, font);
     }
 }
 
 void textCentered(int y, const std::string& s, uint16_t color, uint8_t font) {
+    text((width() - textWidth(s, font)) / 2, y, s, color, font);
+}
+
+void textCentered(int y, const char* s, uint16_t color, uint8_t font) {
     text((width() - textWidth(s, font)) / 2, y, s, color, font);
 }
 
@@ -788,6 +862,13 @@ bool chargingLikely() {
     return s_battCharging;
 }
 
+uint16_t batterySignature() {
+    const int level = batteryLevelCached();
+    const int pct = level < 0 ? -1 : std::min(level, 100);
+    return static_cast<uint16_t>((chargingLikely() ? 0x100 : 0) |
+                                 static_cast<uint16_t>(pct & 0xFF));
+}
+
 void drawBatteryWidget(int right, int y) {
     auto& d = g();
     const int level = batteryLevelCached();
@@ -844,35 +925,99 @@ void header(const std::string& title, const std::string& parent) {
     d.drawPixel(8, 11, C(T_text));
     d.drawPixel(12, 8, C(T_sec));
 
-    std::string full = parent.empty() ? title : (parent + " > " + title);
-
     constexpr int kTitleX = 17;
     constexpr int kReserve = 44;  // solo la batteria: il segnale sta nel footer
     const int maxTitleW = width() - kTitleX - kReserve;
+    const bool hasParent = !parent.empty();
+    const int parentLen = static_cast<int>(parent.size());
+    const int totalLen = parentLen + (hasParent ? 3 : 0) + static_cast<int>(title.size());
+
     uint8_t font = 2;
-    if (textWidth(full, 2) > maxTitleW) {
+    if (widthForLen(totalLen, 2) > maxTitleW) {
         font = 0;
     }
-    const bool split = !parent.empty() && textWidth(full, font) <= maxTitleW;
-    if (!split && textWidth(full, font) > maxTitleW) {
-        while (!full.empty() && textWidth(full + "..", font) > maxTitleW) {
-            full.pop_back();
-        }
-        full += "..";
-    }
+    const bool split = hasParent && widthForLen(totalLen, font) <= maxTitleW;
     const int textY = font == 0 ? 7 : 6;
     if (split) {
-        // Breadcrumb attenuato, titolo corrente in evidenza.
-        const std::string crumb = parent + " > ";
-        text(kTitleX, textY, crumb, C(T_dim), font);
-        text(kTitleX + textWidth(crumb, font), textY, title, C(T_text), font);
+        // Breadcrumb attenuato, titolo corrente in evidenza. Disegnare i pezzi
+        // evita la stringa temporanea "parent > title" a ogni ridisegno.
+        const int crumbLen = parentLen + 3;
+        text(kTitleX, textY, parent, C(T_dim), font);
+        text(kTitleX + widthForLen(parentLen, font), textY, " > ", C(T_dim), font);
+        text(kTitleX + widthForLen(crumbLen, font), textY, title, C(T_text), font);
+    } else if (widthForLen(totalLen, font) > maxTitleW) {
+        constexpr size_t kCap = 96;
+        if (static_cast<size_t>(totalLen) + 3 <= kCap) {
+            char buf[kCap];
+            size_t n = 0;
+            if (hasParent) {
+                std::memcpy(buf, parent.data(), parent.size());
+                n = parent.size();
+                buf[n++] = ' ';
+                buf[n++] = '>';
+                buf[n++] = ' ';
+            }
+            std::memcpy(buf + n, title.data(), title.size());
+            n += title.size();
+            const int adv = advanceFor(font);
+            const int pad = adv - 5 * (font == 4 ? 2 : 1);
+            int keep = (maxTitleW + pad) / adv - 2;
+            if (keep < 0) {
+                keep = 0;
+            }
+            if (keep > static_cast<int>(n)) {
+                keep = static_cast<int>(n);
+            }
+            buf[keep] = '.';
+            buf[keep + 1] = '.';
+            buf[keep + 2] = '\0';
+            text(kTitleX, textY, buf, C(T_text), font);
+        } else {
+            std::string full = hasParent ? (parent + " > " + title) : title;
+            while (!full.empty() && textWidth(full + "..", font) > maxTitleW) {
+                full.pop_back();
+            }
+            full += "..";
+            text(kTitleX, textY, full, C(T_text), font);
+        }
+    } else if (hasParent) {
+        text(kTitleX, textY, parent, C(T_text), font);
+        text(kTitleX + widthForLen(parentLen, font), textY, " > ", C(T_text), font);
+        text(kTitleX + widthForLen(parentLen + 3, font), textY, title, C(T_text), font);
     } else {
-        text(kTitleX, textY, full, C(T_text), font);
+        text(kTitleX, textY, title, C(T_text), font);
     }
 
     // Batteria (fuel gauge) a destra: unico elemento dello stato di bordo.
     drawBatteryWidget(width() - 3, 7);
 }
+
+namespace {
+
+bool s_footerLed = false;
+bool s_ledOn = false;
+bool s_ledValid = false;
+
+// Disegna un testo troncato con ".." senza costruire stringhe temporanee.
+void textClipped(int x, int y, const std::string& s, int maxWidth, uint16_t color) {
+    if (textWidth(s, 0) <= maxWidth) {
+        text(x, y, s, color, 0);
+        return;
+    }
+    const int adv = advanceFor(0);
+    const int pad = adv - 5;
+    int keep = (maxWidth + pad) / adv - 2;
+    if (keep < 0) {
+        keep = 0;
+    }
+    if (keep > static_cast<int>(s.size())) {
+        keep = static_cast<int>(s.size());
+    }
+    drawSpan(x, y, s.data(), keep, color, 0);
+    drawSpan(x + keep * adv, y, "..", 2, color, 0);
+}
+
+}  // namespace
 
 void footer(const std::string& hint, const std::string& trailing) {
     auto& d = g();
@@ -883,37 +1028,43 @@ void footer(const std::string& hint, const std::string& trailing) {
     d.fillRect(0, h - 12, 14, 1, C(T_acc));
     d.drawPixel(4, h - 7, C(T_acc));
 
-    // Lo hint non deve finire sotto il trailing (o il LED): se non entra,
-    // viene troncato con l'ellissi invece di sovrapporsi.
-    auto clipped = [&](const std::string& s, int maxWidth) {
-        if (textWidth(s, 0) <= maxWidth) {
-            return s;
-        }
-        std::string out = s;
-        while (!out.empty() && textWidth(out + "..", 0) > maxWidth) {
-            out.pop_back();
-        }
-        return out + "..";
-    };
-
     constexpr int kHintX = 9;
     constexpr int kGap = 4;
     if (!trailing.empty()) {
         const int trailingX = width() - 6 - textWidth(trailing, 0);
         const int hintMax = trailingX - kGap - kHintX;
         if (hintMax >= textWidth("..", 0)) {
-            text(kHintX, h - 10, clipped(hint, hintMax), C(T_dim), 0);
+            textClipped(kHintX, h - 10, hint, hintMax, C(T_dim));
         }
         text(trailingX, h - 10, trailing, C(T_acc), 0);
+        s_footerLed = false;
+        s_ledValid = false;
         return;
     }
     const int hintMax = width() - kHintX - 12;  // spazio per il LED a destra
     if (hintMax >= textWidth("..", 0)) {
-        text(kHintX, h - 10, clipped(hint, hintMax), C(T_dim), 0);
+        textClipped(kHintX, h - 10, hint, hintMax, C(T_dim));
     }
     // LED di stato pulsante.
     const bool blink = (millis() / 700) % 2 == 0;
     d.fillCircle(width() - 6, h - 6, 2, blink ? C(T_ok) : C(T_line2));
+    s_footerLed = true;
+    s_ledOn = blink;
+    s_ledValid = true;
+}
+
+void footerTick() {
+    if (!s_footerLed) {
+        return;
+    }
+    const bool blink = (millis() / 700) % 2 == 0;
+    if (s_ledValid && blink == s_ledOn) {
+        return;
+    }
+    s_ledOn = blink;
+    s_ledValid = true;
+    g().fillCircle(width() - 6, height() - 6, 2, blink ? C(T_ok) : C(T_line2));
+    push(width() - 9, height() - 9, 7, 7);
 }
 
 void drawIcon(const std::string& icon, int x, int y, int size) {

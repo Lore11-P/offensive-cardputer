@@ -58,6 +58,9 @@ private:
     int gridColumns() const;
     int gridRows() const;
     int pageSize() const;
+    void drawBody();
+    void drawStatus();
+    std::string trailingText() const;
     void drawList();
     void drawGrid();
     void drawCarousel();

@@ -56,6 +56,27 @@ uint16_t blend(uint16_t a, uint16_t b, uint8_t t) {
                 (ca.b * iw + cb.b * w) / 255);
 }
 
+namespace {
+
+// Riga di appoggio per il dithering: una pushImage per riga invece di
+// centinaia di HLine. Buffer statico, nessuna allocazione per frame.
+constexpr int kRowMax = 240;
+uint16_t s_row[kRowMax];
+
+void ditherSpan(lgfx::LGFXBase& d, int x, int y, int w, int level, uint16_t a, uint16_t b) {
+    int done = 0;
+    while (done < w) {
+        const int chunk = std::min(kRowMax, w - done);
+        for (int i = 0; i < chunk; ++i) {
+            s_row[i] = (bayer(x + done + i, y) < level) ? b : a;
+        }
+        d.pushImage(x + done, y, chunk, 1, s_row);
+        done += chunk;
+    }
+}
+
+}  // namespace
+
 void ditherRect(int x, int y, int w, int h, uint16_t a, uint16_t b, int level) {
     if (level <= 0) {
         display::g().fillRect(x, y, w, h, a);
@@ -66,19 +87,11 @@ void ditherRect(int x, int y, int w, int h, uint16_t a, uint16_t b, int level) {
         return;
     }
     auto& d = display::g();
+    d.startWrite();
     for (int yy = 0; yy < h; ++yy) {
-        // Righe di pixel in run orizzontali: meno chiamate di drawPixel.
-        int xx = 0;
-        while (xx < w) {
-            const uint16_t color = (bayer(x + xx, y + yy) < level) ? b : a;
-            int end = xx + 1;
-            while (end < w && ((bayer(x + end, y + yy) < level) ? b : a) == color) {
-                ++end;
-            }
-            d.drawFastHLine(x + xx, y + yy, end - xx, color);
-            xx = end;
-        }
+        ditherSpan(d, x, y + yy, w, level, a, b);
     }
+    d.endWrite();
 }
 
 void stars(int x, int y, int w, int h, uint32_t seed, uint8_t count, uint8_t phase) {
@@ -110,27 +123,38 @@ void sky(int x, int y, int w, int h, uint32_t seed) {
     const uint16_t top = display::C(display::T_sky0);
     const uint16_t bottom = display::C(display::T_sky1);
     auto& d = display::g();
+    d.startWrite();
     for (int yy = 0; yy < h; ++yy) {
         const int level = (yy * 16) / (h > 0 ? h : 1);
-        int xx = 0;
-        while (xx < w) {
-            const uint16_t color = (bayer(x + xx, y + yy) < level) ? bottom : top;
-            int end = xx + 1;
-            while (end < w && ((bayer(x + end, y + yy) < level) ? bottom : top) == color) {
-                ++end;
-            }
-            d.drawFastHLine(x + xx, y + yy, end - xx, color);
-            xx = end;
-        }
+        ditherSpan(d, x, y + yy, w, level, top, bottom);
     }
+    d.endWrite();
     stars(x, y, w, h, seed, static_cast<uint8_t>(std::max(6, (w * h) / 700)));
 }
 
-void planet(int cx, int cy, int r, float lightX, float lightY, bool cityLights) {
-    if (r <= 1) {
-        return;
-    }
-    auto& d = display::g();
+namespace {
+
+// Il pianeta e' statico per tema/raggio/posizione: il carosello lo ridisegna
+// a ogni frame, quindi si rasterizza una volta in una sprite con sfondo
+// trasparente. r>32 (splash) resta procedurale per non allocare 12 KB.
+constexpr uint16_t kPlanetTransparent = 0x0000;
+constexpr int kPlanetCacheMaxR = 32;
+
+M5Canvas s_planetCanvas(&M5Cardputer.Display);
+bool s_planetValid = false;
+bool s_planetReady = false;
+int s_planetX = 0;
+int s_planetY = 0;
+int s_planetR = 0;
+int s_planetLx = 0;
+int s_planetLy = 0;
+bool s_planetCity = false;
+uint8_t s_planetTheme = 0;
+
+// noinline: evita due copie della rasterizzazione (una per la cache, una per
+// il fallback) e tiene il binario piu' piccolo.
+__attribute__((noinline)) void planetInto(lgfx::LGFXBase& d, int cx, int cy, int r, float lightX,
+                                          float lightY, bool cityLights, int phaseX, int phaseY) {
     const uint16_t base[5] = {display::C(display::T_pl0), display::C(display::T_pl1),
                               display::C(display::T_pl2), display::C(display::T_pl3),
                               display::C(display::T_pl4)};
@@ -169,7 +193,8 @@ void planet(int cx, int cy, int r, float lightX, float lightY, bool cityLights) 
             const float frac = v * 5.0f - static_cast<float>(idx);
             uint16_t c = base[idx];
             if (idx < 4 && frac > 0.0f &&
-                static_cast<int>(bayer(cx + dx, cy + dy)) < static_cast<int>(frac * 16.0f)) {
+                static_cast<int>(bayer(phaseX + dx, phaseY + dy)) <
+                    static_cast<int>(frac * 16.0f)) {
                 c = base[idx + 1];
             }
             // Bordo: riflesso atmosferico sul lato illuminato, silhouettes sul lato buio.
@@ -178,8 +203,8 @@ void planet(int cx, int cy, int r, float lightX, float lightY, bool cityLights) 
             }
             // Luci delle citta' sul terminatore notturno.
             if (cityLights && lambert < -0.15f && idx <= 2) {
-                const uint32_t hsh = hash32(static_cast<uint32_t>((cx + dx) * 73856093) ^
-                                            static_cast<uint32_t>((cy + dy) * 19349663));
+                const uint32_t hsh = hash32(static_cast<uint32_t>((phaseX + dx) * 73856093) ^
+                                            static_cast<uint32_t>((phaseY + dy) * 19349663));
                 if ((hsh & 0xFF) == 0x5A && dist < r - 2) {
                     c = city;
                 }
@@ -199,6 +224,69 @@ void planet(int cx, int cy, int r, float lightX, float lightY, bool cityLights) 
         d.drawPixel(x1, y1, litRim ? atm : blend(atm, bg, 160));
         d.drawPixel(x2, y2, litRim ? blend(atm, bg, 90) : bg);
     }
+}
+
+// Costruisce/riusa la cache. false = disegno procedurale.
+bool preparePlanetCache(int cx, int cy, int r, float lightX, float lightY, bool cityLights) {
+    if (r > kPlanetCacheMaxR) {
+        return false;
+    }
+    const int lx = static_cast<int>(lightX * 100.0f);
+    const int ly = static_cast<int>(lightY * 100.0f);
+    const uint8_t theme = display::themeId();
+    if (s_planetValid && s_planetX == cx && s_planetY == cy && s_planetR == r &&
+        s_planetLx == lx && s_planetLy == ly && s_planetCity == cityLights &&
+        s_planetTheme == theme) {
+        return s_planetReady;
+    }
+
+    // La sprite precedente non e' piu' in lettura: il blit usa pushImage
+    // sincrono, quindi liberarla non rischia DMA in volo.
+    s_planetCanvas.deleteSprite();
+    const int side = 2 * r + 7;
+    s_planetCanvas.setColorDepth(16);
+    s_planetValid = true;
+    s_planetReady = false;
+    s_planetX = cx;
+    s_planetY = cy;
+    s_planetR = r;
+    s_planetLx = lx;
+    s_planetLy = ly;
+    s_planetCity = cityLights;
+    s_planetTheme = theme;
+    if (s_planetCanvas.createSprite(side, side) == nullptr) {
+        return false;
+    }
+    s_planetCanvas.fillSprite(kPlanetTransparent);
+    planetInto(s_planetCanvas, side / 2, side / 2, r, lightX, lightY, cityLights, cx, cy);
+    // Lo sfondo deve restare trasparente: se un pixel coincide, niente cache.
+    const uint16_t* buf = static_cast<const uint16_t*>(s_planetCanvas.getBuffer());
+    for (int i = 0; i < side * side; ++i) {
+        if (buf[i] == kPlanetTransparent) {
+            s_planetCanvas.deleteSprite();
+            return false;
+        }
+    }
+    s_planetReady = true;
+    return true;
+}
+
+}  // namespace
+
+void planet(int cx, int cy, int r, float lightX, float lightY, bool cityLights) {
+    if (r <= 1) {
+        return;
+    }
+    if (preparePlanetCache(cx, cy, r, lightX, lightY, cityLights)) {
+        const int side = 2 * r + 7;
+        auto& dst = display::g();
+        lgfx::pixelcopy_t pc(s_planetCanvas.getBuffer(), dst.getColorDepth(),
+                             s_planetCanvas.getColorDepth(), dst.hasPalette(), nullptr,
+                             kPlanetTransparent);
+        dst.pushImage(cx - side / 2, cy - side / 2, side, side, &pc);
+        return;
+    }
+    planetInto(display::g(), cx, cy, r, lightX, lightY, cityLights, cx, cy);
 }
 
 void orbitPath(int cx, int cy, int rx, int ry, uint16_t color, uint16_t gapColor, int phase) {
