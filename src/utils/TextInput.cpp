@@ -3,12 +3,10 @@
 #include <Arduino.h>
 #include <M5Cardputer.h>
 
-#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
 #include <vector>
-
 #include "Display.h"
 #include "Navigation.h"
 #include "PowerTimer.h"
@@ -16,8 +14,19 @@
 namespace textinput {
 namespace {
 
-bool wordContains(const std::vector<char>& word, char c) {
-    return std::find(word.begin(), word.end(), c) != word.end();
+bool wordContains(const bool (&seen)[0x60], char c) {
+    return c >= 0x20 && c < 0x7F && seen[static_cast<uint8_t>(c) - 0x20];
+}
+
+void rememberWord(bool (&seen)[0x60], const std::vector<char>& word) {
+    for (bool& entry : seen) {
+        entry = false;
+    }
+    for (char c : word) {
+        if (c >= 0x20 && c < 0x7F) {
+            seen[static_cast<uint8_t>(c) - 0x20] = true;
+        }
+    }
 }
 
 // Testo piu' largo del campo: ellissi + coda, cosi' cursore e backspace
@@ -87,7 +96,8 @@ bool edit(const std::string& title, const std::string& parent,
 
     navigation::waitRelease();
     M5Cardputer.update();
-    std::vector<char> lastWord = M5Cardputer.Keyboard.keysState().word;
+    bool lastWord[0x60] = {};
+    rememberWord(lastWord, M5Cardputer.Keyboard.keysState().word);
     bool lastEnter = M5Cardputer.Keyboard.keysState().enter;
     // Auto-repeat del tasto DEL: ~400 ms prima ripetizione, poi ogni 60 ms.
     uint32_t nextDel = 0;
@@ -146,7 +156,7 @@ bool edit(const std::string& title, const std::string& parent,
                 break;
             }
         }
-        lastWord = word;
+        rememberWord(lastWord, word);
         lastEnter = state.enter;
         delay(18);
     }

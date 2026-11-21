@@ -28,6 +28,34 @@ namespace games {
 namespace {
 uint8_t g_savedRotation = 1;
 bool g_displayOverridden = false;
+
+struct GameEntry {
+    const char* label;
+    const char* icon;
+    void (*run)();
+};
+
+// Tabella unica: una sola lambda di ingresso invece di 17 copie.
+constexpr GameEntry kGames[] = {
+    {"Tetris", "games", runTetris},
+    {"Breakout", "games", runBreakout},
+    {"Pac-Man", "pacman", runPacman},
+    {"Doom Lite", "doom", runDoomLite},
+    {"Snake", "snake", runSnake},
+    {"Pong", "pong", runPong},
+    {"2048", "2048", run2048},
+    {"Flappy", "flappy", runFlappy},
+    {"Simon", "simon", runSimon},
+    {"Minesweeper", "mines", runMinesweeper},
+    {"Connect 4", "connect4", runConnect4},
+    {"Scacchi", "chess", runChess},
+    {"Minecraft 3D", "minecraft", runMinecraft},
+    {"StarSweep", "rocket", runStarSweep},
+    {"Lander", "planet", runLander},
+    {"Orbital", "sat", runOrbital},
+    {"Pixel Jump", "games", runPixelJump},
+};
+constexpr size_t kGameCount = sizeof(kGames) / sizeof(kGames[0]);
 }  // namespace
 
 void enterGameDisplay() {
@@ -58,91 +86,13 @@ void exitGameDisplay() {
 
 void runMenu() {
     MenuManager menu("Giochi", "Menu principale");
-    menu.addItem("Tetris", "games", [] {
-        enterGameDisplay();
-        runTetris();
-        exitGameDisplay();
-    });
-    menu.addItem("Breakout", "games", [] {
-        enterGameDisplay();
-        runBreakout();
-        exitGameDisplay();
-    });
-    menu.addItem("Pac-Man", "pacman", [] {
-        enterGameDisplay();
-        runPacman();
-        exitGameDisplay();
-    });
-    menu.addItem("Doom Lite", "doom", [] {
-        enterGameDisplay();
-        runDoomLite();
-        exitGameDisplay();
-    });
-    menu.addItem("Snake", "snake", [] {
-        enterGameDisplay();
-        runSnake();
-        exitGameDisplay();
-    });
-    menu.addItem("Pong", "pong", [] {
-        enterGameDisplay();
-        runPong();
-        exitGameDisplay();
-    });
-    menu.addItem("2048", "2048", [] {
-        enterGameDisplay();
-        run2048();
-        exitGameDisplay();
-    });
-    menu.addItem("Flappy", "flappy", [] {
-        enterGameDisplay();
-        runFlappy();
-        exitGameDisplay();
-    });
-    menu.addItem("Simon", "simon", [] {
-        enterGameDisplay();
-        runSimon();
-        exitGameDisplay();
-    });
-    menu.addItem("Minesweeper", "mines", [] {
-        enterGameDisplay();
-        runMinesweeper();
-        exitGameDisplay();
-    });
-    menu.addItem("Connect 4", "connect4", [] {
-        enterGameDisplay();
-        runConnect4();
-        exitGameDisplay();
-    });
-    menu.addItem("Scacchi", "chess", [] {
-        enterGameDisplay();
-        runChess();
-        exitGameDisplay();
-    });
-    menu.addItem("Minecraft 3D", "minecraft", [] {
-        enterGameDisplay();
-        runMinecraft();
-        exitGameDisplay();
-    });
-    menu.addItem("StarSweep", "rocket", [] {
-        enterGameDisplay();
-        runStarSweep();
-        exitGameDisplay();
-    });
-    menu.addItem("Lander", "planet", [] {
-        enterGameDisplay();
-        runLander();
-        exitGameDisplay();
-    });
-    menu.addItem("Orbital", "sat", [] {
-        enterGameDisplay();
-        runOrbital();
-        exitGameDisplay();
-    });
-    menu.addItem("Pixel Jump", "games", [] {
-        enterGameDisplay();
-        runPixelJump();
-        exitGameDisplay();
-    });
+    for (size_t i = 0; i < kGameCount; ++i) {
+        menu.addItem(kGames[i].label, kGames[i].icon, [i] {
+            enterGameDisplay();
+            kGames[i].run();
+            exitGameDisplay();
+        });
+    }
     menu.setCarousel();
     menu.setHint("ESC=indietro  </>=scorri  ENTER=gioca");
     menu.run(true);

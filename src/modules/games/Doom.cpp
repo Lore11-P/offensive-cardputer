@@ -7,7 +7,6 @@
 #include <cstring>
 
 #include "Display.h"
-#include "GamesMenu.h"
 #include "ModuleFlags.h"
 #include "Navigation.h"
 #include "Scores.h"

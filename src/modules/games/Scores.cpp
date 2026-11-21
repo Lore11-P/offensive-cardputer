@@ -1,9 +1,8 @@
 #include "Scores.h"
 
-#include <algorithm>
 #include <cstdlib>
-#include <map>
-#include <sstream>
+#include <cstring>
+#include <string>
 
 #include "ModuleFlags.h"
 #include "Storage.h"
@@ -15,6 +14,8 @@ namespace scores {
 namespace {
 
 constexpr const char* kPath = "/scores.txt";
+// Stesso limite della versione precedente: un file oltre 4 KB non viene
+// sovrascritto, cosi' nessun record viene troncato o perso.
 constexpr size_t kMaxBytes = 4096;
 
 // I record vanno sulla SD solo se la SD c'e': altrimenti restano su LittleFS,
@@ -23,84 +24,108 @@ bool preferSD() {
     return storage::hasSD();
 }
 
-bool load(std::map<std::string, uint32_t>& out) {
-    out.clear();
+// Legge tutto il file; true anche se il file non esiste ancora.
+bool readAll(std::string& text) {
     if (!storage::exists(kPath, preferSD())) {
-        return true;  // primo salvataggio: il file non esiste ancora
+        return true;
     }
-    std::string text;
-    if (!storage::readText(kPath, text, kMaxBytes, preferSD())) {
-        return false;  // errore o troncato: non riscrivere il file
+    return storage::readText(kPath, text, kMaxBytes, preferSD());
+}
+
+size_t lineEnd(const std::string& text, size_t start) {
+    const size_t end = text.find('\n', start);
+    return end == std::string::npos ? text.size() : end;
+}
+
+// Riconosce "game=valore" in [start, end), ignorando un eventuale '\r'.
+bool parseLine(const std::string& text, size_t start, size_t end, const char* game,
+               uint32_t& value) {
+    if (end > start && text[end - 1] == '\r') {
+        --end;
     }
-    std::istringstream stream(text);
-    std::string line;
-    while (std::getline(stream, line)) {
-        if (!line.empty() && line.back() == '\r') {
-            line.pop_back();
-        }
-        const size_t eq = line.find('=');
-        if (eq == std::string::npos || eq == 0) {
-            continue;
-        }
-        const std::string name = line.substr(0, eq);
-        const unsigned long value = std::strtoul(line.c_str() + eq + 1, nullptr, 10);
-        out[name] = static_cast<uint32_t>(value);
+    const size_t keyLen = std::strlen(game);
+    if (end <= start + keyLen || text[start + keyLen] != '=') {
+        return false;
     }
+    if (std::memcmp(text.c_str() + start, game, keyLen) != 0) {
+        return false;
+    }
+    const char* number = text.c_str() + start + keyLen + 1;
+    char* stop = nullptr;
+    const unsigned long parsed = std::strtoul(number, &stop, 10);
+    if (stop == number) {
+        return false;
+    }
+    value = static_cast<uint32_t>(parsed);
     return true;
 }
 
-void store(const std::map<std::string, uint32_t>& values) {
-    std::string text;
-    for (const auto& item : values) {
-        text += item.first;
-        text += '=';
-        text += std::to_string(item.second);
-        text += '\n';
+// Ultima occorrenza vince, come la vecchia mappa nome->valore.
+bool find(const std::string& text, const char* game, uint32_t& out) {
+    bool found = false;
+    for (size_t start = 0; start < text.size();) {
+        const size_t end = lineEnd(text, start);
+        uint32_t value = 0;
+        if (parseLine(text, start, end, game, value)) {
+            out = value;
+            found = true;
+        }
+        start = end + 1;
     }
-    storage::writeText(kPath, text, preferSD());
+    return found;
 }
 
 }  // namespace
 
-uint32_t best(const std::string& game) {
-    std::map<std::string, uint32_t> values;
-    if (!load(values)) {
+uint32_t best(const char* game) {
+    std::string text;
+    uint32_t value = 0;
+    if (!readAll(text) || !find(text, game, value)) {
         return 0;
     }
-    const auto it = values.find(game);
-    return it == values.end() ? 0 : it->second;
+    return value;
 }
 
-void submit(const std::string& game, uint32_t score) {
-    if (game.empty()) {
+void submit(const char* game, uint32_t score) {
+    if (game == nullptr || *game == '\0') {
         return;
-    }
-    std::map<std::string, uint32_t> values;
-    // Se il file non e' leggibile per intero non va sovrascritto: si
-    // perderebbero i record che non sono stati letti.
-    if (!load(values)) {
-        return;
-    }
-    auto& slot = values[game];
-    if (score > slot) {
-        slot = score;
-        store(values);
-    }
-}
-
-std::string all() {
-    std::map<std::string, uint32_t> values;
-    if (!load(values) || values.empty()) {
-        return "";
     }
     std::string text;
-    for (const auto& item : values) {
-        text += item.first;
-        text += ": ";
-        text += std::to_string(item.second);
-        text += '\n';
+    // Se il file esiste ma non e' leggibile per intero non va sovrascritto:
+    // si perderebbero i record che non sono stati letti.
+    if (!readAll(text)) {
+        return;
     }
-    return text;
+    uint32_t old = 0;
+    if (find(text, game, old) && score <= old) {
+        return;
+    }
+
+    std::string out;
+    out.reserve(text.size() + 16);
+    bool replaced = false;
+    for (size_t start = 0; start < text.size();) {
+        const size_t end = lineEnd(text, start);
+        uint32_t ignored = 0;
+        if (parseLine(text, start, end, game, ignored)) {
+            out += game;
+            out += '=';
+            out += std::to_string(score);
+            out += '\n';
+            replaced = true;
+        } else {
+            out.append(text, start, end - start);
+            out += '\n';
+        }
+        start = end + 1;
+    }
+    if (!replaced) {
+        out += game;
+        out += '=';
+        out += std::to_string(score);
+        out += '\n';
+    }
+    storage::writeText(kPath, out, preferSD());
 }
 
 }  // namespace scores

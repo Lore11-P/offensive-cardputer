@@ -5,8 +5,6 @@
 #include <algorithm>
 #include <array>
 #include <cstdio>
-#include <utility>
-#include <vector>
 
 #include "Display.h"
 #include "ModuleFlags.h"
@@ -122,19 +120,27 @@ void draw(const Board& board, uint32_t score, uint32_t best, bool finished,
 }
 
 void spawn(Board& board) {
-    std::vector<std::pair<int, int>> empty;
+    int empties = 0;
+    for (const auto& row : board) {
+        for (uint32_t value : row) {
+            empties += value == 0 ? 1 : 0;
+        }
+    }
+    if (empties == 0) {
+        return;
+    }
+    int pick = static_cast<int>(esp_random() % static_cast<uint32_t>(empties));
     for (int y = 0; y < 4; ++y) {
         for (int x = 0; x < 4; ++x) {
-            if (board[y][x] == 0) {
-                empty.emplace_back(x, y);
+            if (board[y][x] != 0) {
+                continue;
+            }
+            if (pick-- == 0) {
+                board[y][x] = (esp_random() % 10 == 0) ? 4 : 2;
+                return;
             }
         }
     }
-    if (empty.empty()) {
-        return;
-    }
-    const auto pick = empty[esp_random() % empty.size()];
-    board[pick.second][pick.first] = (esp_random() % 10 == 0) ? 4 : 2;
 }
 
 bool slideLine(std::array<uint32_t, 4>& line, uint32_t& gained) {
