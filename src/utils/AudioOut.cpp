@@ -3,6 +3,7 @@
 #include <M5Cardputer.h>
 
 #include <algorithm>
+#include <cassert>
 #include <cstring>
 #include <new>
 
@@ -17,15 +18,19 @@ int g_volume = 12;  // 0..21, come la scala del decoder
 bool g_speakerReleased = false;
 
 // --- Metadati ICY ------------------------------------------------------------
-char g_station[96] = {0};
-char g_title[128] = {0};
+// Limiti doc: 255 byte stazione, 511 byte titolo (UTF-8, terminatore escluso).
+char g_station[256] = {0};
+char g_title[512] = {0};
 
 // --- Registrazione -----------------------------------------------------------
 // Ring piccolo, allocato solo durante la REC: il callback copia in RAM, la SD
 // viene scritta da pump(). Nessun buffer fisso quando la radio non registra.
-constexpr uint32_t kRingSamples = 8192;  // 16 KB, circa 85 ms a 48 kHz stereo
+constexpr uint32_t kRingSamples = 8192;  // 16 KB, circa 170 ms a 48 kHz stereo
 constexpr uint32_t kRingBytes = kRingSamples * sizeof(int16_t);
 constexpr uint32_t kRingMask = kRingSamples - 1;
+// Ogni pump scrive al massimo 2 KB: il loop del decoder non resta fermo per
+// una scrittura SD lunga.
+constexpr uint32_t kWriteChunkSamples = 1024;  // 2 KB
 int16_t* g_ring = nullptr;
 volatile uint32_t g_head = 0;
 volatile uint32_t g_tail = 0;
@@ -93,7 +98,7 @@ void put32(uint8_t* p, uint32_t value) {
 }
 
 // WAV PCM 16 bit stereo: 44 byte di intestazione, poi i campioni.
-void writeWavHeader(File& file, uint32_t dataBytes, uint32_t sampleRate) {
+bool writeWavHeader(File& file, uint32_t dataBytes, uint32_t sampleRate) {
     uint8_t h[44] = {0};
     std::memcpy(h + 0, "RIFF", 4);
     put32(h + 4, 36 + dataBytes);
@@ -108,8 +113,11 @@ void writeWavHeader(File& file, uint32_t dataBytes, uint32_t sampleRate) {
     put16(h + 34, 16);                            // bit per campione
     std::memcpy(h + 36, "data", 4);
     put32(h + 40, dataBytes);
-    file.seek(0);
-    file.write(h, sizeof(h));
+    if (!file.seek(0)) {
+        return false;
+    }
+    const size_t wrote = file.write(h, sizeof(h));
+    return wrote == sizeof(h) && file.getWriteError() == 0;
 }
 
 void pushInterleaved(const int16_t* src, uint32_t count) {
@@ -192,7 +200,11 @@ void finishRecording() {
         if (live >= 8000) {
             g_recRate = live;
         }
-        writeWavHeader(g_file, g_recDataBytes, g_recRate);
+        if (!writeWavHeader(g_file, g_recDataBytes, g_recRate)) {
+            g_recError = true;
+            logger::warn("Audio: header WAV non riscritto (%u byte dati)",
+                         static_cast<unsigned>(g_recDataBytes));
+        }
         g_file.flush();
         g_file.close();
     }
@@ -208,15 +220,30 @@ void finishRecording() {
 }
 
 void pumpRecording() {
-    if (!g_recording) {
+    if (!g_recording || !g_file || g_ring == nullptr) {
         return;
     }
-    while (g_tail != g_head) {
-        if (!drainChunk()) {
-            logger::warn("Audio: scrittura WAV fallita");
-            finishRecording();
-            return;
-        }
+    const uint32_t used = ringUsed();
+    if (used == 0) {
+        return;
+    }
+    // Una sola fetta da 2 KB per pump(): decoder().loop() ha sempre la
+    // precedenza e il ring assorbe le pause della SD.
+    const uint32_t idx = g_tail & kRingMask;
+    const uint32_t chunk = std::min(
+        std::min(used, kRingSamples - idx), kWriteChunkSamples);
+    const size_t want = static_cast<size_t>(chunk) * sizeof(int16_t);
+    const size_t wrote =
+        g_file.write(reinterpret_cast<const uint8_t*>(&g_ring[idx]), want);
+    if (wrote > 0) {
+        const uint32_t samples = static_cast<uint32_t>(wrote / sizeof(int16_t));
+        g_tail += samples;
+        g_recDataBytes += samples * sizeof(int16_t);
+    }
+    if (wrote != want || g_file.getWriteError() != 0) {
+        g_recError = true;
+        logger::warn("Audio: scrittura WAV fallita");
+        finishRecording();
     }
 }
 
@@ -274,12 +301,22 @@ void audio_process_extern(int16_t* buff, uint16_t len, bool* continueI2S) {
 namespace audioout {
 
 Audio& decoder() {
-    if (g_decoder == nullptr) {
-        // Il costruttore di Audio installa I2S_NUM_0: lo si crea solo quando
-        // serve davvero, cosi' il microfono resta utilizzabile altrimenti.
-        g_decoder = new Audio();
-    }
+    decoderReady();
+    assert(g_decoder != nullptr);  // i chiamanti usano beginPlayback()/decoderReady()
     return *g_decoder;
+}
+
+bool decoderReady() {
+    if (g_decoder == nullptr) {
+        // Nothrow: con heap frammentato il firmware non deve abortire per
+        // una web radio. I chiamanti controllano il risultato.
+        g_decoder = new (std::nothrow) Audio();
+        if (g_decoder == nullptr) {
+            logger::error("Audio: decoder non allocato (heap %u)",
+                          static_cast<unsigned>(ESP.getFreeHeap()));
+        }
+    }
+    return g_decoder != nullptr;
 }
 
 bool decoderRunning() {
@@ -292,7 +329,9 @@ int volume() {
 
 void setVolume(int value) {
     g_volume = std::max(0, std::min(21, value));
-    decoder().setVolume(static_cast<uint8_t>(g_volume));
+    if (g_decoder != nullptr) {
+        g_decoder->setVolume(static_cast<uint8_t>(g_volume));
+    }
 }
 
 bool beginPlayback() {
@@ -309,7 +348,11 @@ bool beginPlayback() {
         M5Cardputer.Speaker.begin();  // riscrive i registri ES8311 del DAC
         M5Cardputer.Speaker.end();    // libera subito I2S1
     }
-    Audio& audio = decoder();
+    if (!decoderReady()) {
+        restoreSpeaker();  // ridà almeno lo speaker alla UI
+        return false;
+    }
+    Audio& audio = *g_decoder;
     // Il microfono (M5.Mic) usa I2S_NUM_0 come il decoder: se un altro modulo
     // lo ha fermato o riconfigurato, qui il driver viene ripristinato prima
     // di aprire lo stream.
@@ -317,6 +360,14 @@ bool beginPlayback() {
     // I pin non sono cablati a mano: si leggono dalla board.
     const auto cfg = M5Cardputer.Speaker.config();
     const bool pinsOk = audio.setPinout(cfg.pin_bck, cfg.pin_ws, cfg.pin_data_out);
+    if (!pinsOk) {
+        // Non lasciare I2S0 installato ne' lo speaker chiuso se la
+        // configurazione dei pin fallisce.
+        i2s_driver_uninstall(I2S_NUM_0);
+        restoreSpeaker();
+        logger::warn("Audio: setPinout fallito, I2S0 rilasciato");
+        return false;
+    }
     audio.setVolume(static_cast<uint8_t>(g_volume));
     clearMetadata();
     logger::info("Audio: I2S bck=%d ws=%d dout=%d", static_cast<int>(cfg.pin_bck),
@@ -352,7 +403,9 @@ void reinit() {
 void endPlayback() {
     // Prima si ferma la sorgente, poi si chiude il WAV: nessun altro PCM
     // arriva nel ring mentre lo si svuota e si riscrive l'header.
-    decoder().stopSong();
+    if (g_decoder != nullptr) {
+        g_decoder->stopSong();
+    }
     if (g_recording || g_file) {
         stopRecording();
     }
@@ -362,8 +415,15 @@ void endPlayback() {
 }
 
 void pump() {
-    decoder().loop();
-    pumpRecording();
+    if (g_decoder != nullptr) {
+        g_decoder->loop();
+    }
+    // Fette da 2 KB: al massimo 4 per pump (8 KB), così il decoder riprende
+    // il controllo prima del frame successivo e non resta fermo su una
+    // scrittura unica da 16 KB. I drop sono esposti da recordingDropped().
+    for (int i = 0; i < 4 && ringUsed() > 0; ++i) {
+        pumpRecording();
+    }
 }
 
 const char* streamStation() {
@@ -421,9 +481,9 @@ bool startRecording(const char* path) {
     g_head = 0;
     g_tail = 0;
     g_file = file;
-    writeWavHeader(g_file, 0, g_recRate);
+    const bool headerOk = writeWavHeader(g_file, 0, g_recRate);
     g_file.flush();
-    if (g_file.getWriteError() != 0) {
+    if (!headerOk || g_file.getWriteError() != 0) {
         g_file.close();
         g_file = File();
         delete[] g_ring;
@@ -455,6 +515,10 @@ uint32_t recordingBytes() {
 
 uint32_t recordingSampleRate() {
     return g_recRate;
+}
+
+uint32_t recordingDropped() {
+    return g_droppedSamples;
 }
 
 bool recordingError() {
