@@ -70,7 +70,11 @@ void ditherSpan(lgfx::LGFXBase& d, int x, int y, int w, int level, uint16_t a, u
         for (int i = 0; i < chunk; ++i) {
             s_row[i] = (bayer(x + done + i, y) < level) ? b : a;
         }
-        d.pushImage(x + done, y, chunk, 1, s_row);
+        // Il cast forza M5GFX a convertire da RGB565 nativo al depth reale
+        // della destinazione: il template pushImage(uint16_t*) assume invece
+        // un buffer gia' in ordine pannello (swap565) e invertirebbe i byte.
+        d.pushImage(x + done, y, chunk, 1,
+                    reinterpret_cast<const lgfx::rgb565_t*>(s_row));
         done += chunk;
     }
 }
