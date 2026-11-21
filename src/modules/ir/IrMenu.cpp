@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
+#include <cstring>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -49,6 +50,7 @@ struct IrCommand {
     uint32_t command = 0;
     uint32_t frequency = 38000;
     bool raw = false;
+    bool rawOverflow = false;
     bool supported = false;
     std::vector<uint16_t> rawData;
 };
@@ -251,6 +253,20 @@ std::vector<Remote> listRemotes(const Brand& brand) {
     return out;
 }
 
+bool brandHasFiles(const Brand& brand) {
+    return !listRemotes(brand).empty();
+}
+
+// Una categoria senza file non deve comparire nel menu.
+bool categoryHasFiles(int category) {
+    for (const auto& brand : categoryBrands(category)) {
+        if (brandHasFiles(brand)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 std::string favoriteLabel(const std::string& path) {
     const std::string brand = brandFromPath(path);
     const std::string model = baseName(path);
@@ -261,8 +277,17 @@ constexpr const char* kFavoriteNamespace = "ir-fav";
 constexpr const char* kFavoriteKey = "list";
 constexpr size_t kMaxFavorites = 20;
 
-std::vector<std::string> loadFavorites() {
-    std::vector<std::string> out;
+// Il backend fa parte del preferito: se la microSD non e' inserita il path
+// SD non deve essere scartato come "file inesistente".
+enum class FavoriteBackend : uint8_t { Unknown, LittleFs, Sd };
+
+struct Favorite {
+    std::string path;
+    FavoriteBackend backend = FavoriteBackend::Unknown;
+};
+
+std::vector<Favorite> loadFavorites() {
+    std::vector<Favorite> out;
     Preferences preferences;
     if (!preferences.begin(kFavoriteNamespace, true)) {
         return out;
@@ -276,17 +301,35 @@ std::vector<std::string> loadFavorites() {
         if (!line.empty() && line.back() == '\r') {
             line.pop_back();
         }
-        if (!line.empty()) {
-            out.push_back(line);
+        if (line.empty()) {
+            continue;
+        }
+        Favorite favorite;
+        if (startsWith(line, "sd|")) {
+            favorite.backend = FavoriteBackend::Sd;
+            favorite.path = line.substr(3);
+        } else if (startsWith(line, "lfs|")) {
+            favorite.backend = FavoriteBackend::LittleFs;
+            favorite.path = line.substr(4);
+        } else {
+            favorite.path = line;  // formato precedente, backend sconosciuto
+        }
+        if (!favorite.path.empty()) {
+            out.push_back(std::move(favorite));
         }
     }
     return out;
 }
 
-void saveFavorites(const std::vector<std::string>& favorites) {
+void saveFavorites(const std::vector<Favorite>& favorites) {
     std::string blob;
-    for (const auto& path : favorites) {
-        blob += path;
+    for (const auto& favorite : favorites) {
+        if (favorite.backend == FavoriteBackend::Sd) {
+            blob += "sd|";
+        } else if (favorite.backend == FavoriteBackend::LittleFs) {
+            blob += "lfs|";
+        }
+        blob += favorite.path;
         blob += '\n';
     }
     Preferences preferences;
@@ -298,29 +341,56 @@ void saveFavorites(const std::vector<std::string>& favorites) {
 
 bool isFavorite(const std::string& path) {
     const auto favorites = loadFavorites();
-    return std::find(favorites.begin(), favorites.end(), path) != favorites.end();
+    return std::any_of(favorites.begin(), favorites.end(),
+                       [&](const Favorite& favorite) {
+                           return favorite.path == path;
+                       });
 }
 
 enum class FavoriteResult { Added, Removed, Full };
 
+// true = il preferito va tenuto. Un backend non montato non e' una prova che
+// il file non esista: si potra' verificare quando la SD torna disponibile.
+bool favoriteAlive(const Favorite& favorite) {
+    switch (favorite.backend) {
+        case FavoriteBackend::Sd:
+            return !storage::hasSD() || storage::exists(favorite.path, true);
+        case FavoriteBackend::LittleFs:
+            return !storage::hasLittleFS() ||
+                   storage::exists(favorite.path, false);
+        default:
+            return !(storage::hasLittleFS() && storage::hasSD()) ||
+                   storage::exists(favorite.path, false);
+    }
+}
+
 FavoriteResult toggleFavorite(const std::string& path) {
     auto favorites = loadFavorites();
-    const auto it = std::find(favorites.begin(), favorites.end(), path);
+    const auto it = std::find_if(favorites.begin(), favorites.end(),
+                                 [&](const Favorite& favorite) {
+                                     return favorite.path == path;
+                                 });
     if (it != favorites.end()) {
         favorites.erase(it);
         saveFavorites(favorites);
         return FavoriteResult::Removed;
     }
-    // I preferiti di file non piu' presenti non devono occupare slot.
     favorites.erase(std::remove_if(favorites.begin(), favorites.end(),
-                                   [](const std::string& p) {
-                                       return !storage::exists(p);
+                                   [](const Favorite& favorite) {
+                                       return !favoriteAlive(favorite);
                                    }),
                     favorites.end());
     if (favorites.size() >= kMaxFavorites) {
         return FavoriteResult::Full;
     }
-    favorites.push_back(path);
+    Favorite favorite;
+    favorite.path = path;
+    favorite.backend = storage::exists(path, true)
+                           ? FavoriteBackend::Sd
+                           : (storage::exists(path, false)
+                                  ? FavoriteBackend::LittleFs
+                                  : FavoriteBackend::Unknown);
+    favorites.push_back(std::move(favorite));
     saveFavorites(favorites);
     return FavoriteResult::Added;
 }
@@ -421,23 +491,39 @@ int findCommandByName(const std::vector<IrCommand>& commands,
     return -1;
 }
 
-uint32_t parseHexBytes(const std::string& value) {
-    std::istringstream stream(value);
-    std::string token;
+// Parser senza stream: niente seconda copia del file in RAM.
+uint32_t parseHexBytes(const char* value) {
     uint32_t result = 0;
     uint8_t shift = 0;
     bool first = true;
-    while (stream >> token && shift < 32) {
+    const char* p = value;
+    while (*p && shift < 32) {
+        while (*p == ' ' || *p == '\t' || *p == ',') {
+            ++p;
+        }
+        if (!*p) {
+            break;
+        }
+        const char* begin = p;
+        while (*p && *p != ' ' && *p != '\t' && *p != ',') {
+            ++p;
+        }
+        char token[20];
+        size_t len = static_cast<size_t>(p - begin);
+        if (len >= sizeof(token)) {
+            len = sizeof(token) - 1;
+        }
+        std::memcpy(token, begin, len);
+        token[len] = '\0';
         char* end = nullptr;
-        const unsigned long parsed = std::strtoul(token.c_str(), &end, 16);
-        if (end == token.c_str()) {
+        const unsigned long parsed = std::strtoul(token, &end, 16);
+        if (end == token) {
             continue;
         }
-        const std::string digits =
-            startsWith(token, "0x") || startsWith(token, "0X")
-                ? token.substr(2)
-                : token;
-        if (first && digits.size() > 2) {
+        const bool hexPrefix =
+            len > 2 && token[0] == '0' && (token[1] == 'x' || token[1] == 'X');
+        const size_t digits = len - (hexPrefix ? 2 : 0);
+        if (first && digits > 2) {
             return static_cast<uint32_t>(parsed);
         }
         result |= static_cast<uint32_t>(parsed & 0xFF) << shift;
@@ -486,31 +572,66 @@ constexpr size_t kMaxParsedCommands = 128;
 constexpr size_t kMaxMenuCommands = 100;
 constexpr size_t kParsedCommandsLimit =
     kMaxMenuCommands < kMaxParsedCommands ? kMaxMenuCommands : kMaxParsedCommands;
-// Un comando raw oltre 512 valori (circa un NEC ripetuto 5 volte) non e' un
-// telecomando reale: viene troncato per non saturare l'heap.
+// Un comando raw oltre 512 valori non viene inviato: un frame troncato
+// sembrerebbe valido ma il dispositivo non risponderebbe.
 constexpr size_t kMaxRawValues = 512;
-// Un .ir oltre 64 KB non entra nella RAM senza rischi: meglio un errore
-// esplicito che un'allocazione fallita a meta' lettura.
+// Tetto complessivo per file (~32 KB di uint16): copre i telecomandi con
+// molti tasti raw senza saturare l'heap. Oltre il budget i comandi sono [n/d].
+constexpr size_t kMaxRawBudget = 16384;
+// Riga massima letta: 512 valori da 5 cifre + spazi stanno in ~3 KB.
+constexpr size_t kMaxIrLine = 3584;
+// Un .ir oltre 64 KB viene rifiutato con un messaggio esplicito.
 constexpr size_t kMaxIrFileBytes = 65536;
+// Il parser puo' arrivare a ~36 KB (budget raw + riga) e poi serve il menu:
+// sotto 64 KB liberi si rischia l'allocazione fallita.
+constexpr uint32_t kMinIrHeap = 64 * 1024;
 
-void parseRawValues(const std::string& value, std::vector<uint16_t>& out) {
-    std::string cleaned = value;
-    std::replace(cleaned.begin(), cleaned.end(), ',', ' ');
-    std::istringstream stream(cleaned);
-    std::string token;
-    out.reserve(std::min(kMaxRawValues, out.size() + 128));
-    while (stream >> token && out.size() < kMaxRawValues) {
+void trimInPlace(std::string& value) {
+    size_t begin = 0;
+    size_t end = value.size();
+    while (begin < end && std::isspace(static_cast<unsigned char>(value[begin]))) {
+        ++begin;
+    }
+    while (end > begin && std::isspace(static_cast<unsigned char>(value[end - 1]))) {
+        --end;
+    }
+    if (begin > 0) {
+        value.erase(0, begin);
+    }
+    if (end - begin < value.size()) {
+        value.resize(end - begin);
+    }
+}
+
+// true se il comando supera il limite: il chiamante lo marca [n/d].
+bool parseRawValues(const char* value, std::vector<uint16_t>& out, size_t limit) {
+    out.reserve(std::min(limit, out.size() + 128));
+    const char* p = value;
+    while (*p) {
+        while (*p && !std::isdigit(static_cast<unsigned char>(*p)) && *p != '-') {
+            ++p;
+        }
+        if (!*p) {
+            break;
+        }
         char* end = nullptr;
-        const long parsed = std::strtol(token.c_str(), &end, 10);
-        if (end == token.c_str()) {
+        const long parsed = std::strtol(p, &end, 10);
+        if (end == p) {
+            ++p;
             continue;
         }
+        p = end;
         // Un valore fuori range va saturato, non scartato: toglierlo
         // sbilancerebbe la parita' mark/space e corromperebbe tutta la cornice.
-        if (parsed > 0) {
-            out.push_back(static_cast<uint16_t>(std::min<long>(parsed, 65535)));
+        if (parsed <= 0) {
+            continue;
         }
+        if (out.size() >= limit) {
+            return true;
+        }
+        out.push_back(static_cast<uint16_t>(std::min<long>(parsed, 65535)));
     }
+    return false;
 }
 
 Protocol protocolFromName(const std::string& name, uint16_t& bits) {
@@ -574,7 +695,7 @@ void finalizeCommand(IrCommand& command) {
         return;
     }
     if (command.raw) {
-        command.supported = !command.rawData.empty();
+        command.supported = !command.rawData.empty() && !command.rawOverflow;
         if (command.frequency < 20000 || command.frequency > 60000) {
             command.frequency = 38000;
         }
@@ -584,30 +705,89 @@ void finalizeCommand(IrCommand& command) {
     }
 }
 
-std::vector<IrCommand> parseIrFile(const std::string& text) {
+// Legge il File a blocchi e restituisce una riga per volta: il file completo
+// non viene mai copiato in RAM.
+class IrLineReader {
+public:
+    explicit IrLineReader(File& file) : file_(file) {}
+
+    bool next(std::string& out, bool& truncated) {
+        out.clear();
+        truncated = false;
+        for (;;) {
+            if (pos_ >= len_) {
+                const size_t got = file_.read(
+                    reinterpret_cast<uint8_t*>(chunk_), sizeof(chunk_));
+                if (got == 0) {
+                    return !out.empty();
+                }
+                len_ = got;
+                pos_ = 0;
+            }
+            const char c = static_cast<char>(chunk_[pos_++]);
+            if (c == '\n') {
+                return true;
+            }
+            if (c == '\r') {
+                continue;
+            }
+            if (out.size() < kMaxIrLine) {
+                out.push_back(c);
+            } else {
+                truncated = true;
+            }
+        }
+    }
+
+private:
+    File& file_;
+    char chunk_[256];
+    size_t len_ = 0;
+    size_t pos_ = 0;
+};
+
+std::vector<IrCommand> parseIrFile(File& file) {
     std::vector<IrCommand> commands;
     commands.reserve(kParsedCommandsLimit);
-    std::istringstream stream(text);
+    IrLineReader reader(file);
     std::string line;
+    line.reserve(128);
     IrCommand current;
     bool active = false;
+    size_t rawBudget = kMaxRawBudget;
 
     auto flush = [&] {
         if (active && !current.name.empty() &&
             commands.size() < kParsedCommandsLimit) {
             finalizeCommand(current);
-            commands.push_back(current);
+            commands.push_back(std::move(current));
         }
         current = IrCommand();
         active = false;
     };
 
-    while (std::getline(stream, line)) {
-        // Cap raggiunto: inutile continuare a parsare e allocare.
-        if (commands.size() >= kParsedCommandsLimit) {
+    auto addRaw = [&](const char* data, bool truncated) {
+        current.raw = true;
+        const size_t before = current.rawData.size();
+        const size_t perCommand =
+            before < kMaxRawValues ? kMaxRawValues - before : 0;
+        const size_t room = std::min(perCommand, rawBudget);
+        if (truncated) {
+            current.rawOverflow = true;
+        }
+        if (parseRawValues(data, current.rawData, room)) {
+            current.rawOverflow = true;
+        }
+        const size_t added = current.rawData.size() - before;
+        rawBudget = added <= rawBudget ? rawBudget - added : 0;
+    };
+
+    while (commands.size() < kParsedCommandsLimit) {
+        bool truncated = false;
+        if (!reader.next(line, truncated)) {
             break;
         }
-        line = trim(line);
+        trimInPlace(line);
         if (line.empty()) {
             continue;
         }
@@ -631,22 +811,50 @@ std::vector<IrCommand> parseIrFile(const std::string& text) {
             current.protocol =
                 protocolFromName(current.protocolName, current.bits);
         } else if (startsWith(line, "address:")) {
-            current.address = parseHexBytes(trim(line.substr(8)));
+            current.address = parseHexBytes(line.c_str() + 8);
         } else if (startsWith(line, "command:")) {
-            current.command = parseHexBytes(trim(line.substr(8)));
+            current.command = parseHexBytes(line.c_str() + 8);
         } else if (startsWith(line, "frequency:")) {
-            current.frequency =
-                static_cast<uint32_t>(std::strtoul(line.substr(10).c_str(),
-                                                   nullptr, 10));
+            current.frequency = static_cast<uint32_t>(
+                std::strtoul(line.c_str() + 10, nullptr, 10));
         } else if (startsWith(line, "data:")) {
-            current.raw = true;
-            parseRawValues(line.substr(5), current.rawData);
-        } else if (current.raw && std::isdigit(static_cast<unsigned char>(line[0]))) {
-            parseRawValues(line, current.rawData);
+            addRaw(line.c_str() + 5, truncated);
+        } else if (current.raw &&
+                   std::isdigit(static_cast<unsigned char>(line[0]))) {
+            addRaw(line.c_str(), truncated);
         }
     }
     flush();
     return commands;
+}
+
+bool loadCommands(const std::string& path, std::vector<IrCommand>& out,
+                  std::string& error) {
+    out.clear();
+    File file = storage::openRead(path);
+    if (!file) {
+        error = "Impossibile leggere il file.";
+        return false;
+    }
+    if (static_cast<size_t>(file.size()) > kMaxIrFileBytes) {
+        file.close();
+        error = "File troppo grande (>64 KB).";
+        return false;
+    }
+    const uint32_t freeHeap = ESP.getFreeHeap();
+    if (freeHeap < kMinIrHeap) {
+        file.close();
+        error = "Memoria insufficiente (" + std::to_string(freeHeap / 1024) +
+                " KB liberi, servono 64 KB).";
+        return false;
+    }
+    out = parseIrFile(file);
+    file.close();
+    if (out.empty()) {
+        error = "Nessun comando riconosciuto.";
+        return false;
+    }
+    return true;
 }
 
 void ensureSender() {
@@ -687,9 +895,16 @@ bool sendProtocol(Protocol protocol, uint32_t address, uint32_t command,
             return true;
         }
         case Protocol::Sony: {
+            // SIRC20: 5 bit device + 8 bit extended, entrambi nell'address
+            // Flipper (device nei bit bassi).
+            uint16_t device = static_cast<uint16_t>(address & 0xFFFF);
+            uint16_t extended = 0;
+            if (bits == 20) {
+                extended = static_cast<uint16_t>((device >> 5) & 0xFF);
+                device &= 0x1F;
+            }
             const uint32_t data = g_sender.encodeSony(
-                bits, static_cast<uint16_t>(command & 0xFFFF),
-                static_cast<uint16_t>(address & 0xFFFF));
+                bits, static_cast<uint16_t>(command & 0x7F), device, extended);
             g_sender.sendSony(data, bits, std::max<uint16_t>(repeat, 2));
             return true;
         }
@@ -769,27 +984,24 @@ bool sendCommand(const IrCommand& command) {
 }
 
 void openFile(const std::string& path, const std::string& title) {
-    if (storage::fileSize(path) > kMaxIrFileBytes) {
-        ui::message(title,
-                    {"File troppo grande (>64 KB).",
-                     "Riduci i comandi o carica un .ir piu' piccolo."},
-                    "Telecomandi");
-        return;
-    }
     std::vector<IrCommand> commands;
-    {
-        // Il testo serve solo al parser: liberarlo prima di aprire il menu.
-        std::string text;
-        if (!storage::readText(path, text, kMaxIrFileBytes)) {
+    std::string error;
+    if (!loadCommands(path, commands, error)) {
+        if (error.rfind("Memoria", 0) == 0) {
+            ui::message(title, {error, "Chiudi altre app e riprova."},
+                        "Telecomandi");
+        } else if (startsWith(error, "File troppo grande")) {
+            ui::message(title,
+                        {error, "Riduci i comandi o usa un file piu' piccolo."},
+                        "Telecomandi");
+        } else if (startsWith(error, "Nessun comando")) {
+            ui::message(title,
+                        {error, "Il file .ir potrebbe essere non valido."},
+                        "Telecomandi");
+        } else {
             ui::message(title, {"Impossibile leggere il file:", path},
                         "Telecomandi");
-            return;
         }
-        commands = parseIrFile(text);
-    }
-    if (commands.empty()) {
-        ui::message(title, {"Nessun comando riconosciuto.", "Il file .ir potrebbe essere raw/non valido."},
-                    "Telecomandi");
         return;
     }
 
@@ -800,7 +1012,9 @@ void openFile(const std::string& path, const std::string& title) {
     for (int i = 0; i < count; ++i) {
         std::string label = commands[i].name;
         if (!commands[i].supported) {
-            label += " [n/d]";
+            label += (commands[i].raw && commands[i].rawOverflow)
+                         ? " [raw >512]"
+                         : " [n/d]";
         }
         // Riferimento, non copia: un comando raw puo' valere 512 uint16.
         menu.addItem(label, "ir",
@@ -943,9 +1157,8 @@ void runScanner(const Brand& brand) {
             feedback.clear();
             commands.clear();
             powerIndex = -1;
-            std::string text;
-            if (storage::readText(path, text, 65536)) {
-                commands = parseIrFile(text);
+            std::string error;
+            if (loadCommands(path, commands, error)) {
                 powerIndex = findPowerCommand(commands);
             }
             loadPending = false;
@@ -1038,15 +1251,21 @@ void runScanner(const Brand& brand) {
 }
 
 void runScannerCategory(int category) {
-    const std::vector<Brand> brands = categoryBrands(category);
-    if (brands.empty()) {
+    MenuManager menu(kCategories[category].label, "Scanner IR");
+    int shown = 0;
+    for (const auto& brand : categoryBrands(category)) {
+        const size_t count = listRemotes(brand).size();
+        if (count == 0) {
+            continue;
+        }
+        menu.addItem(brand.name + " (" + std::to_string(count) + ")", "scan",
+                     [brand] { runScanner(brand); });
+        ++shown;
+    }
+    if (shown == 0) {
         ui::message(kCategories[category].label,
                     {"Nessun telecomando in questa categoria."}, "Scanner IR");
         return;
-    }
-    MenuManager menu(kCategories[category].label, "Scanner IR");
-    for (const auto& brand : brands) {
-        menu.addItem(brand.name, "scan", [brand] { runScanner(brand); });
     }
     menu.setGrid(3);
     menu.setHint("ENTER=scansiona  ;.=riga/pagina  ESC=indietro");
@@ -1057,7 +1276,7 @@ void runScannerBrands() {
     MenuManager menu("Scanner IR", "Infrarossi");
     int shown = 0;
     for (size_t i = 0; i < kCategoryCount; ++i) {
-        if (categoryBrands(static_cast<int>(i)).empty()) {
+        if (!categoryHasFiles(static_cast<int>(i))) {
             continue;
         }
         menu.addItem(kCategories[i].label, "scan",
@@ -1075,38 +1294,59 @@ void runScannerBrands() {
 
 void runFavorites() {
     const auto stored = loadFavorites();
-    std::vector<std::string> favorites;
-    for (const auto& path : stored) {
-        if (storage::exists(path)) {
-            favorites.push_back(path);
+    std::vector<Favorite> favorites;
+    for (const auto& favorite : stored) {
+        const bool mounted =
+            favorite.backend == FavoriteBackend::Sd ? storage::hasSD()
+            : favorite.backend == FavoriteBackend::LittleFs
+                ? storage::hasLittleFS()
+                : true;
+        if (mounted && storage::exists(favorite.path)) {
+            favorites.push_back(favorite);
         }
     }
     if (favorites.empty()) {
-        ui::message("Preferiti", {"Nessun preferito salvato.",
-                                  "Apri un telecomando e premi F",
-                                  "per aggiungerlo qui."},
-                    "Infrarossi");
+        if (stored.empty()) {
+            ui::message("Preferiti", {"Nessun preferito salvato.",
+                                      "Apri un telecomando e premi F",
+                                      "per aggiungerlo qui."},
+                        "Infrarossi");
+        } else {
+            ui::message("Preferiti",
+                        {"Preferiti non disponibili.",
+                         "Reinserisci la microSD: i path",
+                         "SD sono stati conservati."},
+                        "Infrarossi");
+        }
         return;
     }
     MenuManager menu("Preferiti", "Infrarossi");
-    for (const auto& path : favorites) {
-        const std::string label = favoriteLabel(path);
-        menu.addItem(label, "fav", [path, label] { openFile(path, label); });
+    for (const auto& favorite : favorites) {
+        const std::string label = favoriteLabel(favorite.path);
+        menu.addItem(label, "fav", [path = favorite.path, label] {
+            openFile(path, label);
+        });
     }
     menu.setHint("ENTER=apri  ESC=indietro");
     menu.run(true);
 }
 
 void runCategory(int category) {
-    const std::vector<Brand> brands = categoryBrands(category);
-    if (brands.empty()) {
+    MenuManager menu(kCategories[category].label, "Telecomandi");
+    int shown = 0;
+    for (const auto& brand : categoryBrands(category)) {
+        const size_t count = listRemotes(brand).size();
+        if (count == 0) {
+            continue;
+        }
+        menu.addItem(brand.name + " (" + std::to_string(count) + ")", "ir",
+                     [brand] { openBrand(brand); });
+        ++shown;
+    }
+    if (shown == 0) {
         ui::message(kCategories[category].label,
                     {"Nessun telecomando in questa categoria."}, "Telecomandi");
         return;
-    }
-    MenuManager menu(kCategories[category].label, "Telecomandi");
-    for (const auto& brand : brands) {
-        menu.addItem(brand.name, "ir", [brand] { openBrand(brand); });
     }
     menu.setGrid(3);
     menu.setHint("ENTER=apri  ;.=riga/pagina  ESC=indietro");
@@ -1117,7 +1357,7 @@ void runRemotes() {
     MenuManager menu("Telecomandi", "Infrarossi");
     int shown = 0;
     for (size_t i = 0; i < kCategoryCount; ++i) {
-        if (categoryBrands(static_cast<int>(i)).empty()) {
+        if (!categoryHasFiles(static_cast<int>(i))) {
             continue;
         }
         menu.addItem(kCategories[i].label, "ir",
@@ -1150,38 +1390,70 @@ void runSearch() {
         return;
     }
 
+    // Quota per categoria e per marca, poi merge round-robin: "samsung" non
+    // deve esaurire il cap nella sola categoria TV.
     constexpr size_t kMaxResults = 40;
-    const std::vector<std::string> favorites = loadFavorites();
-    std::vector<MenuItem> matches;
+    constexpr size_t kPerCategory = 10;
+    constexpr size_t kPerBrand = 3;
+    const std::vector<Favorite> favorites = loadFavorites();
+    std::vector<MenuItem> buckets[kCategoryCount];
+    std::vector<std::string> seenPaths;
     bool hasDatabase = false;
 
-    for (size_t c = 0; c < kCategoryCount && matches.size() < kMaxResults; ++c) {
+    for (size_t c = 0; c < kCategoryCount; ++c) {
         const std::vector<Brand> brands = categoryBrands(static_cast<int>(c));
         if (!brands.empty()) {
             hasDatabase = true;
         }
         for (const auto& brand : brands) {
-            const bool brandHit = lower(brand.name).find(needle) != std::string::npos;
+            if (buckets[c].size() >= kPerCategory) {
+                break;
+            }
+            const bool brandHit =
+                lower(brand.name).find(needle) != std::string::npos;
+            size_t brandCount = 0;
             for (const auto& remote : listRemotes(brand)) {
+                if (brandCount >= kPerBrand ||
+                    buckets[c].size() >= kPerCategory) {
+                    break;
+                }
                 if (!brandHit &&
                     lower(remote.name).find(needle) == std::string::npos) {
                     continue;
                 }
-                std::string title = brand.name + " / " + remote.name;
-                if (std::find(favorites.begin(), favorites.end(),
-                              remote.path) != favorites.end()) {
+                const std::string key = lower(remote.path);
+                if (std::find(seenPaths.begin(), seenPaths.end(), key) !=
+                    seenPaths.end()) {
+                    continue;
+                }
+                std::string title = std::string(kCategories[c].label) +
+                                    " / " + brand.name + " / " + remote.name;
+                const bool favorite =
+                    std::any_of(favorites.begin(), favorites.end(),
+                                [&](const Favorite& item) {
+                                    return item.path == remote.path;
+                                });
+                if (favorite) {
                     title = "* " + title;
                 }
-                matches.emplace_back(title, "ir",
-                                     [path = remote.path, name = remote.name] {
-                                         openFile(path, name);
-                                     });
-                if (matches.size() >= kMaxResults) {
-                    break;
-                }
+                buckets[c].emplace_back(
+                    title, "ir",
+                    [path = remote.path, name = remote.name] {
+                        openFile(path, name);
+                    });
+                seenPaths.push_back(key);
+                ++brandCount;
             }
-            if (matches.size() >= kMaxResults) {
-                break;
+        }
+    }
+
+    std::vector<MenuItem> matches;
+    for (size_t round = 0;
+         round < kPerCategory && matches.size() < kMaxResults; ++round) {
+        for (size_t c = 0; c < kCategoryCount && matches.size() < kMaxResults;
+             ++c) {
+            if (round < buckets[c].size()) {
+                matches.push_back(std::move(buckets[c][round]));
             }
         }
     }
@@ -1311,6 +1583,38 @@ void runJammer() {
 
 }  // namespace
 
+void runDatabaseInfo() {
+    display::clear(display::kPaper);
+    display::header("Database IR", "Infrarossi");
+    display::text(6, 50, "Conteggio file...", display::kInk, 2);
+    display::footer("attendi");
+    display::push();
+
+    size_t counts[kCategoryCount] = {};
+    size_t total = 0;
+    for (size_t c = 0; c < kCategoryCount; ++c) {
+        for (const auto& brand : categoryBrands(static_cast<int>(c))) {
+            counts[c] += listRemotes(brand).size();
+        }
+        total += counts[c];
+    }
+    const auto row = [&](const char* left, size_t leftCount,
+                         const char* right, size_t rightCount) {
+        return std::string(left) + " " + std::to_string(leftCount) + "   " +
+               right + " " + std::to_string(rightCount);
+    };
+    std::vector<std::string> lines;
+    lines.push_back("Totale: " + std::to_string(total) + " file");
+    lines.push_back(row("TV", counts[0], "Clima", counts[1]));
+    lines.push_back(row("Audio", counts[2], "DVD", counts[3]));
+    lines.push_back(row("Proiett.", counts[4], "Console", counts[5]));
+    lines.push_back(row("Universale", counts[6], "Altro", counts[7]));
+    if (!storage::hasSD()) {
+        lines.push_back("microSD assente (solo LittleFS)");
+    }
+    ui::message("Database IR", lines, "Infrarossi");
+}
+
 void runMenu() {
     MenuManager menu("Infrarossi", "Menu principale");
     menu.setCarousel();
@@ -1324,6 +1628,7 @@ void runMenu() {
     menu.addItem("Preferiti", "fav", [] { runFavorites(); });
     menu.addItem("Telecomandi", "ir", [] { runRemotes(); });
     menu.addItem("Cerca", "scan", [] { runSearch(); });
+    menu.addItem("Database IR", "ir", [] { runDatabaseInfo(); });
     menu.addItem("Scanner", "scan", [] { runScannerBrands(); });
     menu.addItem("TV-B-Gone", "tv", [] { runTvBg(); });
 #if ENABLE_OFFENSIVE

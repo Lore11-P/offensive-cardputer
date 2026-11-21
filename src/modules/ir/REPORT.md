@@ -29,11 +29,29 @@
   `RC5`, `RC5X`, `RC6`, `JVC`, `Kaseikyo`, `RCA`, raw). `NEC42`, `Samsung36` e
   `Pioneer` non vengono inviati come frame a 32 bit: compaiono come `[n/d]` con
   messaggio "Protocollo non supportato".
-- Raw: massimo 512 valori per comando, file oltre 64 KB rifiutati con messaggio
-  esplicito, nessuna copia di `rawData` nelle lambda del menu (riferimento al
-  vettore dei comandi); il testo del file viene liberato dopo il parsing.
+- Parser IR senza copia del file in RAM: `File` letto a blocchi da 256 byte,
+  una riga per volta (buffer massimo 3.584 byte), nessun `std::istringstream`
+  sul contenuto. Gate `ESP.getFreeHeap()` a 64 KB con messaggio esplicito;
+  file oltre 64 KB rifiutati con messaggio; nessuna copia di `rawData` nelle
+  lambda del menu (riferimento al vettore dei comandi).
+- Raw: limite di **512 valori per comando** e budget di **16.384 valori per
+  file** (~32 KB). Un comando raw oltre 512 non viene inviato: compare come
+  `[raw >512]` ed è disabilitato. Il budget evita che decine di comandi raw
+  saturino l'heap; i comandi oltre budget sono anch'essi non inviabili.
+- Preferiti: il backend (`sd|` o `lfs|`) è salvato insieme al path in NVS.
+  Se la microSD non è inserita i preferiti SD non vengono cancellati né mostrati;
+  tornano disponibili al reinserimento. I vecchi preferiti senza prefisso
+  restano validi.
+- SIRC20 corretto: `device = address & 0x1F`,
+  `extended = (address >> 5) & 0xFF`, passati a `encodeSony(20, ...)`
+  (1.062 comandi non perdono più l'extended address).
+- Ricerca: titolo `categoria / marca / modello`, quota 10 per categoria e 3
+  per marca, merge round-robin fino a 40 risultati, dedup per path. "samsung"
+  non esaurisce più il cap nella sola TV.
+- Categorie e marche vuote non compaiono; ogni marca mostra il numero di
+  telecomandi. Voce **Database IR** con conteggio on-device per categoria.
 - `include/Storage.h` e `src/utils/Storage.cpp` **non sono stati modificati**:
-  `storage::list`, `exists` e `readText` già uniscono LittleFS e SD.
+  `storage::list`, `exists`, `readText` e `openRead` già uniscono LittleFS e SD.
 
 ## Conteggi
 
@@ -80,16 +98,19 @@ Mappatura usata per l'import:
   `X` canale giù (invio immediato, `ENTER` ripete).
 - `F` aggiunge/rimuove il telecomando dai preferiti.
 - `ESC` torna indietro.
-- **Cerca** cerca marca e modello in tutte le categorie.
+- **Cerca** cerca marca e modello in tutte le categorie; i risultati mostrano
+  la categoria e sono distribuiti tra le categorie.
 - **Scanner** → categoria → marca invia il tasto Power di ogni telecomando.
+- **Database IR** conta i file visibili per categoria (verifica on-device).
 
 ## Firmware
 
 - Build `cardputer-adv-offensive`: **SUCCESS**.
-- Flash usata: **2.362.793 byte** su 2.621.440 (90,1%); `firmware.bin`
-  2.363.152 byte (2,25 MB).
+- Flash usata: **2.367.737 byte** su 2.621.440 (90,3%); `firmware.bin`
+  2.368.096 byte (2,26 MB).
 - Baseline stesso worktree senza le modifiche IR: 2.358.193 byte.
-  Delta feature: **+4.600 byte (4,49 KiB)**, sotto il limite di ~5 KB.
+  Delta feature: **+9.544 byte (9,3 KiB)**. La prima stesura era +4.600 byte;
+  i fix di memoria/robustezza di questa revisione aggiungono ~4,8 KB.
 - RAM statica invariata: 115.520 byte (35,3%).
 
 ## Test
@@ -104,6 +125,16 @@ Mappatura usata per l'import:
   I climatizzatori usano solo NEC/NECext (già supportati).
 - File più grande: 67.357 byte (`Clima/Hisense/Hisense_DG11J1-99_fahrenheit.ir`),
   rifiutato con messaggio esplicito; gli altri 2.254 file sono sotto 64 KB.
+- Parser host (stessa logica del firmware) su tutti i 2.255 file: 44.719 comandi
+  letti, **129 comandi in 42 file** con raw >512 marcati `[raw >512]` e non
+  inviabili; nessun comando valido scartato dal budget.
+- File grandi verificati senza abort: `NEC_RU_M124.ir` 60.922 B (53 comandi,
+  8 raw >512), `JVC_HR-J700E.ir` 52.840 B (40 comandi, 0 raw >512),
+  `Hisense_DG11J1-99_celsius.ir` 51.298 B (35 comandi, 0 raw >512).
+- Deduplica preferiti: i path `sd|` restano in NVS a SD rimossa; il tester può
+  verificare reinserendo la card che i 20 slot siano ancora pieni.
+- SIRC20: 1.062 comandi ora includono i bit extended; verifica suggerita su
+  TV Sony con telecomando a 20 bit.
 
 Test manuali suggeriti:
 
@@ -113,15 +144,25 @@ Test manuali suggeriti:
    e ripresa puntino ancora a `/ir/<marca>/<file>.ir`.
 3. Aprire lo stesso telecomando da SD, aggiungerlo ai preferiti, riavviare e
    verificare la ripresa.
-4. Cercare "samsung" e "split": i risultati devono includere TV e Clima.
+4. Cercare "samsung" e "split": i risultati devono mostrare categorie diverse
+   (TV, Clima, Audio) e non solo le prime 40 voci TV.
 5. Inviare Power/Vol su un dispositivo proprio e verificare che i comandi
-   `[n/d]` (NEC42, Pioneer) mostrino l'avviso invece di trasmettere.
+   `[n/d]` (NEC42, Pioneer) e `[raw >512]` non trasmettano.
+6. Aprire `NEC_RU_M124.ir`, `JVC_HR-J700E.ir` e `Hisense_..._celsius.ir` con
+   poca heap libera: devono aprirsi o mostrare "Memoria insufficiente", mai
+   resettare.
+7. `Database IR`: il totale deve essere 2.015 con SD inserita, 307 senza SD.
 
 ## Limiti
 
 - Nessun test su hardware reale in questa sessione: build e simulazione host.
 - 1 file oltre 64 KB non è apribile; 124 segnali NEC42 e 180 Pioneer sono
   marcati non supportati (nessun falso invio).
+- 129 comandi raw oltre 512 valori sono volutamente non inviabili
+  (`[raw >512]`): il protocollo raw accetta al massimo 512 valori per comando.
+- Il budget di 16.384 valori raw per file può rendere `[n/d]` i comandi raw di
+  file con moltissime varianti; il file resta apribile e i comandi parsed
+  funzionano. Alzarlo richiede più heap (32 KB attuali di raw).
 - `Altro` è una categoria aggiuntiva rispetto alle sette richieste, necessaria
   per includere il resto del database senza duplicare `_Converted_`.
 - Le marche del vecchio albero piatto restano sempre sotto `TV`; non c'è
