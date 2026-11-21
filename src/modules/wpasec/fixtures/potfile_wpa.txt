@@ -1,0 +1,3 @@
+# Fixture WPA-SEC: riga hashcat/WPA* (compatibilita'), stesso BSSID del file colon.
+# MAC e hash inventati: nessuna rete reale.
+WPA*01*00112233445566778899aabbccddeeff*020000000001*020000000002*4f524249542d54455354***:test-password

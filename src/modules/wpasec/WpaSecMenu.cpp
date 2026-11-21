@@ -6,9 +6,13 @@
 
 #include <Arduino.h>
 #include <FS.h>
+#include <LittleFS.h>
+#include <SD.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <esp_system.h>
+#include <mbedtls/ssl.h>
+#include <mbedtls/x509.h>
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
@@ -43,7 +47,7 @@ constexpr const char* kDir = "/wpasec";
 constexpr const char* kKeyPath = "/wpasec/key.txt";
 constexpr const char* kUploadedPath = "/wpasec/uploaded.txt";
 constexpr const char* kPotfilePath = "/wpasec/potfile.txt";
-constexpr const char* kPotfileTmpPath = "/wpasec/potfile.tmp";
+constexpr const char* kPotfileNewPath = "/wpasec/potfile.new";
 
 // Gate TLS: mbedTLS usa ~20 KB di buffer interni piu' lo handshake.
 constexpr uint32_t kMinFreeHeap = 40 * 1024;
@@ -52,6 +56,7 @@ constexpr uint32_t kMinMaxBlock = 32 * 1024;
 constexpr uint32_t kNetTimeoutMs = 20000;
 constexpr uint32_t kHandshakeTimeoutMs = 12000;
 constexpr size_t kUploadChunk = 1024;
+constexpr size_t kUploadResponseMax = 16 * 1024;
 constexpr size_t kMaxUploadedBytes = 16 * 1024;
 constexpr size_t kMaxPotfileBytes = 4 * 1024 * 1024;
 constexpr size_t kMaxPotfileScan = 256 * 1024;
@@ -76,10 +81,11 @@ p/SgguMh1YQdc4acLa/KNJvxn7kjNuK8YAOdgLOaVsjh4rsUecrNIdSUtUlD
 -----END CERTIFICATE-----
 )";
 
-bool g_caFailed = false;     // CA non usabile: si prosegue senza verifica
+bool g_caFailed = false;     // ultima verifica CA fallita (solo per la UI)
 bool g_clockFailed = false;  // NTP non disponibile: certificato non verificabile
 bool g_clockAttempted = false;  // NTP gia' tentato in questa sessione
 bool g_insecureAck = false;  // l'utente ha accettato TLS senza verifica
+bool g_networkUsed = false;  // il modulo ha aperto/avviato la radio
 
 // ---------------------------------------------------------------------------
 //  Utility stringhe
@@ -365,25 +371,186 @@ private:
 //  Potfile: indice leggero delle password trovate
 // ---------------------------------------------------------------------------
 
-uint64_t hashPrefix(const std::string& text, size_t len) {
-    len = std::min(len, text.size());
-    uint64_t hash = 1469598103934665603ull;
-    for (size_t i = 0; i < len; ++i) {
-        const unsigned char c = static_cast<unsigned char>(lowerChar(text[i]));
-        hash ^= c;
-        hash *= 1099511628211ull;
+// Estrae un MAC da 12 cifre hex, con o senza ':' / '-'.
+bool parseMacToken(const std::string& token, uint64_t& mac) {
+    std::string hex;
+    hex.reserve(12);
+    for (char c : token) {
+        if (c == ':' || c == '-' || c == '.') {
+            continue;
+        }
+        if (!std::isxdigit(static_cast<unsigned char>(c))) {
+            return false;
+        }
+        hex.push_back(lowerChar(c));
     }
-    return hash;
+    if (hex.size() != 12) {
+        return false;
+    }
+    mac = std::strtoull(hex.c_str(), nullptr, 16);
+    return true;
+}
+
+// MAC all'inizio della riga: accetta 12 hex, aa:bb:cc:dd:ee:ff o
+// aabb.ccdd.eeff e restituisce quanti caratteri ha consumato.
+bool macAtStart(const std::string& text, uint64_t& mac, size_t& consumed) {
+    if (text.size() >= 17 &&
+        (text[2] == ':' || text[2] == '-') &&
+        (text[5] == ':' || text[5] == '-') &&
+        (text[8] == ':' || text[8] == '-') &&
+        (text[11] == ':' || text[11] == '-') &&
+        (text[14] == ':' || text[14] == '-') &&
+        parseMacToken(text.substr(0, 17), mac)) {
+        consumed = 17;
+        return true;
+    }
+    if (text.size() >= 14 && text[4] == '.' && text[9] == '.' &&
+        parseMacToken(text.substr(0, 14), mac)) {
+        consumed = 14;
+        return true;
+    }
+    if (text.size() >= 12 && parseMacToken(text.substr(0, 12), mac)) {
+        consumed = 12;
+        return true;
+    }
+    return false;
+}
+
+// BSSID del record: primo campo nel formato reale
+// "bssid:station:ssid:password", campo 3 nelle righe WPA*.
+bool bssidFromPotLine(const std::string& line, uint64_t& bssid) {
+    const std::string text = trim(line);
+    if (text.empty() || text[0] == '#') {
+        return false;
+    }
+    if (text.rfind("WPA*", 0) == 0) {
+        size_t start = 0;
+        for (int field = 0; field <= 3; ++field) {
+            const size_t end = text.find('*', start);
+            if (field == 3) {
+                const std::string token =
+                    text.substr(start, end == std::string::npos ? std::string::npos
+                                                                : end - start);
+                return parseMacToken(token, bssid);
+            }
+            if (end == std::string::npos) {
+                return false;
+            }
+            start = end + 1;
+        }
+        return false;
+    }
+    size_t consumed = 0;
+    if (!macAtStart(text, bssid, consumed) || consumed >= text.size() ||
+        text[consumed] != ':') {
+        return false;
+    }
+    return true;
+}
+
+// Password: ultimo campo del formato bssid:station:ssid:password, oppure
+// tutto dopo il primo ':' nelle righe WPA* (l'hash non contiene ':').
+bool potfileLinePassword(const std::string& line, std::string& out) {
+    const std::string text = trim(line);
+    if (text.rfind("WPA*", 0) == 0) {
+        const size_t colon = text.find(':');
+        if (colon == std::string::npos || colon + 1 > text.size()) {
+            return false;
+        }
+        out = text.substr(colon + 1);
+        return true;
+    }
+    // Formato reale: BSSID (12 hex) ':' station (12 hex) ':' ssid ':' password.
+    // L'SSID puo' contenere ':', quindi la password e' l'ultimo campo.
+    uint64_t bssid = 0;
+    uint64_t station = 0;
+    if (text.size() > 26 && text[12] == ':' && text[25] == ':' &&
+        parseMacToken(text.substr(0, 12), bssid) &&
+        parseMacToken(text.substr(13, 12), station)) {
+        const size_t last = text.rfind(':');
+        if (last != std::string::npos && last >= 26) {
+            out = text.substr(last + 1);
+            return true;
+        }
+    }
+
+    // Variante con BSSID/station in notazione MAC (aa:bb:cc:dd:ee:ff).
+    if (text.size() > 36 && text[17] == ':' && text[35] == ':' &&
+        parseMacToken(text.substr(0, 17), bssid) &&
+        parseMacToken(text.substr(18, 17), station)) {
+        const size_t last = text.rfind(':');
+        if (last != std::string::npos && last >= 36) {
+            out = text.substr(last + 1);
+            return true;
+        }
+    }
+
+    const size_t first = text.find(':');
+    if (first == std::string::npos) {
+        return false;
+    }
+    const size_t second = text.find(':', first + 1);
+    if (second == std::string::npos) {
+        return false;
+    }
+    const size_t third = text.find(':', second + 1);
+    if (third == std::string::npos) {
+        return false;
+    }
+    out = text.substr(third + 1);
+    return true;
+}
+
+bool looksLikeHtmlDocument(const std::string& text) {
+    const std::string lower = lowerCopy(text.substr(0, 1024));
+    return lower.find("<!doctype") != std::string::npos ||
+           lower.find("<html") != std::string::npos ||
+           lower.find("<head") != std::string::npos ||
+           lower.find("<body") != std::string::npos;
+}
+
+bool hasErrorWords(const std::string& lower) {
+    return lower.find("not a valid") != std::string::npos ||
+           lower.find("no valid") != std::string::npos ||
+           lower.find("invalid") != std::string::npos ||
+           lower.find("error") != std::string::npos ||
+           lower.find("rejected") != std::string::npos ||
+           lower.find("bad capture") != std::string::npos ||
+           lower.find("not authorized") != std::string::npos ||
+           lower.find("no capture") != std::string::npos ||
+           lower.find("failed") != std::string::npos ||
+           lower.find("too large") != std::string::npos ||
+           lower.find("forbidden") != std::string::npos ||
+           lower.find("not submitted") != std::string::npos ||
+           lower.find("not accepted") != std::string::npos ||
+           lower.find("not uploaded") != std::string::npos;
+}
+
+bool hasSuccessWords(const std::string& lower) {
+    if (lower == "ok" || lower.rfind("ok ", 0) == 0 || lower.rfind("ok.", 0) == 0) {
+        return true;
+    }
+    return lower.find("accepted") != std::string::npos ||
+           lower.find("queued") != std::string::npos ||
+           lower.find("submitted") != std::string::npos ||
+           lower.find("uploaded") != std::string::npos ||
+           lower.find("success") != std::string::npos ||
+           lower.find("received") != std::string::npos ||
+           lower.find("thank") != std::string::npos ||
+           lower.find("processing") != std::string::npos ||
+           lower.find("stored") != std::string::npos ||
+           lower.find("added") != std::string::npos ||
+           lower.find("completed") != std::string::npos;
 }
 
 struct CrackIndex {
-    std::vector<uint64_t> hashes;
+    std::vector<uint64_t> bssids;
     uint32_t lines = 0;
     bool available = false;
     bool truncated = false;
 
     bool build() {
-        hashes.clear();
+        bssids.clear();
         lines = 0;
         available = false;
         truncated = false;
@@ -394,18 +561,20 @@ struct CrackIndex {
         if (!file) {
             return false;
         }
-        hashes.reserve(256);
+        bssids.reserve(256);
         LineReader reader(file);
         std::string line;
         size_t scanned = 0;
         while (reader.next(line, 512)) {
             scanned += line.size() + 1;
-            ++lines;
             if (!line.empty() && line[0] != '#') {
-                const size_t colon = line.find(':');
-                if (colon != std::string::npos && colon > 0) {
-                    if (hashes.size() < kCrackSlots) {
-                        hashes.push_back(hashPrefix(line, colon));
+                uint64_t bssid = 0;
+                std::string password;
+                if (bssidFromPotLine(line, bssid) &&
+                    potfileLinePassword(line, password)) {
+                    ++lines;
+                    if (bssids.size() < kCrackSlots) {
+                        bssids.push_back(bssid);
                     } else {
                         truncated = true;
                         break;
@@ -418,32 +587,21 @@ struct CrackIndex {
             }
         }
         file.close();
-        std::sort(hashes.begin(), hashes.end());
-        hashes.erase(std::unique(hashes.begin(), hashes.end()), hashes.end());
+        std::sort(bssids.begin(), bssids.end());
+        bssids.erase(std::unique(bssids.begin(), bssids.end()), bssids.end());
         available = true;
         return true;
     }
 
-    bool contains(uint64_t hash) const {
-        return std::binary_search(hashes.begin(), hashes.end(), hash);
+    bool contains(uint64_t bssid) const {
+        return std::binary_search(bssids.begin(), bssids.end(), bssid);
     }
 };
 
-bool prefixEqualsNoCase(const std::string& line, size_t len, const std::string& hash) {
-    if (len != hash.size()) {
-        return false;
-    }
-    for (size_t i = 0; i < len; ++i) {
-        if (lowerChar(line[i]) != lowerChar(hash[i])) {
-            return false;
-        }
-    }
-    return true;
-}
-
-// Cerca la password associata a una riga hash nel potfile.
+// Cerca la password associata al BSSID di una riga hash nel potfile.
 bool potfilePassword(const std::string& hashLine, std::string& out) {
-    if (hashLine.empty()) {
+    uint64_t wanted = 0;
+    if (!bssidFromPotLine(hashLine, wanted)) {
         return false;
     }
     if (!storage::exists(kPotfilePath, useSD())) {
@@ -459,10 +617,9 @@ bool potfilePassword(const std::string& hashLine, std::string& out) {
     bool found = false;
     while (reader.next(line, 512)) {
         scanned += line.size() + 1;
-        const size_t colon = line.find(':');
-        if (colon != std::string::npos && colon > 0 &&
-            prefixEqualsNoCase(line, colon, hashLine)) {
-            out = line.substr(colon + 1);
+        uint64_t bssid = 0;
+        if (bssidFromPotLine(line, bssid) && bssid == wanted &&
+            potfileLinePassword(line, out)) {
             found = true;
             break;
         }
@@ -478,20 +635,37 @@ bool potfileLooksValid(const std::string& sample) {
     if (sample.empty()) {
         return true;
     }
+    if (looksLikeHtmlDocument(sample)) {
+        return false;
+    }
+    bool sawData = false;
     size_t pos = 0;
     while (pos < sample.size()) {
         const size_t end = sample.find('\n', pos);
         const std::string line =
             trim(sample.substr(pos, end == std::string::npos ? std::string::npos : end - pos));
-        if (line.rfind("WPA*", 0) == 0) {
-            return true;
+        if (!line.empty() && line[0] != '#') {
+            sawData = true;
+            uint64_t bssid = 0;
+            std::string password;
+            if (bssidFromPotLine(line, bssid) &&
+                potfileLinePassword(line, password)) {
+                if (line.rfind("WPA*", 0) == 0 ||
+                    std::count(line.begin(), line.end(), ':') >= 3) {
+                    return true;
+                }
+            }
+            if (hasErrorWords(lowerCopy(line))) {
+                return false;
+            }
         }
         if (end == std::string::npos) {
             break;
         }
         pos = end + 1;
     }
-    return false;
+    // Solo righe vuote/commenti: potfile valido senza risultati.
+    return !sawData;
 }
 
 // ---------------------------------------------------------------------------
@@ -581,7 +755,7 @@ struct Capture {
 };
 
 bool captureCracked(const std::string& name, const CrackIndex& index, std::string* password) {
-    if (!index.available || index.hashes.empty()) {
+    if (!index.available || index.bssids.empty()) {
         return false;
     }
     std::string target = name;
@@ -605,7 +779,8 @@ bool captureCracked(const std::string& name, const CrackIndex& index, std::strin
             continue;
         }
         ++count;
-        if (index.contains(hashPrefix(trimmed, trimmed.size()))) {
+        uint64_t bssid = 0;
+        if (bssidFromPotLine(trimmed, bssid) && index.contains(bssid)) {
             match = trimmed;
             break;
         }
@@ -908,17 +1083,27 @@ bool readBodyDecoded(NetReader& reader, const ResponseHead& head, size_t maxByte
     }
 }
 
-std::string readSnippet(WiFiClient& client, const ResponseHead& head, size_t maxBytes) {
-    NetReader reader(client, 8000);
-    std::string out;
+struct BodySample {
+    std::string text;
     size_t total = 0;
-    readBodyDecoded(reader, head, maxBytes,
-                    [&](const uint8_t* data, size_t len) -> bool {
-                        out.append(reinterpret_cast<const char*>(data), len);
-                        return true;
-                    },
-                    total);
-    return out;
+    bool complete = false;
+};
+
+BodySample readBodySample(WiFiClient& client, const ResponseHead& head, size_t maxBytes) {
+    BodySample sample;
+    NetReader reader(client, 8000);
+    sample.complete = readBodyDecoded(
+        reader, head, maxBytes,
+        [&](const uint8_t* data, size_t len) -> bool {
+            sample.text.append(reinterpret_cast<const char*>(data), len);
+            return true;
+        },
+        sample.total);
+    return sample;
+}
+
+std::string readSnippet(WiFiClient& client, const ResponseHead& head, size_t maxBytes) {
+    return readBodySample(client, head, maxBytes).text;
 }
 
 bool sendAll(WiFiClient& client, const uint8_t* data, size_t len) {
@@ -949,37 +1134,68 @@ bool sendString(WiFiClient& client, const std::string& text) {
 
 enum class OpenStatus { Ok, Cancelled, Error };
 
-// Apre il TLS. Prova la CA pinnata; se fallisce chiede conferma esplicita e
-// ripiega su setInsecure() (la connessione resta cifrata ma non autenticata).
-OpenStatus openTls(WiFiClientSecure& client) {
+// Solo errori X.509 / data: DNS, TCP, timeout e OOM non devono mai portare a
+// setInsecure(). L'allocazione X.509 e gli errori SSL di memoria sono esclusi.
+bool isCertificateError(int code) {
+    if (code == 0) {
+        return false;
+    }
+    if (code == MBEDTLS_ERR_X509_ALLOC_FAILED) {
+        return false;
+    }
+    if (code == MBEDTLS_ERR_X509_CERT_VERIFY_FAILED ||
+        code == MBEDTLS_ERR_SSL_BAD_HS_CERTIFICATE) {
+        return true;
+    }
+    return code <= -0x2700 && code > -0x4000;
+}
+
+// Apre il TLS. La CA viene ritentata a ogni operazione; il fallback insicuro
+// scatta solo per un errore di certificato/data, con conferma esplicita.
+OpenStatus openTls(WiFiClientSecure& client, bool& verified, std::string& error) {
+    verified = false;
+    error.clear();
     client.setHandshakeTimeout(kHandshakeTimeoutMs);
     client.setTimeout(20);
     client.setNoDelay(true);
 
-    if (!g_caFailed) {
-        client.setCACert(kRootCa);
-        if (client.connect(kHost, kPort) == 1) {
-            return OpenStatus::Ok;
-        }
-        client.stop();
-        g_caFailed = true;
-        logger::warn("WPA-SEC: verifica CA fallita, fallback senza verifica");
+    client.setCACert(kRootCa);
+    if (client.connect(kHost, kPort) == 1) {
+        g_caFailed = false;
+        verified = true;
+        return OpenStatus::Ok;
     }
 
+    char detailBuffer[96] = {};
+    const int code = client.lastError(detailBuffer, sizeof(detailBuffer));
+    client.stop();
+    const std::string detail =
+        code != 0 && detailBuffer[0] != '\0' ? std::string(detailBuffer)
+                                             : std::string("DNS/TCP o timeout");
+    if (!isCertificateError(code)) {
+        g_caFailed = false;
+        error = detail;
+        logger::warn("WPA-SEC: TLS non disponibile: %s", error.c_str());
+        return OpenStatus::Error;
+    }
+
+    g_caFailed = true;
+    logger::warn("WPA-SEC: CA fallita (%d): %s", code, detail.c_str());
     if (!g_insecureAck) {
         std::vector<std::string> lines;
         lines.push_back("!TLS senza verifica certificato");
         if (g_clockFailed) {
             lines.push_back("Orologio non sincronizzato:");
-            lines.push_back("il certificato non e' verificabile.");
+            lines.push_back("certificato non verificabile.");
         } else {
-            lines.push_back("CA GTS Root R4 non valida");
-            lines.push_back("per wpa-sec.stanev.org.");
+            lines.push_back("Certificato non valido:");
+            lines.push_back(shorten(detail, 34));
         }
         lines.push_back("Il traffico resta cifrato ma non");
         lines.push_back("autenticato: un MITM puo' leggere");
         lines.push_back("la chiave API. Continuare?");
         if (!ui::confirm("TLS senza verifica", lines, kModuleName)) {
+            error = "TLS non verificato: annullato.";
             return OpenStatus::Cancelled;
         }
         g_insecureAck = true;
@@ -987,7 +1203,15 @@ OpenStatus openTls(WiFiClientSecure& client) {
 
     client.setInsecure();
     if (client.connect(kHost, kPort) == 1) {
+        verified = false;
         return OpenStatus::Ok;
+    }
+    char fallbackBuffer[96] = {};
+    const int fallbackCode = client.lastError(fallbackBuffer, sizeof(fallbackBuffer));
+    if (fallbackCode != 0 && fallbackCode != code && fallbackBuffer[0] != '\0') {
+        error = fallbackBuffer;
+    } else {
+        error = "TLS: connessione non riuscita (DNS/TCP/timeout).";
     }
     client.stop();
     return OpenStatus::Error;
@@ -1123,11 +1347,11 @@ bool ensureClock() {
     }
     logger::warn("WPA-SEC: NTP non disponibile, TLS senza verifica");
     g_clockFailed = true;
-    g_caFailed = true;  // inutile tentare la CA con un orologio errato
     return false;
 }
 
 bool prepareNetwork() {
+    g_networkUsed = true;
     if (!wifisetup::ensureConnected(true, kModuleName)) {
         ui::message(kModuleName,
                     {"!Serve una connessione WiFi.", "Configura la rete da",
@@ -1160,8 +1384,10 @@ bool prepareNetwork() {
 struct UploadResult {
     bool ok = false;
     bool cancelled = false;
+    bool tlsVerified = false;
     int status = 0;
     std::string note;
+    std::string error;
     std::string response;
 };
 
@@ -1187,15 +1413,20 @@ UploadResult uploadFile(const Capture& item, const std::string& key) {
     for (int hop = 0; hop < 3; ++hop) {
         drawWork("Upload", item.name, "Connessione TLS", 0.0f, "", g_caFailed);
         WiFiClientSecure client;
-        const OpenStatus state = openTls(client);
+        bool verified = false;
+        std::string tlsError;
+        const OpenStatus state = openTls(client, verified, tlsError);
+        result.tlsVerified = verified;
         if (state == OpenStatus::Cancelled) {
             result.cancelled = true;
             result.note = "TLS non verificato: annullato.";
+            result.error = tlsError;
             file.close();
             return result;
         }
         if (state == OpenStatus::Error) {
             result.note = "Connessione TLS non riuscita.";
+            result.error = tlsError;
             file.close();
             return result;
         }
@@ -1314,17 +1545,27 @@ UploadResult uploadFile(const Capture& item, const std::string& key) {
             continue;
         }
 
-        const std::string raw = readSnippet(client, head, 480);
+        const bool tooLarge =
+            head.contentLength > static_cast<long>(kUploadResponseMax);
+        const BodySample sample = readBodySample(client, head, kUploadResponseMax);
         client.stop();
-        result.response = cleanResponse(raw, key);
-        result.ok = head.status == 200 || head.status == 201 || head.status == 202;
-        if (result.ok) {
-            const std::string lower = lowerCopy(result.response);
-            if (lower.find("invalid key") != std::string::npos ||
-                lower.find("not authorized") != std::string::npos ||
-                lower.find("error:") != std::string::npos) {
-                result.ok = false;
-            }
+        result.response = cleanResponse(sample.text, key);
+        const std::string lower = lowerCopy(result.response);
+        const bool httpOk = head.status == 200 || head.status == 201 || head.status == 202;
+
+        if (!sample.complete) {
+            result.note = tooLarge ? "Risposta troppo grande."
+                                   : "Risposta incompleta o troppo grande.";
+        } else if (looksLikeHtmlDocument(sample.text)) {
+            result.note = "Il server ha restituito HTML: file lasciato locale.";
+        } else if (!httpOk) {
+            result.note = "HTTP " + std::to_string(head.status) + ".";
+        } else if (hasErrorWords(lower)) {
+            result.note = "Il server ha rifiutato la cattura.";
+        } else if (!hasSuccessWords(lower)) {
+            result.note = "Esito non riconosciuto: file lasciato locale.";
+        } else {
+            result.ok = true;
         }
         file.close();
         return result;
@@ -1342,44 +1583,41 @@ UploadResult uploadFile(const Capture& item, const std::string& key) {
 struct DownloadResult {
     bool ok = false;
     bool cancelled = false;
+    bool tlsVerified = false;
     size_t size = 0;
     uint32_t lines = 0;
     uint32_t hashes = 0;
     bool truncated = false;
     std::string note;
+    std::string error;
     std::string response;
 };
 
-bool copyFile(const std::string& from, const std::string& to, bool sd) {
-    File in = storage::openRead(from, sd);
-    if (!in) {
+bool backendRename(const std::string& from, const std::string& to, bool sd) {
+    if (sd) {
+        return storage::hasSD() && SD.rename(from.c_str(), to.c_str());
+    }
+    return storage::hasLittleFS() && LittleFS.rename(from.c_str(), to.c_str());
+}
+
+// Rename diretto (atomico dove il filesystem lo supporta). Se il rename su
+// file esistente viene rifiutato, si usa un .bak e si ripristina in caso di
+// errore, senza mai lasciare il potfile vecchio sovrascritto a meta'.
+bool replaceFileAtomic(const std::string& from, const std::string& to, bool sd) {
+    if (backendRename(from, to, sd)) {
+        return true;
+    }
+    const std::string backup = to + ".bak";
+    storage::removeFile(backup, sd);
+    if (!backendRename(to, backup, sd)) {
         return false;
     }
-    File out = storage::openWrite(to, sd);
-    if (!out) {
-        in.close();
-        return false;
+    if (backendRename(from, to, sd)) {
+        storage::removeFile(backup, sd);
+        return true;
     }
-    uint8_t buffer[512];
-    bool ok = true;
-    for (;;) {
-        const int got = in.read(buffer, sizeof(buffer));
-        if (got < 0) {
-            ok = false;
-            break;
-        }
-        if (got == 0) {
-            break;
-        }
-        if (out.write(buffer, static_cast<size_t>(got)) != static_cast<size_t>(got)) {
-            ok = false;
-            break;
-        }
-    }
-    in.close();
-    out.flush();
-    out.close();
-    return ok;
+    backendRename(backup, to, sd);
+    return false;
 }
 
 DownloadResult downloadPotfile(const std::string& key) {
@@ -1391,14 +1629,19 @@ DownloadResult downloadPotfile(const std::string& key) {
     for (int hop = 0; hop < 3; ++hop) {
         drawWork("Potfile", kHost, "Connessione TLS", 0.0f, "", g_caFailed);
         WiFiClientSecure client;
-        const OpenStatus state = openTls(client);
+        bool verified = false;
+        std::string tlsError;
+        const OpenStatus state = openTls(client, verified, tlsError);
+        result.tlsVerified = verified;
         if (state == OpenStatus::Cancelled) {
             result.cancelled = true;
             result.note = "TLS non verificato: annullato.";
+            result.error = tlsError;
             return result;
         }
         if (state == OpenStatus::Error) {
             result.note = "Connessione TLS non riuscita.";
+            result.error = tlsError;
             return result;
         }
 
@@ -1458,7 +1701,7 @@ DownloadResult downloadPotfile(const std::string& key) {
         }
 
         storage::mkdir(kDir, sd);
-        File out = storage::openWrite(kPotfileTmpPath, sd);
+        File out = storage::openWrite(kPotfileNewPath, sd);
         if (!out) {
             client.stop();
             result.note = "Scrittura su SD non riuscita.";
@@ -1500,39 +1743,52 @@ DownloadResult downloadPotfile(const std::string& key) {
 
         const bool decoded = readBodyDecoded(reader, head, kMaxPotfileBytes, sink, written);
         out.flush();
+        const int writeError = out.getWriteError();
         out.close();
         client.stop();
+        const size_t newSize = storage::fileSize(kPotfileNewPath, sd);
 
         if (result.cancelled) {
-            storage::removeFile(kPotfileTmpPath, sd);
+            storage::removeFile(kPotfileNewPath, sd);
             result.note = "Download annullato.";
             return result;
         }
-        if (!decoded) {
-            storage::removeFile(kPotfileTmpPath, sd);
-            result.note = reader.timedOut() ? "Timeout del server."
-                                            : "Download incompleto.";
+        if (!decoded || writeError != 0 || newSize != written) {
+            storage::removeFile(kPotfileNewPath, sd);
+            result.note = writeError != 0 || newSize != written
+                              ? "Scrittura potfile non riuscita."
+                              : (reader.timedOut() ? "Timeout del server."
+                                                   : "Download incompleto.");
             return result;
         }
         if (!potfileLooksValid(sample)) {
-            storage::removeFile(kPotfileTmpPath, sd);
+            storage::removeFile(kPotfileNewPath, sd);
             result.response = cleanResponse(sample, key);
             result.note = "Risposta non valida: chiave o servizio.";
             return result;
         }
-        if (!copyFile(kPotfileTmpPath, kPotfilePath, sd)) {
-            storage::removeFile(kPotfileTmpPath, sd);
+        if (written == 0) {
+            if (!ui::confirm("Potfile vuoto",
+                             {"Il server ha restituito 0 byte.",
+                              "Salvare un potfile vuoto?", "Procedere?"},
+                             kModuleName)) {
+                storage::removeFile(kPotfileNewPath, sd);
+                result.note = "Potfile vuoto non salvato.";
+                return result;
+            }
+        }
+        if (!replaceFileAtomic(kPotfileNewPath, kPotfilePath, sd)) {
+            storage::removeFile(kPotfileNewPath, sd);
             result.note = "Salvataggio potfile non riuscito.";
             return result;
         }
-        storage::removeFile(kPotfileTmpPath, sd);
 
         result.ok = true;
         result.size = storage::fileSize(kPotfilePath, sd);
         CrackIndex index;
         if (index.build()) {
             result.lines = index.lines;
-            result.hashes = static_cast<uint32_t>(index.hashes.size());
+            result.hashes = static_cast<uint32_t>(index.bssids.size());
             result.truncated = index.truncated;
         }
         return result;
@@ -1745,18 +2001,21 @@ void uploadFlow() {
     std::vector<std::string> message;
     if (result.cancelled) {
         message.push_back("Operazione annullata.");
-        message.push_back(result.note);
+        if (!result.note.empty()) {
+            message.push_back(result.note);
+        }
+        if (!result.error.empty()) {
+            message.push_back(shorten(result.error, 37));
+        }
     } else if (result.ok) {
         message.push_back(">File inviato.");
         message.push_back("File: " + shorten(item.name, 30));
         message.push_back("HTTP " + std::to_string(result.status) +
-                          (g_caFailed ? "  TLS non verificato" : "  TLS verificato"));
+                          (result.tlsVerified ? "  TLS verificato"
+                                              : "  TLS non verificato"));
         const auto wrapped = wrapForUi(result.response, 36, 3);
         for (const auto& line : wrapped) {
             message.push_back(line);
-        }
-        if (message.size() < 8 && result.response.empty()) {
-            message.push_back("Risposta vuota.");
         }
         if (!markUploaded(item.name, item.size)) {
             message.push_back("!Stato upload non salvato.");
@@ -1770,7 +2029,11 @@ void uploadFlow() {
         if (!result.note.empty()) {
             message.push_back(result.note);
         }
-        const auto wrapped = wrapForUi(result.response, 36, 3);
+        const auto errorLines = wrapForUi(result.error, 36, 2);
+        for (const auto& line : errorLines) {
+            message.push_back(line);
+        }
+        const auto wrapped = wrapForUi(result.response, 36, 2);
         for (const auto& line : wrapped) {
             message.push_back(line);
         }
@@ -1801,23 +2064,32 @@ void downloadFlow() {
     if (result.cancelled) {
         message.push_back("Download annullato.");
         message.push_back("Il potfile precedente resta valido.");
-        message.push_back(result.note);
+        if (!result.note.empty()) {
+            message.push_back(result.note);
+        }
+        if (!result.error.empty()) {
+            message.push_back(shorten(result.error, 37));
+        }
     } else if (result.ok) {
         message.push_back(">Potfile salvato.");
         message.push_back("Dimensione: " + formatSize(result.size));
         message.push_back("Righe: " + std::to_string(result.lines));
-        message.push_back("Hash con password: " + std::to_string(result.hashes));
+        message.push_back("Reti con password: " + std::to_string(result.hashes));
         if (result.truncated) {
             message.push_back("Scansione parziale (limite 256K).");
         }
-        message.push_back(g_caFailed ? "!TLS non verificato."
-                                     : "TLS verificato.");
+        message.push_back(result.tlsVerified ? "TLS verificato."
+                                             : "!TLS non verificato.");
     } else {
         message.push_back("!Download non riuscito.");
         if (!result.note.empty()) {
             message.push_back(result.note);
         }
-        const auto wrapped = wrapForUi(result.response, 36, 3);
+        const auto errorLines = wrapForUi(result.error, 36, 2);
+        for (const auto& line : errorLines) {
+            message.push_back(line);
+        }
+        const auto wrapped = wrapForUi(result.response, 36, 2);
         for (const auto& line : wrapped) {
             message.push_back(line);
         }
@@ -1930,14 +2202,16 @@ void statusFlow() {
     if (hasPotfile) {
         lines.push_back("Potfile: " + formatSize(storage::fileSize(kPotfilePath, sd)) +
                         ", " + std::to_string(index.lines) + " righe");
-        lines.push_back("Password: " + std::to_string(index.hashes.size()) +
+        lines.push_back("Reti con password: " + std::to_string(index.bssids.size()) +
                         (index.truncated ? " (parziale)" : ""));
     } else {
         lines.push_back("Potfile: assente");
-        lines.push_back("Password: nessuna");
+        lines.push_back("Reti con password: 0");
     }
     lines.push_back(std::string("TLS: ") +
-                    (g_caFailed ? "senza verifica!" : "CA GTS Root R4"));
+                    (g_clockFailed ? "NTP assente, CA da verificare"
+                                   : (g_caFailed ? "ultima CA fallita"
+                                                 : "CA GTS Root R4")));
     lines.push_back("Heap: " + formatHeap(ESP.getFreeHeap()) + " liberi, " +
                     formatHeap(ESP.getMaxAllocHeap()) + " blocco");
     lines.push_back(std::string("SD: ") + (storage::hasSD() ? "montata" : "LittleFS"));
@@ -1950,14 +2224,14 @@ void infoFlow() {
                  "Upload: POST /?submit&key=...",
                  "Potfile: GET /?api&dl=1&key=...",
                  "Multipart, campo 'file'.",
-                 "TLS: CA GTS R4 con fallback",
-                 "senza verifica (avviso).",
-                 "Chiave in chiaro su microSD.",
+                 "Potfile: bssid:sta:ssid:pass",
+                 "o righe WPA* (compatibilita').",
+                 "TLS: CA GTS R4, fallback avvisato.",
                  "Solo reti proprie/autorizzate."},
                 kModuleName);
 }
 
-// Controllo minimo delle due funzioni pure usate dal matching potfile.
+// Controllo minimo delle funzioni pure: chiave, BSSID e formati potfile.
 bool selfTest() {
     std::string key = "0123456789ABCDEF0123456789abcdef";
     if (!normalizeKey(key) || key != "0123456789abcdef0123456789abcdef") {
@@ -1967,12 +2241,62 @@ bool selfTest() {
     if (normalizeKey(shortKey)) {
         return false;
     }
-    return hashPrefix("AB:pass", 2) == hashPrefix("ab", 2);
+
+    uint64_t colonBssid = 0;
+    uint64_t wpaBssid = 0;
+    if (!bssidFromPotLine("020000000001:020000000002:ORBIT:TEST:test-pass",
+                          colonBssid) ||
+        !bssidFromPotLine(
+            "WPA*01*00112233445566778899aabbccddeeff*020000000001*020000000002*"
+            "4f524249542d54455354***:pass",
+            wpaBssid) ||
+        colonBssid != wpaBssid) {
+        return false;
+    }
+
+    std::string password;
+    // SSID con ':' e password ultimo campo.
+    if (!potfileLinePassword("020000000001:020000000002:ORBIT:TEST:test-pass",
+                             password) ||
+        password != "test-pass") {
+        return false;
+    }
+    if (!potfileLinePassword(
+            "WPA*01*00112233445566778899aabbccddeeff*020000000001*020000000002*"
+            "4f524249542d54455354***:pass",
+            password) ||
+        password != "pass") {
+        return false;
+    }
+
+    uint64_t colonMac = 0;
+    if (!bssidFromPotLine(
+            "02:00:00:00:00:01:02:00:00:00:00:02:ORBIT-TEST:test-pass",
+            colonMac) ||
+        colonMac != colonBssid ||
+        !potfileLinePassword(
+            "02:00:00:00:00:01:02:00:00:00:00:02:ORBIT-TEST:test-pass",
+            password) ||
+        password != "test-pass") {
+        return false;
+    }
+    if (potfileLooksValid("<html><body>bad</body></html>")) {
+        return false;
+    }
+    return hasErrorWords("not a valid capture") &&
+           hasSuccessWords("capture accepted") &&
+           potfileLooksValid("020000000001:020000000002:ORBIT-TEST:pass");
 }
 
 }  // namespace
 
 void runMenu() {
+    g_caFailed = false;
+    g_clockFailed = false;
+    g_clockAttempted = false;
+    g_insecureAck = false;
+    g_networkUsed = false;
+
     if (!storage::hasSD() && !storage::hasLittleFS()) {
         ui::message(kModuleName, {"!Nessun filesystem disponibile."}, "Menu principale");
         return;
@@ -1982,12 +2306,6 @@ void runMenu() {
         ui::message(kModuleName, {"!Errore interno del modulo."}, "Menu principale");
         return;
     }
-
-    g_caFailed = false;
-    g_clockFailed = false;
-    g_clockAttempted = false;
-    g_insecureAck = false;
-    const bool wasConnected = WiFi.status() == WL_CONNECTED;
 
     {
         MenuManager menu(kModuleName, "Menu principale");
@@ -2002,11 +2320,14 @@ void runMenu() {
         menu.run(true);
     }
 
-    // Libera la radio solo se e' stata accesa da questo modulo.
-    if (!wasConnected && WiFi.status() == WL_CONNECTED) {
-        logger::info("WPA-SEC: uscita, WiFi spento");
+    // Se il modulo ha toccato la radio, la si spegne sempre all'uscita,
+    // anche dopo timeout, errori o annullamenti.
+    if (g_networkUsed) {
+        logger::info("WPA-SEC: uscita, radio spenta");
         wifisetup::disconnect();
+        WiFi.mode(WIFI_OFF);
     }
+    g_networkUsed = false;
     g_caFailed = false;
     g_clockFailed = false;
     g_clockAttempted = false;
