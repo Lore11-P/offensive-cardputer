@@ -9,6 +9,22 @@
 
 namespace ui {
 
+namespace {
+
+// Aggiorna solo cio' che puo' cambiare mentre la schermata resta aperta:
+// batteria nell'header e LED lampeggiante nel footer. Nessun redraw completo.
+void refreshStatus(const std::string& title, const std::string& parent, uint16_t& lastBattery) {
+    const uint16_t batt = display::batterySignature();
+    if (batt != lastBattery) {
+        lastBattery = batt;
+        display::header(title, parent);
+        display::push(0, 0, display::width(), 22);
+    }
+    display::footerTick();
+}
+
+}  // namespace
+
 void drawScreen(const std::string& title, const std::string& parent,
                 const std::vector<std::string>& lines, const std::string& hint,
                 uint16_t accent) {
@@ -42,15 +58,15 @@ void drawScreen(const std::string& title, const std::string& parent,
             break;
         }
         uint16_t color = display::C(display::T_text);
-        std::string s = line;
-        if (!s.empty() && s[0] == '!') {
+        const char* s = line.c_str();
+        if (!line.empty() && s[0] == '!') {
             color = display::C(display::T_err);
-            s.erase(0, 1);
+            ++s;
             // Barra d'allarme a sinistra.
             d.fillRect(5, y + 1, 2, 6, display::C(display::T_err));
-        } else if (!s.empty() && s[0] == '>') {
+        } else if (!line.empty() && s[0] == '>') {
             color = display::C(display::T_acc);
-            s.erase(0, 1);
+            ++s;
             d.fillRect(5, y + 1, 2, 6, display::C(display::T_acc));
         }
         display::text(11, y, s, color, 0);
@@ -69,13 +85,15 @@ void drawScreen(const std::string& title, const std::string& parent,
 void message(const std::string& title, const std::vector<std::string>& lines,
              const std::string& parent, const std::string& hint) {
     navigation::waitRelease();
-    uint32_t lastDraw = 0;
+    drawScreen(title, parent, lines, hint, 0);
+    uint16_t lastBattery = display::batterySignature();
+    uint32_t lastTick = millis();
     bool done = false;
     while (!done) {
         const uint32_t now = millis();
-        if (lastDraw == 0 || now - lastDraw >= 500) {
-            drawScreen(title, parent, lines, hint, 0);
-            lastDraw = now;
+        if (now - lastTick >= 500) {
+            lastTick = now;
+            refreshStatus(title, parent, lastBattery);
         }
         const navigation::EventData ev = navigation::poll();
         if (ev.type == navigation::Event::Select || ev.type == navigation::Event::Back ||
@@ -90,13 +108,15 @@ void message(const std::string& title, const std::vector<std::string>& lines,
 bool confirm(const std::string& title, const std::vector<std::string>& lines,
              const std::string& parent) {
     navigation::waitRelease();
-    uint32_t lastDraw = 0;
+    drawScreen(title, parent, lines, "ENTER = conferma    ESC = annulla",
+               display::C(display::T_acc));
+    uint16_t lastBattery = display::batterySignature();
+    uint32_t lastTick = millis();
     for (;;) {
         const uint32_t now = millis();
-        if (lastDraw == 0 || now - lastDraw >= 500) {
-            drawScreen(title, parent, lines, "ENTER = conferma    ESC = annulla",
-                       display::C(display::T_acc));
-            lastDraw = now;
+        if (now - lastTick >= 500) {
+            lastTick = now;
+            refreshStatus(title, parent, lastBattery);
         }
         const navigation::EventData ev = navigation::poll();
         if (ev.type == navigation::Event::Select) {
@@ -134,12 +154,14 @@ bool legalWarning(const std::string& activity, const std::vector<std::string>& e
 void waitAnyKey(const std::string& title, const std::string& parent) {
     navigation::waitRelease();
     const std::vector<std::string> lines = {"Premi un tasto per continuare."};
-    uint32_t lastDraw = 0;
+    drawScreen(title, parent, lines, "qualsiasi tasto = continua", 0);
+    uint16_t lastBattery = display::batterySignature();
+    uint32_t lastTick = millis();
     for (;;) {
         const uint32_t now = millis();
-        if (lastDraw == 0 || now - lastDraw >= 500) {
-            drawScreen(title, parent, lines, "qualsiasi tasto = continua", 0);
-            lastDraw = now;
+        if (now - lastTick >= 500) {
+            lastTick = now;
+            refreshStatus(title, parent, lastBattery);
         }
         const navigation::EventData ev = navigation::poll();
         if (ev.type != navigation::Event::None) {

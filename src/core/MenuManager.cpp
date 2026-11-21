@@ -46,11 +46,56 @@ std::string ellipsize(const std::string& text, int maxWidth, uint8_t font = 0) {
     if (display::textWidth(text, font) <= maxWidth) {
         return text;
     }
-    std::string out = text;
-    while (out.size() > 2 && display::textWidth(out + "..", font) > maxWidth) {
-        out.pop_back();
+    // Larghezza lineare nel numero di caratteri: evita il ciclo O(n^2) con
+    // una stringa temporanea per ogni iterazione.
+    const int adv = font == 4 ? 12 : (font == 0 ? 6 : 7);
+    const int pad = adv - (font == 4 ? 10 : 5);
+    int keep = (maxWidth + pad) / adv - 2;
+    const int minKeep = text.size() > 2 ? 2 : static_cast<int>(text.size());
+    if (keep < minKeep) {
+        keep = minKeep;
     }
-    return out + "..";
+    if (keep > static_cast<int>(text.size())) {
+        keep = static_cast<int>(text.size());
+    }
+    std::string out;
+    out.reserve(static_cast<size_t>(keep) + 2);
+    out.assign(text, 0, static_cast<size_t>(keep));
+    out += "..";
+    return out;
+}
+
+// Etichetta del carosello: maiuscola e troncata in un buffer di stack, cosi'
+// i frame di animazione non allocano stringhe.
+void drawCarouselLabel(int y, const std::string& label, int maxWidth, uint16_t color) {
+    constexpr size_t kCap = 48;
+    if (label.size() + 3 > kCap) {
+        display::textCentered(y, ellipsize(toUpper(label), maxWidth, 2), color, 2);
+        return;
+    }
+    char buf[kCap];
+    size_t n = label.size();
+    for (size_t i = 0; i < n; ++i) {
+        char c = label[i];
+        buf[i] = (c >= 'a' && c <= 'z') ? static_cast<char>(c - 32) : c;
+    }
+    buf[n] = '\0';
+    if (display::textWidth(buf, 2) > maxWidth) {
+        constexpr int kAdv = 7;
+        constexpr int kPad = 2;
+        int keep = (maxWidth + kPad) / kAdv - 2;
+        const int minKeep = n > 2 ? 2 : static_cast<int>(n);
+        if (keep < minKeep) {
+            keep = minKeep;
+        }
+        if (keep > static_cast<int>(n)) {
+            keep = static_cast<int>(n);
+        }
+        buf[keep] = '.';
+        buf[keep + 1] = '.';
+        buf[keep + 2] = '\0';
+    }
+    display::textCentered(y, buf, color, 2);
 }
 
 // Prima voce selezionabile da start in avanti (con wrap): -1 se nessuna.
@@ -356,6 +401,7 @@ void MenuManager::run(bool allowBack) {
 
     bool running = true;
     uint32_t lastClock = millis() / 1000;
+    uint16_t lastBattery = display::batterySignature();
     while (running) {
         // poll() aggiorna gia' la tastiera: un solo update per iterazione.
         const navigation::EventData ev = navigation::poll();
@@ -400,8 +446,11 @@ void MenuManager::run(bool allowBack) {
                 running = false;
             }
         } else if (ev.type == navigation::Event::Text && textHandler_) {
-            textHandler_(ev.ch);
-            dirty = true;
+            // Ridisegna solo se il tasto e' stato gestito: prima anche un
+            // carattere ignorato forzava un frame completo.
+            if (textHandler_(ev.ch)) {
+                dirty = true;
+            }
         }
 
         if (repeat(upHeld, nextUp, navigation::pressed(';'), 0, -1)) {
@@ -423,29 +472,64 @@ void MenuManager::run(bool allowBack) {
             dirty = true;
         }
         const uint32_t clock = millis() / 1000;
-        if (clock != lastClock) {
+        const bool clockTick = clock != lastClock;
+        if (clockTick) {
             lastClock = clock;
-            dirty = true;
-        }
-        if (mode_ == Mode::Carousel && carouselAnim_ > 0) {
-            dirty = true;
         }
 
         if (dirty) {
             draw();
+            lastBattery = display::batterySignature();
+        } else {
+            // Animazione del carosello: cambia solo il corpo, header e footer
+            // restano identici. Il LED del footer si aggiorna da solo.
+            if (mode_ == Mode::Carousel && carouselAnim_ > 0) {
+                drawBody();
+                display::push(0, kHeaderHeight, display::width(),
+                              display::height() - kHeaderHeight - kFooterHeight);
+            }
+            if (clockTick) {
+                const uint16_t batt = display::batterySignature();
+                if (batt != lastBattery) {
+                    lastBattery = batt;
+                    display::header(title_, parent_);
+                    display::push(0, 0, display::width(), kHeaderHeight);
+                }
+                display::footerTick();
+            }
         }
         // 2 ms: il loop deve restare reattivo quanto la lettura della tastiera.
         delay(2);
     }
 }
 
-void MenuManager::draw() {
-    visibleRows_ = rowsPerPage();
-    ensureVisible();
+std::string MenuManager::trailingText() const {
+    if (mode_ == Mode::Grid) {
+        const int size = pageSize();
+        const int pages = size > 0 ? (static_cast<int>(items_.size()) + size - 1) / size : 1;
+        if (pages > 1) {
+            char pageText[16];
+            std::snprintf(pageText, sizeof(pageText), "P%d/%d", selected_ / size + 1, pages);
+            return pageText;
+        }
+    } else if (mode_ == Mode::List && !items_.empty()) {
+        char posText[16];
+        std::snprintf(posText, sizeof(posText), "%d/%d", selected_ + 1,
+                      static_cast<int>(items_.size()));
+        return posText;
+    }
+    return std::string();
+}
 
-    display::clear(display::C(display::T_bg));
+void MenuManager::drawStatus() {
     display::header(title_, parent_);
+    display::footer(hint_, trailingText());
+}
 
+void MenuManager::drawBody() {
+    const int bodyTop = kHeaderHeight;
+    const int bodyH = display::height() - bodyTop - kFooterHeight;
+    display::g().fillRect(0, bodyTop, display::width(), bodyH, display::C(display::T_bg));
     if (mode_ == Mode::Grid) {
         drawGrid();
     } else if (mode_ == Mode::Carousel) {
@@ -453,24 +537,13 @@ void MenuManager::draw() {
     } else {
         drawList();
     }
+}
 
-    // Indicatore di pagina nella riga di stato (al posto del LED).
-    std::string trailing;
-    if (mode_ == Mode::Grid) {
-        const int size = pageSize();
-        const int pages = size > 0 ? (static_cast<int>(items_.size()) + size - 1) / size : 1;
-        if (pages > 1) {
-            char pageText[16];
-            std::snprintf(pageText, sizeof(pageText), "P%d/%d", selected_ / size + 1, pages);
-            trailing = pageText;
-        }
-    } else if (mode_ == Mode::List && !items_.empty()) {
-        char posText[16];
-        std::snprintf(posText, sizeof(posText), "%d/%d", selected_ + 1,
-                      static_cast<int>(items_.size()));
-        trailing = posText;
-    }
-    display::footer(hint_, trailing);
+void MenuManager::draw() {
+    visibleRows_ = rowsPerPage();
+    ensureVisible();
+    drawBody();
+    drawStatus();
     display::push();
 }
 
@@ -680,11 +753,9 @@ void MenuManager::drawCarousel() {
     // Etichetta della voce selezionata + indice.
     if (selected_ >= 0 && selected_ < total) {
         const MenuItem& item = items_[selected_];
-        const std::string label = ellipsize(toUpper(item.label), w - 110, 2);
         const int labelY = h - kFooterHeight - 15;
-        display::textCentered(labelY, label,
-                              item.enabled ? display::C(display::T_hi) : display::C(display::T_dim),
-                              2);
+        drawCarouselLabel(labelY, item.label, w - 110,
+                          item.enabled ? display::C(display::T_hi) : display::C(display::T_dim));
         display::text(6, labelY, "ORBIT", display::C(display::T_dim), 0);
         char pos[12];
         std::snprintf(pos, sizeof(pos), "%02d/%02d", selected_ + 1, total);

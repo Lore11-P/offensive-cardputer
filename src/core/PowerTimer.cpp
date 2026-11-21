@@ -49,7 +49,7 @@ void centerDirect(lgfx::LGFXBase& d, int y, const char* text, uint16_t color, ui
 
 // Disegna direttamente sull'LCD: il framebuffer dei giochi resta intatto e
 // alla ripresa basta ripubblicarlo, senza perdere la schermata precedente.
-void drawSuspendScreen(bool charging, uint32_t seconds) {
+void drawSuspendScreen(bool charging, int pct, uint32_t seconds) {
     auto& d = M5Cardputer.Display;
     const int w = d.width();
     const int h = d.height();
@@ -57,9 +57,6 @@ void drawSuspendScreen(bool charging, uint32_t seconds) {
     d.fillScreen(display::kBlack);
 
     centerDirect(d, 14, "SOSPENSIONE", display::kTextDim, 0);
-
-    const int level = static_cast<int>(M5Cardputer.Power.getBatteryLevel());
-    const int pct = level < 0 ? -1 : std::min(level, 100);
 
     constexpr int kBodyW = 84;
     constexpr int kBodyH = 34;
@@ -96,6 +93,13 @@ void drawSuspendScreen(bool charging, uint32_t seconds) {
         centerDirect(d, h - 34, "Premi un tasto per riaccendere", display::kTextDim, 0);
     }
     d.endWrite();
+}
+
+// Percentuale dalla cache del display: evita una lettura PMIC al secondo.
+int suspendPercent() {
+    const uint16_t sig = display::batterySignature();
+    const int pct = static_cast<int>(sig & 0xFF);
+    return pct == 0xFF ? -1 : std::min(pct, 100);
 }
 
 }  // namespace
@@ -178,7 +182,8 @@ void powerOff() {
     const uint32_t previousCpuMhz = getCpuFrequencyMhz();
     display::resetChargingDetector();
     M5Cardputer.Display.setBrightness(kDimBrightness);
-    drawSuspendScreen(false, 0);
+    const int initialPct = suspendPercent();
+    drawSuspendScreen(false, initialPct, 0);
 
     setCpuFrequencyMhz(80);
     const uint32_t suspendStart = millis();
@@ -186,6 +191,8 @@ void powerOff() {
     int16_t suspendRefMv = -1;
     bool charging = false;
     bool screenOn = true;
+    int lastPct = initialPct;
+    bool lastCharging = false;
 
     for (;;) {
         M5Cardputer.update();
@@ -213,7 +220,14 @@ void powerOff() {
                 M5Cardputer.Display.setBrightness(0);
             }
             if (screenOn) {
-                drawSuspendScreen(charging, now / 1000);
+                // Senza ricarica la schermata e' statica: si ridisegna solo
+                // se cambia la percentuale. In ricarica serve il lampeggio.
+                const int pct = suspendPercent();
+                if (charging || pct != lastPct || charging != lastCharging) {
+                    drawSuspendScreen(charging, pct, now / 1000);
+                    lastPct = pct;
+                    lastCharging = charging;
+                }
             }
         }
         delay(20);

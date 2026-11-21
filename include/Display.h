@@ -123,14 +123,20 @@ uint32_t framebufferBytes();
 
 void clear(uint16_t color = kBackground);
 void push();
+// Pubblica solo una porzione del framebuffer (evita push a schermo intero
+// quando cambia solo l'header o il footer).
+void push(int x, int y, int w, int h);
 
 // Testo con font pixel disegnato dal codice:
 //   0 = micro 5x7 (advance 6), 2 = body (advance 7), 4 = headline (scala 2x)
 void text(int x, int y, const std::string& s, uint16_t color, uint8_t font = 2);
+void text(int x, int y, const char* s, uint16_t color, uint8_t font = 2);
 void textCentered(int y, const std::string& s, uint16_t color, uint8_t font = 2);
+void textCentered(int y, const char* s, uint16_t color, uint8_t font = 2);
 void wrapText(int x, int y, int maxWidth, const std::vector<std::string>& lines, uint16_t color,
               uint8_t font = 2, int lineHeight = 12);
 int textWidth(const std::string& s, uint8_t font = 2);
+int textWidth(const char* s, uint8_t font = 2);
 int textHeight(uint8_t font = 2);
 
 // Barra superiore telemetrica: titolo, breadcrumb, segnale e batteria.
@@ -143,6 +149,13 @@ void resetChargingDetector();
 // Barra inferiore: keycap + telemetria di stato. `trailing` (es. "P2/3")
 // viene allineato a destra al posto del LED di stato.
 void footer(const std::string& hint, const std::string& trailing = "");
+// Aggiorna solo il LED di stato lampeggiante del footer (nessun ridisegno
+// del resto della schermata). No-op se l'ultimo footer aveva un `trailing`.
+void footerTick();
+
+// Stato batteria in forma compatta: bit 8 = in carica, bit 0..7 = percentuale
+// (0xFF se sconosciuta). Usato per ridisegnare l'header solo quando cambia.
+uint16_t batterySignature();
 
 // Icona procedurale in stile Orbit (nessun asset preimpostato). Per gli id
 // non ancora disegnati ripiega sul BMP in /icons e poi su un glifo neutro.
