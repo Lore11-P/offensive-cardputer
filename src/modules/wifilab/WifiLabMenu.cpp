@@ -130,6 +130,19 @@ bool sameSsid(const char* a, const char* b) {
     return *a == 0 && *b == 0;
 }
 
+// Un BSSID valido è unicast e non tutto zero.
+bool validBssid(const uint8_t mac[6]) {
+    if ((mac[0] & 0x01) != 0) {
+        return false;
+    }
+    for (int i = 0; i < 6; ++i) {
+        if (mac[i] != 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void appendHex(std::string& out, const uint8_t* data, size_t len) {
     static const char* kHex = "0123456789abcdef";
     out.reserve(out.size() + len * 2);
@@ -179,7 +192,10 @@ void applyCountry() {
 void beginRadio() {
     WiFi.persistent(false);
     WiFi.mode(WIFI_STA);
-    WiFi.disconnect();
+    // Non forzare un disassoc se non c'e' una connessione attiva.
+    if (WiFi.status() == WL_CONNECTED) {
+        WiFi.disconnect();
+    }
     applyCountry();
 }
 
@@ -188,7 +204,9 @@ void stopRadio() {
     esp_wifi_set_promiscuous_rx_cb(nullptr);
     esp_wifi_set_promiscuous_filter(nullptr);
     esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE);
-    WiFi.disconnect();
+    if (WiFi.status() == WL_CONNECTED) {
+        WiFi.disconnect();
+    }
     WiFi.mode(WIFI_OFF);
 }
 
@@ -233,6 +251,11 @@ bool apWhitelisted(const ApInfo& ap) {
         }
         if (entry.hasSsid && ap.ssidLen > 0 &&
             sameSsid(entry.ssid, ap.ssid)) {
+            return true;
+        }
+        // Voce solo-SSID e AP nascosto: non si puo' dimostrare che non sia la
+        // rete protetta, quindi si blocca l'attacco (fail-closed).
+        if (!entry.hasBssid && entry.hasSsid && ap.ssidLen == 0) {
             return true;
         }
     }
@@ -301,7 +324,13 @@ void loadWhitelist() {
             ssidPart = ssidPart.substr(1, ssidPart.size() - 2);
         }
         WhiteEntry entry;
-        entry.hasBssid = parseMac(macPart, entry.bssid);
+        const bool hasMacText = !macPart.empty();
+        const bool macOk = parseMac(macPart, entry.bssid);
+        if (hasMacText && (!macOk || !validBssid(entry.bssid))) {
+            invalid = true;
+            continue;
+        }
+        entry.hasBssid = macOk;
         if (ssidPart.size() > 32) {
             ssidPart.resize(32);
         }
@@ -333,16 +362,26 @@ bool addWhitelistEntry(const ApInfo& ap) {
         }
     }
     std::string text;
-    storage::readText(kWhitePath, text, 4096, true);
+    if (storage::exists(kWhitePath, true)) {
+        // Fail-closed: un file esistente ma non leggibile per intero non deve
+        // essere riscritto con la sola nuova voce (perderebbe le protezioni).
+        if (!storage::readText(kWhitePath, text, 4096, true)) {
+            return false;
+        }
+    }
+    std::string line = macText(ap.bssid);
+    line.push_back('|');
+    if (ap.ssidLen > 0) {
+        line.append(ap.ssid, ap.ssidLen);
+    }
+    line.push_back('\n');
+    if (text.size() + line.size() > 4096) {
+        return false;
+    }
     if (!text.empty() && text.back() != '\n') {
         text.push_back('\n');
     }
-    text += macText(ap.bssid);
-    text.push_back('|');
-    if (ap.ssidLen > 0) {
-        text.append(ap.ssid, ap.ssidLen);
-    }
-    text.push_back('\n');
+    text += line;
     storage::mkdir("/wifilab", true);
     if (!storage::writeText(kWhitePath, text, true)) {
         return false;
@@ -373,12 +412,12 @@ void drawScanScreen(const std::string& parent, uint32_t elapsed, int found) {
     display::push();
 }
 
-bool scanAps(const std::string& parent) {
+bool scanAps(const std::string& parent, bool passive = false) {
     g_apCount = 0;
     beginRadio();
     delay(60);
     WiFi.scanDelete();
-    if (WiFi.scanNetworks(true, true) == WIFI_SCAN_FAILED) {
+    if (WiFi.scanNetworks(true, true, passive) == WIFI_SCAN_FAILED) {
         WiFi.mode(WIFI_OFF);
         return false;
     }
@@ -421,6 +460,9 @@ bool scanAps(const std::string& parent) {
         }
         ApInfo ap;
         std::memcpy(ap.bssid, bssid, 6);
+        if (!validBssid(ap.bssid)) {
+            continue;
+        }
         String ssid = WiFi.SSID(i);
         size_t len = ssid.length();
         if (len > 32) {
@@ -639,6 +681,29 @@ void IRAM_ATTR promiscuousCb(void* buf, wifi_promiscuous_pkt_type_t) {
                 payload[header + 4] != 0x00 || payload[header + 5] != 0x00 ||
                 payload[header + 6] != 0x88 || payload[header + 7] != 0x8E ||
                 payload[header + 9] != 3) {
+                return;
+            }
+            const uint8_t fc1 = payload[1];
+            const bool toDs = (fc1 & 0x01) != 0;
+            const bool fromDs = (fc1 & 0x02) != 0;
+            const uint8_t* bssid = nullptr;
+            if (toDs && !fromDs) {
+                bssid = payload + 4;
+            } else if (!toDs && fromDs) {
+                bssid = payload + 10;
+            } else if (!toDs && !fromDs) {
+                bssid = payload + 16;
+            } else {
+                return;
+            }
+            bool match = false;
+            for (uint8_t i = 0; i < g_rxBssidCount; ++i) {
+                if (sameMac(bssid, g_rxBssids[i])) {
+                    match = true;
+                    break;
+                }
+            }
+            if (!match) {
                 return;
             }
         }
@@ -926,6 +991,7 @@ struct PmkidTarget {
     uint8_t pmkid[16] = {};
     uint16_t rounds = 0;
     uint16_t m1Count = 0;
+    uint16_t txFail = 0;
     uint16_t seq = 0;
     uint8_t state = HuntSearch;
     bool hasPmkid = false;
@@ -983,6 +1049,9 @@ void writePcapFrame(PmkidTarget& target, const uint8_t* data, uint16_t len) {
     }
     ++target.pcapFrames;
     target.pcap.flush();
+    if (target.pcap.getWriteError() != 0) {
+        target.pcapOk = false;
+    }
 }
 
 bool isHexChar(char c) {
@@ -1033,8 +1102,16 @@ bool validHc22000Line(const std::string& line) {
     return true;
 }
 
-void savePmkidFile(PmkidTarget& target) {
-    // Un hashcat 22000 richiede l'ESSID: senza beacon/SSID non si scrive un
+bool removePmkidFile(const uint8_t bssid[6]) {
+    char base[13];
+    bssidBase(bssid, base);
+    char path[64];
+    std::snprintf(path, sizeof(path), "%s/%s.hc22000", kPmkidDir, base);
+    storage::removeFile(path, true);
+    return !storage::exists(path, true);
+}
+
+void savePmkidFile(PmkidTarget& target) {    // Un hashcat 22000 richiede l'ESSID: senza beacon/SSID non si scrive un
     // file che sembrerebbe valido ma non sarebbe verificabile.
     if (!target.hasPmkid || target.ap.ssidLen == 0) {
         return;
@@ -1116,6 +1193,9 @@ void openTargetPcap(PmkidTarget& target) {
                           sizeof(header)) == sizeof(header);
     if (target.pcapOk) {
         target.pcap.flush();
+        if (target.pcap.getWriteError() != 0) {
+            target.pcapOk = false;
+        }
     }
 }
 
@@ -1123,6 +1203,9 @@ void closeTargetPcaps() {
     for (int i = 0; i < g_targetCount; ++i) {
         if (g_targets[i].pcap) {
             g_targets[i].pcap.flush();
+            if (g_targets[i].pcap.getWriteError() != 0) {
+                g_targets[i].pcapOk = false;
+            }
             g_targets[i].pcap.close();
         }
     }
@@ -1205,7 +1288,7 @@ void drainPmkidRx() {
     }
 }
 
-void sendAuth(PmkidTarget& target) {
+bool sendAuth(PmkidTarget& target) {
     uint8_t frame[30] = {
         0xB0, 0x00, 0x00, 0x00,
         0, 0, 0, 0, 0, 0,
@@ -1222,10 +1305,11 @@ void sendAuth(PmkidTarget& target) {
     frame[22] = static_cast<uint8_t>(target.seq & 0xFF);
     frame[23] = static_cast<uint8_t>(((target.seq >> 8) & 0x0F) << 4);
     ++target.seq;
-    esp_wifi_80211_tx(WIFI_IF_STA, frame, sizeof(frame), false);
+    return esp_wifi_80211_tx(WIFI_IF_STA, frame, sizeof(frame), false) ==
+           ESP_OK;
 }
 
-void sendAssoc(PmkidTarget& target) {
+bool sendAssoc(PmkidTarget& target) {
     uint8_t frame[128];
     size_t n = 0;
     frame[n++] = 0x00;
@@ -1273,7 +1357,7 @@ void sendAssoc(PmkidTarget& target) {
         std::memcpy(frame + n, kRsn, sizeof(kRsn));
         n += sizeof(kRsn);
     }
-    esp_wifi_80211_tx(WIFI_IF_STA, frame, n, false);
+    return esp_wifi_80211_tx(WIFI_IF_STA, frame, n, false) == ESP_OK;
 }
 
 bool g_huntCancel = false;
@@ -1290,9 +1374,14 @@ void driveTarget(PmkidTarget& target) {
     if (!target.hasPmkid) {
         // Dopo il PMKID non serve altro TX: resta in ascolto per il beacon
         // che fornisce l'ESSID.
-        sendAuth(target);
-        delay(8);
-        sendAssoc(target);
+        if (sendAuth(target)) {
+            delay(8);
+            if (!sendAssoc(target)) {
+                ++target.txFail;
+            }
+        } else {
+            ++target.txFail;
+        }
     }
     ++target.rounds;
 
@@ -1323,14 +1412,17 @@ void drawHunt(uint32_t start) {
     display::clear();
     display::header("PMKID Hunt", "WiFi Lab");
     uint32_t m1 = 0;
+    uint32_t txFail = 0;
     for (int i = 0; i < g_targetCount; ++i) {
         m1 += g_targets[i].m1Count;
+        txFail += g_targets[i].txFail;
     }
     char line[64];
     const uint32_t elapsed = (millis() - start) / 1000;
-    std::snprintf(line, sizeof(line), "%lus   M1:%lu   persi:%lu",
+    std::snprintf(line, sizeof(line), "%lus M1:%lu KO:%lu persi:%lu",
                   static_cast<unsigned long>(elapsed),
                   static_cast<unsigned long>(m1),
+                  static_cast<unsigned long>(txFail),
                   static_cast<unsigned long>(g_rxDropped));
     display::text(6, 24, line, display::kTextDim, 0);
 
@@ -1469,12 +1561,22 @@ void runPmkidHunt() {
     storage::mkdir(kPmkidDir, true);
     g_targetCount = 0;
     for (int i = 0; i < g_apCount && g_targetCount < kMaxTargets; ++i) {
-        if (!marked[i] || apWhitelisted(g_aps[i])) {
+        if (!marked[i] || apWhitelisted(g_aps[i]) ||
+            !validBssid(g_aps[i].bssid)) {
             continue;
         }
         PmkidTarget& target = g_targets[g_targetCount];
         target = PmkidTarget{};
         target.ap = g_aps[i];
+        // Un vecchio hash dello stesso BSSID non deve sembrare il risultato
+        // di questa sessione.
+        if (!removePmkidFile(target.ap.bssid)) {
+            ui::message("PMKID Hunt",
+                        {"!Impossibile rimuovere il", "vecchio hash hc22000.",
+                         "Controlla la microSD."},
+                        "WiFi Lab");
+            return;
+        }
         randomStaMac(target.sta, g_targetCount);
         ++g_targetCount;
     }
@@ -1530,7 +1632,9 @@ void runPmkidHunt() {
 
     int found = 0;
     int saved = 0;
+    int txFail = 0;
     bool writeError = false;
+    bool pcapError = false;
     std::vector<std::string> lines;
     for (int i = 0; i < g_targetCount; ++i) {
         if (g_targets[i].hasPmkid) {
@@ -1539,8 +1643,9 @@ void runPmkidHunt() {
         if (g_targets[i].hcSaved) {
             ++saved;
         }
-        if (!g_targets[i].pcapOk && g_targets[i].pcapFrames == 0) {
-            writeError = true;
+        txFail += g_targets[i].txFail;
+        if (!g_targets[i].pcapOk) {
+            pcapError = true;
         }
         if (g_targets[i].hasPmkid && !g_targets[i].hcSaved) {
             writeError = true;
@@ -1557,9 +1662,12 @@ void runPmkidHunt() {
                                         : huntStateName(target.state)));
     }
     lines.push_back("File: /wifilab/pmkid/");
-    if (writeError) {
-        lines.push_back("!PMKID senza ESSID o errore SD:");
-        lines.push_back("hash non scritto, pcap disponibile.");
+    if (txFail > 0) {
+        lines.push_back("TX rifiutati: " + std::to_string(txFail));
+    }
+    if (writeError || pcapError) {
+        lines.push_back("!Errore SD, ESSID assente o pcap:");
+        lines.push_back("output incompleto, controlla la card.");
     }
     ui::message("PMKID Hunt", lines, "WiFi Lab");
 }
@@ -1633,26 +1741,51 @@ const char* ouiVendor(const uint8_t mac[6]) {
 
 ClientInfo g_clients[kMaxClients];
 int g_clientCount = 0;
+constexpr uint32_t kClientMaxAgeMs = 120000;
+
+void ageClients() {
+    const uint32_t now = millis();
+    int keep = 0;
+    for (int i = 0; i < g_clientCount; ++i) {
+        if (now - g_clients[i].lastSeen <= kClientMaxAgeMs) {
+            if (keep != i) {
+                g_clients[keep] = g_clients[i];
+            }
+            ++keep;
+        }
+    }
+    g_clientCount = keep;
+}
 
 void mergeObservation(const ClientObs& obs) {
+    const uint32_t now = millis();
     for (int i = 0; i < g_clientCount; ++i) {
         if (sameMac(g_clients[i].mac, obs.mac)) {
             g_clients[i].rssi = obs.rssi;
-            g_clients[i].lastSeen = millis();
+            g_clients[i].lastSeen = now;
             if (g_clients[i].frames < 0xFFFF) {
                 ++g_clients[i].frames;
             }
             return;
         }
     }
+    int slot = g_clientCount;
     if (g_clientCount >= kMaxClients) {
-        return;
+        // Tabella piena: sostituisce il client visto meno di recente.
+        slot = 0;
+        for (int i = 1; i < g_clientCount; ++i) {
+            if (g_clients[i].lastSeen < g_clients[slot].lastSeen) {
+                slot = i;
+            }
+        }
+    } else {
+        ++g_clientCount;
     }
-    ClientInfo& client = g_clients[g_clientCount++];
+    ClientInfo& client = g_clients[slot];
     std::memcpy(client.mac, obs.mac, 6);
     client.rssi = obs.rssi;
     client.frames = 1;
-    client.lastSeen = millis();
+    client.lastSeen = now;
 }
 
 bool findClient(const uint8_t mac[6], ClientInfo& out) {
@@ -1666,6 +1799,7 @@ bool findClient(const uint8_t mac[6], ClientInfo& out) {
 }
 
 void drainClientRx() {
+    ageClients();
     for (int guard = 0; guard < kObsSlots; ++guard) {
         ClientObs obs;
         bool have = false;
@@ -1753,30 +1887,32 @@ void deauthClient(const ApInfo& ap, const uint8_t mac[6]) {
                     {"AP in whitelist.", "Azione bloccata."}, "Client Monitor");
         return;
     }
-    ClientInfo client;
-    if (!findClient(mac, client)) {
+    ClientInfo preview;
+    if (!findClient(mac, preview)) {
         ui::message("Deauth client",
                     {"Client non piu' in elenco.", "Riapri il monitor."},
                     "Client Monitor");
         return;
     }
-    if (millis() - client.lastSeen > 10000) {
-        ui::message("Deauth client",
-                    {"Client non piu' visibile", "da oltre 10 secondi."},
-                    "Client Monitor");
-        return;
-    }
     if (!ui::legalWarning("Deauth client",
-                          {"Client: " + macText(client.mac),
+                          {"Client: " + macText(preview.mac),
                            "AP: " + apSsid(ap)},
                           "Client Monitor")) {
         return;
     }
-    // Ricontrolla dopo l'avviso: la conferma puo' aver richiesto tempo e nel
-    // frattempo il client potrebbe essere sparito.
-    if (millis() - client.lastSeen > 15000) {
+    // Dopo l'avviso: drena le osservazioni arrivate nel frattempo e ricostruisci
+    // il client dallo stato corrente, senza riusare la copia pre-avviso.
+    drainClientRx();
+    ClientInfo client;
+    if (!findClient(mac, client)) {
         ui::message("Deauth client",
                     {"Client non piu' visibile.", "Azione annullata."},
+                    "Client Monitor");
+        return;
+    }
+    if (millis() - client.lastSeen > 5000) {
+        ui::message("Deauth client",
+                    {"Client non piu' visibile", "negli ultimi 5 secondi."},
                     "Client Monitor");
         return;
     }
@@ -1849,7 +1985,7 @@ void deauthClient(const ApInfo& ap, const uint8_t mac[6]) {
 
 void runClientMonitor() {
     loadWhitelist();
-    if (!scanAps("WiFi Lab")) {
+    if (!scanAps("WiFi Lab", true)) {
         ui::message("Client Monitor", {"Scansione annullata o fallita."},
                     "WiFi Lab");
         return;
@@ -1891,6 +2027,8 @@ void runClientMonitor() {
 
     int selected = 0;
     int top = 0;
+    uint8_t selectedMac[6] = {};
+    bool hasSelection = false;
     uint32_t lastDraw = 0;
     navigation::waitRelease();
     while (true) {
@@ -1900,15 +2038,33 @@ void runClientMonitor() {
             break;
         }
         drainClientRx();
+        if (g_clientCount > 0 && hasSelection) {
+            int found = -1;
+            for (int i = 0; i < g_clientCount; ++i) {
+                if (sameMac(g_clients[i].mac, selectedMac)) {
+                    found = i;
+                    break;
+                }
+            }
+            if (found >= 0) {
+                selected = found;
+            } else {
+                hasSelection = false;
+            }
+        }
         if (ev.type == navigation::Event::Up && g_clientCount > 0) {
             selected = (selected + g_clientCount - 1) % g_clientCount;
+            hasSelection = true;
+            std::memcpy(selectedMac, g_clients[selected].mac, 6);
         } else if (ev.type == navigation::Event::Down && g_clientCount > 0) {
             selected = (selected + 1) % g_clientCount;
+            hasSelection = true;
+            std::memcpy(selectedMac, g_clients[selected].mac, 6);
         } else if (ev.type == navigation::Event::Text &&
                    (ev.ch == 'd' || ev.ch == 'D')) {
-            if (g_clientCount > 0 && selected < g_clientCount) {
+            if (g_clientCount > 0 && hasSelection) {
 #if ENABLE_OFFENSIVE
-                deauthClient(target, g_clients[selected].mac);
+                deauthClient(target, selectedMac);
 #else
                 ui::message("Deauth client",
                             {"Funzione non compilata.", "Serve la build",
@@ -1921,9 +2077,14 @@ void runClientMonitor() {
         if (g_clientCount == 0) {
             selected = 0;
             top = 0;
+            hasSelection = false;
         } else {
             if (selected >= g_clientCount) {
                 selected = g_clientCount - 1;
+            }
+            if (!hasSelection) {
+                hasSelection = true;
+                std::memcpy(selectedMac, g_clients[selected].mac, 6);
             }
             if (selected < top) {
                 top = selected;
@@ -2004,7 +2165,7 @@ void addWhitelistFromScan() {
                     "WiFi Lab");
         return;
     }
-    if (!scanAps("WiFi Lab")) {
+    if (!scanAps("WiFi Lab", true)) {
         return;
     }
     if (g_apCount == 0) {
@@ -2115,9 +2276,10 @@ void drawSpectrum(const uint32_t counts[kChannels], uint32_t pps,
     display::text(150, 24, line, display::kTextDim, 0);
 
     uint32_t scale = 1;
+    uint32_t peakScale = 1;
     for (int i = 0; i < kChannels; ++i) {
         scale = std::max(scale, counts[i]);
-        scale = std::max(scale, g_specPeaks[i]);
+        peakScale = std::max(peakScale, g_specPeaks[i]);
     }
 
     constexpr int kBarTop = 34;
@@ -2131,8 +2293,10 @@ void drawSpectrum(const uint32_t counts[kChannels], uint32_t pps,
             display::g().fillRect(x + 1, kBarTop + kBarHeight - height, 11,
                                   height, display::kInfo);
         }
+        // Il peak hold usa una scala propria: le barre restano legate ai
+        // conteggi correnti.
         const int peak = static_cast<int>(
-            static_cast<uint64_t>(g_specPeaks[i]) * kBarHeight / scale);
+            static_cast<uint64_t>(g_specPeaks[i]) * kBarHeight / peakScale);
         if (peak > 0) {
             display::g().fillRect(x + 1, kBarTop + kBarHeight - peak, 11, 1,
                                   display::kWarning);
@@ -2232,7 +2396,9 @@ void runSpectrum() {
         uint32_t maxCount = 1;
         for (int i = 0; i < kChannels; ++i) {
             maxCount = std::max(maxCount, counts[i]);
-            g_specPeaks[i] = std::max(g_specPeaks[i], counts[i]);
+            // Peak hold con decay: un burst iniziale non comprime le barre
+            // per sempre.
+            g_specPeaks[i] = std::max(counts[i], g_specPeaks[i] * 7 / 8);
         }
         for (int i = 0; i < kChannels; ++i) {
             uint32_t level = counts[i] * 4 / maxCount;
