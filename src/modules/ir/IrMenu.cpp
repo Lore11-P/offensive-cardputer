@@ -75,7 +75,9 @@ const TvCode kTvCodes[] = {
 IRsend g_sender(IR_TX_PIN);
 bool g_senderReady = false;
 
-void runScanner(const std::string& brand);
+struct Brand;
+
+void runScanner(const Brand& brand);
 
 std::string trim(const std::string& value) {
     size_t begin = 0;
@@ -119,6 +121,41 @@ std::string baseName(const std::string& path) {
     return name;
 }
 
+// Database su microSD: /ir/<categoria>/<marca>/<file>.ir. LittleFS (e le
+// vecchie SD) usano /ir/<marca>: quell'albero resta visibile dentro TV.
+struct CategoryDef {
+    const char* dir;
+    const char* label;
+};
+
+constexpr CategoryDef kCategories[] = {
+    {"TV", "TV"},          {"Clima", "Clima"},
+    {"Audio", "Audio"},    {"DVD", "DVD/Blu-ray"},
+    {"Proiettori", "Proiettore"}, {"Console", "Console"},
+    {"Universal", "Universale"},  {"Altro", "Altro"},
+};
+constexpr size_t kCategoryCount = sizeof(kCategories) / sizeof(kCategories[0]);
+constexpr int kCategoryTv = 0;
+
+int categoryIndex(const std::string& name) {
+    const std::string id = lower(name);
+    for (size_t i = 0; i < kCategoryCount; ++i) {
+        if (id == lower(kCategories[i].dir)) {
+            return static_cast<int>(i);
+        }
+    }
+    return -1;
+}
+
+std::string categoryPath(int category) {
+    return std::string("/ir/") + kCategories[category].dir;
+}
+
+struct Brand {
+    int category = kCategoryTv;
+    std::string name;
+};
+
 std::string brandFromPath(const std::string& path) {
     const size_t first = path.find('/', 1);
     if (first == std::string::npos) {
@@ -128,7 +165,90 @@ std::string brandFromPath(const std::string& path) {
     if (second == std::string::npos) {
         return "";
     }
-    return path.substr(first + 1, second - first - 1);
+    const std::string head = path.substr(first + 1, second - first - 1);
+    if (categoryIndex(head) < 0) {
+        return head;
+    }
+    const size_t third = path.find('/', second + 1);
+    if (third == std::string::npos) {
+        return "";
+    }
+    return path.substr(second + 1, third - second - 1);
+}
+
+// Cartelle di marca della categoria. Per TV si aggiunge il vecchio albero
+// piatto: se la marca esiste gia' in /ir/TV i file dei due alberi vengono
+// fusi da listRemotes() senza duplicati.
+std::vector<Brand> categoryBrands(int category) {
+    std::vector<Brand> out;
+    for (const auto& name : storage::list(categoryPath(category), true)) {
+        out.push_back({category, name});
+    }
+    if (category == kCategoryTv) {
+        for (const auto& name : storage::list("/ir", true)) {
+            if (categoryIndex(name) >= 0) {
+                continue;
+            }
+            const bool known =
+                std::any_of(out.begin(), out.end(), [&](const Brand& b) {
+                    return lower(b.name) == lower(name);
+                });
+            if (!known) {
+                out.push_back({kCategoryTv, name});
+            }
+        }
+    }
+    std::sort(out.begin(), out.end(),
+              [](const Brand& a, const Brand& b) { return a.name < b.name; });
+    return out;
+}
+
+std::vector<std::string> brandBases(const Brand& brand) {
+    std::vector<std::string> bases;
+    const std::string dir = categoryPath(brand.category) + "/" + brand.name;
+    if (storage::exists(dir)) {
+        bases.push_back(dir);
+    }
+    if (brand.category == kCategoryTv) {
+        const std::string legacy = "/ir/" + brand.name;
+        if (storage::exists(legacy)) {
+            bases.push_back(legacy);
+        }
+    }
+    return bases;
+}
+
+struct Remote {
+    std::string path;
+    std::string name;
+};
+
+bool isIrFile(const std::string& name) {
+    const std::string id = upper(name);
+    return id.size() > 3 && id.substr(id.size() - 3) == ".IR";
+}
+
+std::vector<Remote> listRemotes(const Brand& brand) {
+    std::vector<Remote> out;
+    std::vector<std::string> seen;
+    for (const auto& base : brandBases(brand)) {
+        for (const auto& file : storage::list(base, false)) {
+            if (!isIrFile(file)) {
+                continue;
+            }
+            const std::string key = lower(file);
+            if (std::find(seen.begin(), seen.end(), key) != seen.end()) {
+                continue;
+            }
+            const std::string path = base + "/" + file;
+            if (!storage::exists(path)) {
+                continue;
+            }
+            seen.push_back(key);
+            out.push_back({path, baseName(file)});
+        }
+    }
+    return out;
 }
 
 std::string favoriteLabel(const std::string& path) {
@@ -369,6 +489,9 @@ constexpr size_t kParsedCommandsLimit =
 // Un comando raw oltre 512 valori (circa un NEC ripetuto 5 volte) non e' un
 // telecomando reale: viene troncato per non saturare l'heap.
 constexpr size_t kMaxRawValues = 512;
+// Un .ir oltre 64 KB non entra nella RAM senza rischi: meglio un errore
+// esplicito che un'allocazione fallita a meta' lettura.
+constexpr size_t kMaxIrFileBytes = 65536;
 
 void parseRawValues(const std::string& value, std::vector<uint16_t>& out) {
     std::string cleaned = value;
@@ -392,15 +515,13 @@ void parseRawValues(const std::string& value, std::vector<uint16_t>& out) {
 
 Protocol protocolFromName(const std::string& name, uint16_t& bits) {
     const std::string id = upper(name);
+    // Solo varianti che sappiamo generare con la lunghezza corretta: inviare
+    // NEC42 o Samsung36 come frame a 32 bit produrrebbe un falso successo.
     if (id == "NEC" || id == "NECEXT") {
         bits = 32;
         return Protocol::Nec;
     }
-    if (id.rfind("NEC", 0) == 0) {
-        bits = 32;
-        return Protocol::Nec;
-    }
-    if (id.rfind("SAMSUNG", 0) == 0 || id == "SAMSUNG32") {
+    if (id == "SAMSUNG" || id == "SAMSUNG32") {
         bits = 32;
         return Protocol::Samsung;
     }
@@ -408,14 +529,16 @@ Protocol protocolFromName(const std::string& name, uint16_t& bits) {
         bits = 28;
         return Protocol::Lg;
     }
-    if (id.rfind("SONY", 0) == 0 || id.rfind("SIRC", 0) == 0) {
-        if (id.find("20") != std::string::npos) {
-            bits = 20;
-        } else if (id.find("15") != std::string::npos) {
-            bits = 15;
-        } else {
-            bits = 12;
-        }
+    if (id == "SONY" || id == "SIRC") {
+        bits = 12;
+        return Protocol::Sony;
+    }
+    if (id == "SONY15" || id == "SIRC15") {
+        bits = 15;
+        return Protocol::Sony;
+    }
+    if (id == "SONY20" || id == "SIRC20") {
+        bits = 20;
         return Protocol::Sony;
     }
     if (id == "RC5") {
@@ -646,13 +769,24 @@ bool sendCommand(const IrCommand& command) {
 }
 
 void openFile(const std::string& path, const std::string& title) {
-    std::string text;
-    if (!storage::readText(path, text, 65536)) {
-        ui::message(title, {"Impossibile leggere il file:", path}, "Telecomandi");
+    if (storage::fileSize(path) > kMaxIrFileBytes) {
+        ui::message(title,
+                    {"File troppo grande (>64 KB).",
+                     "Riduci i comandi o carica un .ir piu' piccolo."},
+                    "Telecomandi");
         return;
     }
-
-    std::vector<IrCommand> commands = parseIrFile(text);
+    std::vector<IrCommand> commands;
+    {
+        // Il testo serve solo al parser: liberarlo prima di aprire il menu.
+        std::string text;
+        if (!storage::readText(path, text, kMaxIrFileBytes)) {
+            ui::message(title, {"Impossibile leggere il file:", path},
+                        "Telecomandi");
+            return;
+        }
+        commands = parseIrFile(text);
+    }
     if (commands.empty()) {
         ui::message(title, {"Nessun comando riconosciuto.", "Il file .ir potrebbe essere raw/non valido."},
                     "Telecomandi");
@@ -662,31 +796,29 @@ void openFile(const std::string& path, const std::string& title) {
     saveLastRemote(path);
 
     MenuManager menu(title, "Telecomandi");
-    int index = 0;
-    for (const auto& command : commands) {
-        if (index++ >= 100) {
-            break;
-        }
-        std::string label = command.name;
-        if (!command.supported) {
+    const int count = std::min<int>(static_cast<int>(commands.size()), 100);
+    for (int i = 0; i < count; ++i) {
+        std::string label = commands[i].name;
+        if (!commands[i].supported) {
             label += " [n/d]";
         }
-        IrCommand copy = command;
+        // Riferimento, non copia: un comando raw puo' valere 512 uint16.
         menu.addItem(label, "ir",
-                     [copy] {
-                         if (!copy.supported) {
-                             ui::message(copy.name,
+                     [&commands, i] {
+                         const IrCommand& command = commands[i];
+                         if (!command.supported) {
+                             ui::message(command.name,
                                          {"Protocollo non supportato.",
                                           "Converti il codice in NEC/Samsung/LG/Sony/RC5/RC6/JVC/Kaseikyo/RCA/raw."},
                                          "Infrarossi");
                              return;
                          }
-                         if (!sendCommand(copy)) {
+                         if (!sendCommand(command)) {
                              ui::message("Errore IR", {"Invio non riuscito."},
                                          "Infrarossi");
                          }
                      },
-                     command.supported);
+                     commands[i].supported);
     }
     menu.setHint(favoriteHint(path));
     menu.setTextHandler([path, &menu, &commands](char ch) {
@@ -730,29 +862,24 @@ void openFile(const std::string& path, const std::string& title) {
     menu.run(true);
 }
 
-void openBrand(const std::string& brand) {
-    const std::vector<std::string> files = storage::list("/ir/" + brand, false);
-    if (files.empty()) {
-        ui::message(brand, {"Nessun file .ir in /ir/" + brand}, "Telecomandi");
+void openBrand(const Brand& brand) {
+    const std::vector<Remote> remotes = listRemotes(brand);
+    if (remotes.empty()) {
+        ui::message(brand.name, {"Nessun file .ir per questa marca."},
+                    "Telecomandi");
         return;
     }
-    MenuManager menu(brand, "Telecomandi");
+    MenuManager menu(brand.name, "Telecomandi");
     menu.addItem("Scansiona brand", "scan", [brand] { runScanner(brand); });
     menu.addSeparator();
-    for (const auto& file : files) {
-        if (upper(file).size() < 3 ||
-            upper(file).substr(upper(file).size() - 3) != ".IR") {
-            continue;
-        }
-        const std::string path = "/ir/" + brand + "/" + file;
-        std::string title = file;
-        if (title.size() > 3) {
-            title = title.substr(0, title.size() - 3);
-        }
-        if (isFavorite(path)) {
+    for (const auto& remote : remotes) {
+        std::string title = remote.name;
+        if (isFavorite(remote.path)) {
             title = "* " + title;
         }
-        menu.addItem(title, "ir", [path, title] { openFile(path, title); });
+        menu.addItem(title, "ir", [path = remote.path, title] {
+            openFile(path, title);
+        });
     }
     menu.setHint("ENTER=apri  ESC=indietro");
     menu.run(true);
@@ -776,17 +903,11 @@ int findPowerCommand(const std::vector<IrCommand>& commands) {
     return -1;
 }
 
-void runScanner(const std::string& brand) {
-    const std::vector<std::string> files = storage::list("/ir/" + brand, false);
-    std::vector<std::string> remotes;
-    for (const auto& file : files) {
-        if (upper(file).size() > 3 &&
-            upper(file).substr(upper(file).size() - 3) == ".IR") {
-            remotes.push_back(file);
-        }
-    }
+void runScanner(const Brand& brand) {
+    const std::vector<Remote> remotes = listRemotes(brand);
     if (remotes.empty()) {
-        ui::message(brand, {"Nessun telecomando da scansionare."}, "Scanner IR");
+        ui::message(brand.name, {"Nessun telecomando da scansionare."},
+                    "Scanner IR");
         return;
     }
     if (!ui::confirm("Scanner IR",
@@ -794,7 +915,7 @@ void runScanner(const std::string& brand) {
                       "uno alla volta, finche' il dispositivo",
                       "non reagisce. Usa solo su dispositivi tuoi.",
                       "F = salva il telecomando nei preferiti."},
-                     brand)) {
+                     brand.name)) {
         return;
     }
 
@@ -815,9 +936,9 @@ void runScanner(const std::string& brand) {
     uint32_t nextAt = millis() + 400;
 
     for (;;) {
-        const std::string path = "/ir/" + brand + "/" + remotes[index];
+        const std::string path = remotes[index].path;
         if (loadPending) {
-            model = baseName(path);
+            model = remotes[index].name;
             favorite = isFavorite(path);
             feedback.clear();
             commands.clear();
@@ -844,7 +965,7 @@ void runScanner(const std::string& brand) {
         }
 
         display::clear(display::kPaper);
-        display::header("Scanner IR", brand);
+        display::header("Scanner IR", brand.name);
         display::text(6, 26,
                       "File " + std::to_string(index + 1) + "/" +
                           std::to_string(remotes.size()),
@@ -916,18 +1037,39 @@ void runScanner(const std::string& brand) {
     }
 }
 
-void runScannerBrands() {
-    const std::vector<std::string> brands = storage::list("/ir", true);
+void runScannerCategory(int category) {
+    const std::vector<Brand> brands = categoryBrands(category);
     if (brands.empty()) {
-        ui::message("Scanner IR", {"Nessun database in /ir."}, "Infrarossi");
+        ui::message(kCategories[category].label,
+                    {"Nessun telecomando in questa categoria."}, "Scanner IR");
         return;
     }
-    MenuManager menu("Scanner IR", "Infrarossi");
+    MenuManager menu(kCategories[category].label, "Scanner IR");
     for (const auto& brand : brands) {
-        menu.addItem(brand, "ir", [brand] { runScanner(brand); });
+        menu.addItem(brand.name, "scan", [brand] { runScanner(brand); });
     }
     menu.setGrid(3);
     menu.setHint("ENTER=scansiona  ;.=riga/pagina  ESC=indietro");
+    menu.run(true);
+}
+
+void runScannerBrands() {
+    MenuManager menu("Scanner IR", "Infrarossi");
+    int shown = 0;
+    for (size_t i = 0; i < kCategoryCount; ++i) {
+        if (categoryBrands(static_cast<int>(i)).empty()) {
+            continue;
+        }
+        menu.addItem(kCategories[i].label, "scan",
+                     [i] { runScannerCategory(static_cast<int>(i)); });
+        ++shown;
+    }
+    if (shown == 0) {
+        ui::message("Scanner IR", {"Nessun database in /ir."}, "Infrarossi");
+        return;
+    }
+    menu.setGrid(2);
+    menu.setHint("ENTER=categoria  ESC=indietro");
     menu.run(true);
 }
 
@@ -955,21 +1097,42 @@ void runFavorites() {
     menu.run(true);
 }
 
-void runRemotes() {
-    const std::vector<std::string> brands = storage::list("/ir", true);
+void runCategory(int category) {
+    const std::vector<Brand> brands = categoryBrands(category);
     if (brands.empty()) {
+        ui::message(kCategories[category].label,
+                    {"Nessun telecomando in questa categoria."}, "Telecomandi");
+        return;
+    }
+    MenuManager menu(kCategories[category].label, "Telecomandi");
+    for (const auto& brand : brands) {
+        menu.addItem(brand.name, "ir", [brand] { openBrand(brand); });
+    }
+    menu.setGrid(3);
+    menu.setHint("ENTER=apri  ;.=riga/pagina  ESC=indietro");
+    menu.run(true);
+}
+
+void runRemotes() {
+    MenuManager menu("Telecomandi", "Infrarossi");
+    int shown = 0;
+    for (size_t i = 0; i < kCategoryCount; ++i) {
+        if (categoryBrands(static_cast<int>(i)).empty()) {
+            continue;
+        }
+        menu.addItem(kCategories[i].label, "ir",
+                     [i] { runCategory(static_cast<int>(i)); });
+        ++shown;
+    }
+    if (shown == 0) {
         ui::message("Telecomandi", {"Nessun database in /ir.",
                                     "Carica i file .ir su LittleFS o microSD.",
                                     "Formato: Flipper Zero .ir"},
                     "Infrarossi");
         return;
     }
-    MenuManager menu("Telecomandi", "Infrarossi");
-    for (const auto& brand : brands) {
-        menu.addItem(brand, "ir", [brand] { openBrand(brand); });
-    }
-    menu.setGrid(3);
-    menu.setHint("ENTER=apri  ;.=riga/pagina  ESC=indietro");
+    menu.setGrid(2);
+    menu.setHint("ENTER=categoria  ESC=indietro");
     menu.run(true);
 }
 
@@ -987,41 +1150,45 @@ void runSearch() {
         return;
     }
 
-    const std::vector<std::string> brands = storage::list("/ir", true);
-    if (brands.empty()) {
-        ui::message("Cerca", {"!Nessun database in /ir."}, "Infrarossi");
-        return;
-    }
-
     constexpr size_t kMaxResults = 40;
     const std::vector<std::string> favorites = loadFavorites();
     std::vector<MenuItem> matches;
+    bool hasDatabase = false;
 
-    for (const auto& brand : brands) {
-        const bool brandHit = lower(brand).find(needle) != std::string::npos;
-        for (const auto& file : storage::list("/ir/" + brand, false)) {
-            const std::string upperFile = upper(file);
-            if (upperFile.size() < 4 || upperFile.substr(upperFile.size() - 3) != ".IR") {
-                continue;
+    for (size_t c = 0; c < kCategoryCount && matches.size() < kMaxResults; ++c) {
+        const std::vector<Brand> brands = categoryBrands(static_cast<int>(c));
+        if (!brands.empty()) {
+            hasDatabase = true;
+        }
+        for (const auto& brand : brands) {
+            const bool brandHit = lower(brand.name).find(needle) != std::string::npos;
+            for (const auto& remote : listRemotes(brand)) {
+                if (!brandHit &&
+                    lower(remote.name).find(needle) == std::string::npos) {
+                    continue;
+                }
+                std::string title = brand.name + " / " + remote.name;
+                if (std::find(favorites.begin(), favorites.end(),
+                              remote.path) != favorites.end()) {
+                    title = "* " + title;
+                }
+                matches.emplace_back(title, "ir",
+                                     [path = remote.path, name = remote.name] {
+                                         openFile(path, name);
+                                     });
+                if (matches.size() >= kMaxResults) {
+                    break;
+                }
             }
-            const std::string model = baseName(file);
-            if (!brandHit && lower(model).find(needle) == std::string::npos) {
-                continue;
-            }
-            const std::string path = "/ir/" + brand + "/" + file;
-            std::string title = brand + " / " + model;
-            if (std::find(favorites.begin(), favorites.end(), path) != favorites.end()) {
-                title = "* " + title;
-            }
-            matches.emplace_back(title, "ir",
-                                 [path, model] { openFile(path, model); });
             if (matches.size() >= kMaxResults) {
                 break;
             }
         }
-        if (matches.size() >= kMaxResults) {
-            break;
-        }
+    }
+
+    if (!hasDatabase) {
+        ui::message("Cerca", {"!Nessun database in /ir."}, "Infrarossi");
+        return;
     }
 
     if (matches.empty()) {
