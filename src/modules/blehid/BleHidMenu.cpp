@@ -54,25 +54,33 @@ void drawWaiting(const std::string& title, const std::string& name,
     display::header(title, "BLE HID");
     display::textCentered(30, script ? "Attendo l'host" : "Tastiera Bluetooth",
                           display::kAccent, 4);
-    display::text(8, 52, "Nome: " + name, display::kText, 0);
-    display::text(8, 64, std::string("Layout: ") + layoutName(),
+    display::text(8, 50, "Nome: " + name, display::kText, 0);
+    display::text(8, 60, std::string("Layout: ") + layoutName(),
                   display::kTextDim, 0);
 
-    const bool connected = hid::connected();
-    const bool ready = hid::subscribed();
-    const char* status = ready      ? "Collegato"
-                         : connected ? "Connesso: attendo pairing"
-                                     : "In attesa di connessione";
-    display::text(8, 80, status,
+    const bool up = hid::linkUp();
+    const bool secure = hid::linkSecure();
+    const bool authorized = hid::authorized();
+    const bool ready = hid::ready();
+    if (up) {
+        display::text(8, 72, "Host: " + hid::peerAddress(), display::kInfo, 0);
+    }
+
+    const char* status = ready         ? "Collegato"
+                         : !up         ? "In attesa di connessione"
+                         : !secure     ? "Connesso: attendo pairing"
+                         : !authorized ? "Host da autorizzare"
+                                       : "Attendo i report";
+    display::text(8, 88, status,
                   ready ? display::C(display::T_ok) : display::kWarning, 2);
 
-    display::text(8, 98, "Associa il dispositivo dalle", display::kTextDim, 0);
-    display::text(8, 108, "impostazioni Bluetooth.", display::kTextDim, 0);
+    display::text(8, 104, "Associa il dispositivo dalle", display::kTextDim, 0);
+    display::text(8, 114, "impostazioni Bluetooth.", display::kTextDim, 0);
     display::footer("ESC = annulla");
     display::push();
 }
 
-// Attende connessione e sottoscrizione dei report (pairing compreso).
+// Attende connessione, cifratura e autorizzazione esplicita del peer.
 bool waitHost(const std::string& title, const std::string& name, bool script) {
     powertimer::Hold hold;
     navigation::waitRelease();
@@ -83,12 +91,33 @@ bool waitHost(const std::string& title, const std::string& name, bool script) {
             drawWaiting(title, name, script);
             lastDraw = now;
         }
-        if (hid::subscribed()) {
-            // Lascia completare encryption e discovery prima dei primi tasti.
-            delay(700);
-            navigation::waitRelease();
-            return hid::connected();
+
+        // La UI non dice mai "Collegato" prima della cifratura. Dopo il
+        // pairing serve la conferma sulla Cardputer: Just Works non
+        // autentica il central, quindi l'utente verifica l'indirizzo.
+        if (hid::linkUp() && hid::linkSecure() && !hid::authorized()) {
+            if (!ui::confirm("Autorizza host",
+                             {"Host: " + hid::peerAddress(),
+                              "Link Bluetooth cifrato (Just Works).",
+                              "Autorizza solo un PC/telefono tuo.",
+                              "ENTER = autorizza   ESC = rifiuta"},
+                             title)) {
+                return false;
+            }
+            if (!hid::authorizePeer()) {
+                return false;
+            }
+            lastDraw = 0;
+            continue;
         }
+
+        if (hid::ready()) {
+            // Lascia completare discovery e sottoscrizione prima dei tasti.
+            delay(300);
+            navigation::waitRelease();
+            return hid::ready();
+        }
+
         if (navigation::poll().type == navigation::Event::Back) {
             return false;
         }
@@ -125,9 +154,11 @@ void drawLive(const std::string& name, uint32_t typed,
               const std::string& preview) {
     display::clear(display::kBackground);
     display::header("BLE HID", "Tastiera");
-    display::text(8, 27, "Connesso", display::C(display::T_ok), 2);
-    display::text(8, 41, "Nome: " + name, display::kTextDim, 0);
-    display::text(8, 51, std::string("Layout: ") + layoutName(),
+    const bool ready = hid::ready();
+    display::text(8, 26, ready ? "Collegato" : "Report non pronti",
+                  ready ? display::C(display::T_ok) : display::kWarning, 2);
+    display::text(8, 41, "Host: " + hid::peerAddress(), display::kInfo, 0);
+    display::text(8, 51, "Nome: " + name + "  Layout: " + layoutName(),
                   display::kTextDim, 0);
     display::text(8, 61, "LED: " + ledText(hid::leds()), display::kTextDim, 0);
     display::text(8, 75, "Tasti inviati: " + std::to_string(typed),
@@ -159,11 +190,21 @@ void runLive(const std::string& name) {
         auto& state = M5Cardputer.Keyboard.keysState();
         const uint32_t now = millis();
 
-        if (!hid::connected()) {
-            break;
-        }
         if (wordHas(state.word, '`') && !wordHas(lastWord, '`')) {
             break;
+        }
+        if (!hid::linkUp()) {
+            // Chiudi solo quando il server non ha piu' peer: la
+            // disconnessione di un central estraneo non deve terminare la
+            // sessione dell'host legittimo. ESC resta sempre disponibile.
+            if (hid::peerCount() == 0) {
+                break;
+            }
+            delay(20);
+            continue;
+        }
+        if (!hid::authorized()) {
+            break;  // cifratura o autorizzazione persa: nessun invio
         }
 
         bool sent = false;
@@ -261,11 +302,31 @@ struct HidSession {
     HidSession& operator=(const HidSession&) = delete;
 };
 
+void showStartError(hid::StartError error) {
+    switch (error) {
+        case hid::StartError::LowHeap:
+            ui::message("BLE HID",
+                        {"!Memoria insufficiente.", "Servono almeno 32 KB liberi.",
+                         "Chiudi le altre funzioni e riprova."},
+                        "BLE HID");
+            break;
+        case hid::StartError::PeerConnected:
+            ui::message("BLE HID",
+                        {"!BLE gia' in uso.", "Un host e' connesso a un altro modulo.",
+                         "Attendi la disconnessione e riprova."},
+                        "BLE HID");
+            break;
+        default:
+            ui::message("BLE HID",
+                        {"!Stack BLE non disponibile.", "Riprova o riavvia il dispositivo."},
+                        "BLE HID");
+            break;
+    }
+}
+
 void runKeyboard() {
     if (!ui::legalWarning("Tastiera BLE HID",
-                          {"Il dispositivo si presenta come",
-                           "tastiera Bluetooth a PC o telefoni.",
-                           "Nessun mouse, nessuna porta USB."},
+                          {"Serve autorizzazione esplicita dell'host."},
                           "BLE HID")) {
         return;
     }
@@ -274,9 +335,7 @@ void runKeyboard() {
     {
         HidSession session(name);
         if (!session.ok) {
-            ui::message("BLE HID",
-                        {"!Stack BLE non disponibile.", "Riprova o riavvia il dispositivo."},
-                        "BLE HID");
+            showStartError(hid::lastError());
             return;
         }
         if (!waitHost("Tastiera BLE", name, false)) {
@@ -290,9 +349,7 @@ void runKeyboard() {
 void runBadScript(const std::string& name, bool preferSd) {
 #if ENABLE_OFFENSIVE
     if (!ui::legalWarning("Bad BLE - " + name,
-                          {"Esegue uno script Ducky su host",
-                           "Bluetooth gia' associato.",
-                           "Solo su dispositivi tuoi."},
+                          {"Host Bluetooth associato e autorizzato."},
                           "Bad BLE")) {
         return;
     }
@@ -303,16 +360,16 @@ void runBadScript(const std::string& name, bool preferSd) {
     {
         HidSession session(device);
         if (!session.ok) {
-            ui::message("Bad BLE",
-                        {"!Stack BLE non disponibile.", "Riprova o riavvia il dispositivo."},
-                        "Bad BLE");
+            showStartError(hid::lastError());
             return;
         }
         if (!waitHost("Bad BLE", device, true)) {
             return;
         }
         if (!ui::confirm("Bad BLE",
-                         {"Script: " + name, "Host connesso.", "Avvio esecuzione..."},
+                         {"Script: " + name,
+                          "Host: " + hid::peerAddress(),
+                          "Avvio esecuzione..."},
                          "Bad BLE")) {
             return;
         }
@@ -398,11 +455,10 @@ void showInfo() {
     ui::message("Info BLE HID",
                 {"Nome: " + deviceName(),
                  std::string("Layout host: ") + layoutName(),
-                 "HID over GATT: report boot 8 byte",
+                 "Un solo host, link cifrato e autorizzato",
+                 "Report 0x2A4D; 0x2A22 solo in Boot",
                  "Script: /badusb (SD, poi LittleFS)",
-                 "Solo tastiera. NimBLE rilasciato all'uscita.",
-                 "Associa il dispositivo dalle impostazioni",
-                 "Bluetooth di PC o telefono."},
+                 "Solo tastiera. NimBLE rilasciato all'uscita."},
                 "BLE HID");
 }
 

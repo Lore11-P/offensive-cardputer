@@ -9,6 +9,7 @@
 #include <NimBLEHIDDevice.h>
 #include <Preferences.h>
 
+#include <cstdio>
 #include <cstring>
 
 #include "Logger.h"
@@ -58,34 +59,130 @@ const uint8_t kReportMap[] = {
     0xC0               // End Collection
 };
 
+constexpr uint32_t kMinFreeHeap = 32 * 1024;
+constexpr uint16_t kNoHandle = 0xFFFF;
+// Just Works + conferma esplicita sulla Cardputer: non richiediamo MITM.
+// Portare a true per pretendere anche sec_state.authenticated.
+constexpr bool kRequireAuthenticated = false;
+
 bool g_begun = false;
 volatile bool g_connected = false;
+volatile bool g_secure = false;
+volatile bool g_authenticated = false;
+volatile bool g_authorized = false;
+volatile bool g_bootProtocol = false;
+volatile uint16_t g_peerHandle = kNoHandle;
+char g_peerAddress[18] = "--";
+portMUX_TYPE g_peerMux = portMUX_INITIALIZER_UNLOCKED;
+StartError g_lastError = StartError::None;
 std::string g_name;
 NimBLEHIDDevice* g_hid = nullptr;
 NimBLECharacteristic* g_input = nullptr;
 NimBLECharacteristic* g_bootInput = nullptr;
 NimBLECharacteristic* g_output = nullptr;
 NimBLECharacteristic* g_bootOutput = nullptr;
-uint8_t g_leds = 0;
+volatile uint8_t g_leds = 0;
 uint32_t g_sentKeys = 0;
 Layout g_layout = Layout::It;
 bool g_layoutLoaded = false;
 
+// Un solo central autorizzato: il primo che si connette. Gli altri vengono
+// disconnessi subito. L'autorizzazione e' esplicita sulla Cardputer.
 class ServerCallbacks : public NimBLEServerCallbacks {
-    void onConnect(NimBLEServer*, ble_gap_conn_desc*) override {
+    void onConnect(NimBLEServer* server, ble_gap_conn_desc* desc) override {
+        if (server == nullptr || desc == nullptr) {
+            return;
+        }
+        bool busy = false;
+        portENTER_CRITICAL(&g_peerMux);
+        busy = g_peerHandle != kNoHandle;
+        portEXIT_CRITICAL(&g_peerMux);
+        if (busy) {
+            logger::warn("BLE HID: seconda connessione rifiutata (handle %u)",
+                         static_cast<unsigned>(desc->conn_handle));
+            server->disconnect(desc->conn_handle);
+            return;
+        }
+
+        const std::string address =
+            NimBLEAddress(desc->peer_id_addr).toString();
+        portENTER_CRITICAL(&g_peerMux);
+        std::snprintf(g_peerAddress, sizeof(g_peerAddress), "%s", address.c_str());
+        g_peerHandle = desc->conn_handle;
         g_connected = true;
-        logger::info("BLE HID: host connesso");
-    }
-    void onDisconnect(NimBLEServer*) override {
-        g_connected = false;
+        g_secure = desc->sec_state.encrypted &&
+                   (!kRequireAuthenticated || desc->sec_state.authenticated);
+        g_authenticated = desc->sec_state.authenticated;
+        g_authorized = false;
         g_leds = 0;
-        logger::info("BLE HID: host disconnesso");
+        portEXIT_CRITICAL(&g_peerMux);
+
+        logger::info("BLE HID: host connesso %s, avvio sicurezza", address.c_str());
+        const int rc = NimBLEDevice::startSecurity(desc->conn_handle);
+        if (rc != 0) {
+            logger::warn("BLE HID: startSecurity rc=%d", rc);
+        }
+    }
+
+    void onDisconnect(NimBLEServer*, ble_gap_conn_desc* desc) override {
+        if (desc == nullptr) {
+            return;
+        }
+        bool mine = false;
+        portENTER_CRITICAL(&g_peerMux);
+        if (desc->conn_handle == g_peerHandle) {
+            mine = true;
+            g_peerHandle = kNoHandle;
+            g_connected = false;
+            g_secure = false;
+            g_authenticated = false;
+            g_authorized = false;
+            g_bootProtocol = false;
+            g_leds = 0;
+            std::snprintf(g_peerAddress, sizeof(g_peerAddress), "--");
+        }
+        portEXIT_CRITICAL(&g_peerMux);
+        if (mine) {
+            logger::info("BLE HID: host autorizzato disconnesso");
+        }
+    }
+
+    void onAuthenticationComplete(ble_gap_conn_desc* desc) override {
+        if (desc == nullptr) {
+            return;
+        }
+        const bool secure = desc->sec_state.encrypted &&
+                            (!kRequireAuthenticated || desc->sec_state.authenticated);
+        bool mine = false;
+        portENTER_CRITICAL(&g_peerMux);
+        mine = desc->conn_handle == g_peerHandle;
+        if (mine) {
+            g_secure = secure;
+            g_authenticated = desc->sec_state.authenticated;
+            if (!secure) {
+                g_authorized = false;
+            }
+        }
+        portEXIT_CRITICAL(&g_peerMux);
+        if (!mine) {
+            return;
+        }
+        if (!secure) {
+            logger::warn("BLE HID: link non cifrato/autenticato, disconnessione");
+            NimBLEServer* server = NimBLEDevice::getServer();
+            if (server != nullptr) {
+                server->disconnect(desc->conn_handle);
+            }
+        } else {
+            logger::info("BLE HID: link cifrato (authenticated=%s)",
+                         desc->sec_state.authenticated ? "si" : "no");
+        }
     }
 };
 
 class OutputCallbacks : public NimBLECharacteristicCallbacks {
     void onWrite(NimBLECharacteristic* characteristic) override {
-        if (characteristic == nullptr) {
+        if (characteristic == nullptr || !g_secure || !g_authorized) {
             return;
         }
         const NimBLEAttValue value = characteristic->getValue();
@@ -95,8 +192,25 @@ class OutputCallbacks : public NimBLECharacteristicCallbacks {
     }
 };
 
+// Protocol Mode: 0x00 = Boot Protocol, 0x01 = Report Protocol.
+// In boot protocol si usa solo 0x2A22, mai 0x2A4D e 0x2A22 insieme.
+class ProtocolCallbacks : public NimBLECharacteristicCallbacks {
+    void onWrite(NimBLECharacteristic* characteristic) override {
+        if (characteristic == nullptr) {
+            return;
+        }
+        const NimBLEAttValue value = characteristic->getValue();
+        if (value.length() > 0) {
+            g_bootProtocol = (value.data()[0] == 0x00);
+            logger::info("BLE HID: protocol mode %s",
+                         g_bootProtocol ? "boot" : "report");
+        }
+    }
+};
+
 ServerCallbacks g_serverCallbacks;
 OutputCallbacks g_outputCallbacks;
+ProtocolCallbacks g_protocolCallbacks;
 
 void loadLayout() {
     if (g_layoutLoaded) {
@@ -111,15 +225,34 @@ void loadLayout() {
     }
 }
 
-void sendReport(const uint8_t report[8]) {
-    if (g_input != nullptr) {
+bool inputSubscribed() {
+    return g_input != nullptr && g_input->getSubscribedCount() > 0;
+}
+
+bool bootInputSubscribed() {
+    return g_bootInput != nullptr && g_bootInput->getSubscribedCount() > 0;
+}
+
+// Notifica una sola caratteristica, solo se sottoscritta e solo su un link
+// cifrato e autorizzato. 0x2A22 esiste solo in Boot Protocol.
+bool sendReport(const uint8_t report[8]) {
+    if (!g_begun || !g_connected || !g_secure || !g_authorized) {
+        return false;
+    }
+    if (g_bootProtocol) {
+        if (bootInputSubscribed()) {
+            g_bootInput->setValue(report, 8);
+            g_bootInput->notify(report, 8);
+            return true;
+        }
+        return false;
+    }
+    if (inputSubscribed()) {
         g_input->setValue(report, 8);
         g_input->notify(report, 8);
+        return true;
     }
-    if (g_bootInput != nullptr) {
-        g_bootInput->setValue(report, 8);
-        g_bootInput->notify(report, 8);
-    }
+    return false;
 }
 
 bool mapAscii(uint8_t c, Layout layout, uint8_t& usage, uint8_t& mods) {
@@ -277,21 +410,61 @@ void cleanup() {
     g_bootOutput = nullptr;
     delete g_hid;  // i servizi appartengono al server, liberato da deinit(true)
     g_hid = nullptr;
+    portENTER_CRITICAL(&g_peerMux);
     g_connected = false;
+    g_secure = false;
+    g_authenticated = false;
+    g_authorized = false;
+    g_bootProtocol = false;
+    g_peerHandle = kNoHandle;
+    std::snprintf(g_peerAddress, sizeof(g_peerAddress), "--");
+    portEXIT_CRITICAL(&g_peerMux);
     g_begun = false;
 }
 
+// True se un modulo precedente (Chat, BLE+, Radar) ha lasciato un host
+// connesso. In quel caso deinit ucciderebbe una sessione legittima.
+bool otherHostConnected() {
+    NimBLEServer* server = NimBLEDevice::getServer();
+    if (server != nullptr && server->getConnectedCount() > 0) {
+        return true;
+    }
+#if defined(CONFIG_BT_NIMBLE_ROLE_CENTRAL)
+    std::list<NimBLEClient*>* clients = NimBLEDevice::getClientList();
+    if (clients != nullptr) {
+        for (NimBLEClient* client : *clients) {
+            if (client != nullptr && client->isConnected()) {
+                return true;
+            }
+        }
+    }
+#endif
+    return false;
+}
+
 }  // namespace
+
+StartError lastError() {
+    return g_lastError;
+}
 
 bool begin(const std::string& name) {
     if (g_begun) {
         return true;
     }
+    g_lastError = StartError::None;
     loadLayout();
 
-    // Gli altri moduli BLE (Chat, BLE Spam) lasciano lo stack acceso: qui il
-    // modulo e' esclusivo, quindi si riparte da zero con il nostro nome.
+    // Lo stack puo' essere gia' attivo (Chat, BLE, Radar). Se un host e'
+    // connesso non lo tocciamo: chiuderebbe una sessione legittima. Senza
+    // peer lo fermiamo e lo ricreiamo in modo esclusivo col nostro nome.
     if (NimBLEDevice::getInitialized()) {
+        if (otherHostConnected()) {
+            g_lastError = StartError::PeerConnected;
+            logger::warn("BLE HID: stack BLE occupato da un host connesso");
+            return false;
+        }
+        logger::info("BLE HID: stack BLE gia' attivo, riavvio esclusivo");
         NimBLEDevice::stopAdvertising();
         NimBLEScan* scan = NimBLEDevice::getScan();
         if (scan != nullptr) {
@@ -300,17 +473,29 @@ bool begin(const std::string& name) {
         NimBLEDevice::deinit(true);
         delay(30);
     }
+
+    if (ESP.getFreeHeap() < kMinFreeHeap) {
+        g_lastError = StartError::LowHeap;
+        logger::error("BLE HID: heap insufficiente (%u byte)",
+                      static_cast<unsigned>(ESP.getFreeHeap()));
+        return false;
+    }
+
     NimBLEDevice::init(name);
     if (!NimBLEDevice::getInitialized()) {
+        g_lastError = StartError::Stack;
         logger::error("BLE HID: init NimBLE fallita");
         return false;
     }
     NimBLEDevice::setOwnAddrType(BLE_OWN_ADDR_PUBLIC, false);
     NimBLEDevice::setSecurityAuth(true, false, true);
+    // Just Works: l'autorizzazione vera e' la conferma esplicita sulla
+    // Cardputer, dopo il controllo dell'indirizzo del central.
     NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
 
     NimBLEServer* server = NimBLEDevice::createServer();
     if (server == nullptr) {
+        g_lastError = StartError::Stack;
         NimBLEDevice::deinit(true);
         return false;
     }
@@ -319,6 +504,7 @@ bool begin(const std::string& name) {
 
     g_hid = new NimBLEHIDDevice(server);
     if (g_hid == nullptr) {
+        g_lastError = StartError::Stack;
         NimBLEDevice::deinit(true);
         return false;
     }
@@ -332,24 +518,37 @@ bool begin(const std::string& name) {
     g_output = g_hid->outputReport(1);
     g_bootInput = g_hid->bootInput();
     g_bootOutput = g_hid->bootOutput();
+    NimBLECharacteristic* protocolMode = g_hid->protocolMode();
     if (g_input == nullptr || g_output == nullptr || g_bootInput == nullptr ||
-        g_bootOutput == nullptr) {
+        g_bootOutput == nullptr || protocolMode == nullptr) {
         cleanup();
         NimBLEDevice::deinit(true);
+        g_lastError = StartError::Stack;
         return false;
     }
     g_output->setCallbacks(&g_outputCallbacks);
     g_bootOutput->setCallbacks(&g_outputCallbacks);
+    protocolMode->setCallbacks(&g_protocolCallbacks);
     g_hid->startServices();
 
     g_name = name;
     g_leds = 0;
     g_sentKeys = 0;
+    portENTER_CRITICAL(&g_peerMux);
+    g_connected = false;
+    g_secure = false;
+    g_authenticated = false;
+    g_authorized = false;
+    g_bootProtocol = false;
+    g_peerHandle = kNoHandle;
+    std::snprintf(g_peerAddress, sizeof(g_peerAddress), "--");
+    portEXIT_CRITICAL(&g_peerMux);
 
     NimBLEAdvertising* advertising = NimBLEDevice::getAdvertising();
     if (advertising == nullptr) {
         cleanup();
         NimBLEDevice::deinit(true);
+        g_lastError = StartError::Stack;
         return false;
     }
     advertising->reset();
@@ -362,6 +561,7 @@ bool begin(const std::string& name) {
         logger::error("BLE HID: advertising non avviato");
         cleanup();
         NimBLEDevice::deinit(true);
+        g_lastError = StartError::Stack;
         return false;
     }
 
@@ -390,17 +590,66 @@ bool active() {
     return g_begun;
 }
 
-bool connected() {
+bool linkUp() {
     return g_begun && g_connected;
 }
 
+bool linkSecure() {
+    return linkUp() && g_secure;
+}
+
+bool authorized() {
+    return linkSecure() && g_authorized;
+}
+
 bool subscribed() {
-    if (!g_begun) {
+    // Solo il report input 0x2A4D: il boot input 0x2A22 non rende la
+    // sessione pronta.
+    return g_begun && inputSubscribed();
+}
+
+bool ready() {
+    return authorized() && subscribed();
+}
+
+bool connected() {
+    return ready();
+}
+
+bool bootProtocol() {
+    return g_bootProtocol;
+}
+
+uint16_t peerCount() {
+    if (!NimBLEDevice::getInitialized()) {
+        return 0;
+    }
+    NimBLEServer* server = NimBLEDevice::getServer();
+    return server != nullptr ? server->getConnectedCount() : 0;
+}
+
+std::string peerAddress() {
+    char buffer[18];
+    portENTER_CRITICAL(&g_peerMux);
+    std::memcpy(buffer, g_peerAddress, sizeof(buffer));
+    buffer[sizeof(buffer) - 1] = '\0';
+    portEXIT_CRITICAL(&g_peerMux);
+    return std::string(buffer);
+}
+
+bool authorizePeer() {
+    if (!linkSecure()) {
         return false;
     }
-    const bool input = g_input != nullptr && g_input->getSubscribedCount() > 0;
-    const bool boot = g_bootInput != nullptr && g_bootInput->getSubscribedCount() > 0;
-    return input || boot;
+    portENTER_CRITICAL(&g_peerMux);
+    g_authorized = true;
+    portEXIT_CRITICAL(&g_peerMux);
+    logger::info("BLE HID: host autorizzato dall'utente");
+    return true;
+}
+
+void deauthorizePeer() {
+    g_authorized = false;
 }
 
 const std::string& deviceName() {
@@ -446,7 +695,7 @@ bool mapCodepoint(uint32_t codepoint, uint8_t& usage, uint8_t& mods) {
 }
 
 bool tapUsage(uint8_t usage, uint8_t mods, uint32_t holdMs) {
-    if (!g_begun || !g_connected) {
+    if (!authorized()) {
         return false;
     }
     uint8_t report[8] = {mods, 0, 0, 0, 0, 0, 0, 0};
@@ -457,7 +706,9 @@ bool tapUsage(uint8_t usage, uint8_t mods, uint32_t holdMs) {
     } else {
         return false;
     }
-    sendReport(report);
+    if (!sendReport(report)) {
+        return false;
+    }
     delay(holdMs);
     uint8_t release[8] = {};
     sendReport(release);
