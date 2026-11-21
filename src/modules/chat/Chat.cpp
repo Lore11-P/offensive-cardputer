@@ -51,10 +51,26 @@ constexpr uint8_t kControlResponse = 2;
 constexpr uint8_t kControlPresence = 3;
 
 struct ChatMessage {
-    std::string sender;
-    std::string text;
+    char sender[kNickLen + 1] = {};
+    char text[kTextLen + 1] = {};
     bool mine = false;
 };
+
+// Copia troncata su buffer fisso: nessuna allocazione, usabile dentro le
+// sezioni critiche (interrupt disabilitati).
+void copyFixed(char* out, size_t cap, const char* text) {
+    if (out == nullptr || cap == 0) {
+        return;
+    }
+    size_t written = 0;
+    if (text != nullptr) {
+        while (written + 1 < cap && text[written] != '\0') {
+            out[written] = text[written];
+            ++written;
+        }
+    }
+    out[written] = '\0';
+}
 
 constexpr size_t kMaxPeers = 16;
 constexpr size_t kMaxCounters = 16;
@@ -471,7 +487,7 @@ void beginNameQuery(const char* name, uint32_t queryId) {
     char canonical[kNickLen + 1];
     canonicalInto(name, canonical);
     portENTER_CRITICAL(&g_lock);
-    std::snprintf(g_nameQueryName, sizeof(g_nameQueryName), "%s", canonical);
+    copyFixed(g_nameQueryName, sizeof(g_nameQueryName), canonical);
     g_nameQueryId = queryId;
     g_nameQueryTaken = false;
     g_nameQueryActive = true;
@@ -530,7 +546,7 @@ void notifyPeerLocked(const char* name, uint32_t now) {
     if (!config::chatNotifyEnabled()) {
         return;
     }
-    std::snprintf(g_notifyName, sizeof(g_notifyName), "%s", name);
+    copyFixed(g_notifyName, sizeof(g_notifyName), name);
     g_notifyUntil = now + kNotifyDurationMs;
     g_notifyBeepPending = true;
     g_dirty = true;
@@ -549,8 +565,7 @@ void handleControlPacket(uint8_t type, const char* name, uint32_t queryId,
     if (type == kControlQuery) {
         if (g_chatActive && canonicalEquals(name, g_selfNick)) {
             portENTER_CRITICAL(&g_lock);
-            std::snprintf(g_controlResponseName, sizeof(g_controlResponseName),
-                          "%s", name);
+            copyFixed(g_controlResponseName, sizeof(g_controlResponseName), name);
             g_controlResponseId = queryId;
             g_controlResponsePending = true;
             portEXIT_CRITICAL(&g_lock);
@@ -641,8 +656,8 @@ void pushMessageLocked(const char* sender, const char* text, bool mine) {
         g_messageStart = (g_messageStart + 1) % kHistoryMax;
     }
     ChatMessage& message = g_messages[slot];
-    message.sender.assign(sender);
-    message.text.assign(text);
+    copyFixed(message.sender, sizeof(message.sender), sender);
+    copyFixed(message.text, sizeof(message.text), text);
     message.mine = mine;
     g_dirty = true;
 }
@@ -739,7 +754,11 @@ public:
         portEXIT_CRITICAL(&g_lock);
 
         if (added) {
-            logger::info("Chat BLE: %s: %s", sender, text);
+            // Solo metadati: il contenuto dei messaggi non deve finire sul
+            // seriale USB (log persistenti / acquisibili da terzi).
+            logger::info("Chat BLE: messaggio ricevuto, %u byte, ctr=%u",
+                         static_cast<unsigned>(std::strlen(text)),
+                         static_cast<unsigned>(counter));
         }
     }
 };
@@ -774,11 +793,7 @@ void drawChat() {
     portENTER_CRITICAL(&g_lock);
     messageCount = g_messageCount;
     for (size_t i = 0; i < messageCount; ++i) {
-        const ChatMessage& source =
-            g_messages[(g_messageStart + i) % kHistoryMax];
-        messages[i].sender.assign(source.sender);
-        messages[i].text.assign(source.text);
-        messages[i].mine = source.mine;
+        messages[i] = g_messages[(g_messageStart + i) % kHistoryMax];
     }
     const uint32_t now = millis();
     for (PeerEntry& peer : g_peers) {
@@ -792,7 +807,7 @@ void drawChat() {
         }
     }
     if (now < g_notifyUntil) {
-        std::snprintf(notifyName, sizeof(notifyName), "%s", g_notifyName);
+        copyFixed(notifyName, sizeof(notifyName), g_notifyName);
     }
     portEXIT_CRITICAL(&g_lock);
 
@@ -824,8 +839,7 @@ void drawChat() {
         for (size_t i = start; i < messageCount; ++i) {
             const ChatMessage& message = messages[i];
             std::snprintf(line, sizeof(line), "%s: %s",
-                          message.mine ? "Tu" : message.sender.c_str(),
-                          message.text.c_str());
+                          message.mine ? "Tu" : message.sender, message.text);
             if (std::strlen(line) > 39) {
                 line[38] = '~';
                 line[39] = '\0';
@@ -962,6 +976,16 @@ void editNickname() {
     }
 
     config::setChatNickname(candidate);
+    // Il setter salva ma non riporta l'esito: una seconda save() idempotente
+    // dice se NVS ha davvero accettato i valori.
+    if (!config::save()) {
+        ui::message("Nickname chat",
+                    {">Nickname: " + config::chatNickname(),
+                     "!Salvataggio NVS non riuscito.",
+                     "Il valore vale solo fino al riavvio."},
+                    "Chat");
+        return;
+    }
     ui::message("Nickname chat",
                 {">Nickname: " + config::chatNickname(),
                  "Disponibile e salvato."},
@@ -976,6 +1000,14 @@ void editRecipient() {
         return;
     }
     config::setChatRecipient(fields[0].value);
+    if (!config::save()) {
+        ui::message("Destinatario chat",
+                    {">A: " + config::chatRecipient(),
+                     "!Salvataggio NVS non riuscito.",
+                     "Il valore vale solo fino al riavvio."},
+                    "Chat");
+        return;
+    }
     ui::message("Destinatario chat",
                 {">A: " + config::chatRecipient()}, "Chat");
 }
@@ -1095,13 +1127,17 @@ void runChat() {
 void toggleNotifications() {
     const bool enabled = !config::chatNotifyEnabled();
     config::setChatNotifyEnabled(enabled);
-    ui::message("Notifiche chat",
-                {enabled ? ">Presenza e avvisi attivi."
-                         : ">Presenza e avvisi disattivati.",
-                 enabled ? "Gli altri vedono il tuo nickname."
-                         : "Nessun annuncio: modalita' stealth.",
-                 "L'avviso appare con la Chat aperta."},
-                "Chat");
+    std::vector<std::string> lines = {
+        enabled ? ">Presenza e avvisi attivi."
+                : ">Presenza e avvisi disattivati.",
+        enabled ? "Gli altri vedono il tuo nickname."
+                : "Nessun annuncio: modalita' stealth.",
+        "L'avviso appare con la Chat aperta."};
+    if (!config::save()) {
+        lines.push_back("!Salvataggio NVS non riuscito.");
+        lines.push_back("Il valore vale solo fino al riavvio.");
+    }
+    ui::message("Notifiche chat", lines, "Chat");
 }
 
 void runMenu() {

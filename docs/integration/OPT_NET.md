@@ -23,15 +23,15 @@ modifiche, sorgenti identici a parte i sei file sopra.
 
 | Voce | Prima | Dopo | Delta |
 |---|---:|---:|---:|
-| Flash usata (linker) | 2.358.193 B | 2.343.345 B | **−14.848 B (−0,63%)** |
-| `firmware.bin` | 2.358.560 B | 2.343.712 B | **−14.848 B** |
-| RAM statica (`.data`+`.bss`) | 115.520 B (35,3%) | 122.032 B (37,2%) | **+6.512 B** |
-| Slot OTA residuo | 262.847 B | 277.695 B | +14.848 B |
+| Flash usata (linker) | 2.358.193 B | 2.344.921 B | **−13.272 B (−0,56%)** |
+| `firmware.bin` | 2.358.560 B | 2.345.280 B | **−13.280 B** |
+| RAM statica (`.data`+`.bss`) | 115.520 B (35,3%) | 121.576 B (37,1%) | **+6.056 B** |
+| Slot OTA residuo | 262.847 B | 277.119 B | +13.272 B |
 
 La RAM statica cresce perché i pool prima erano heap (o stack) e ora sono in
-BSS: +1,8 KB BleSpam, +1,5 KB Radar, +1,2 KB Chat, +1,8 KB WifiMenu,
+BSS: +1,8 KB BleSpam, +1,5 KB Radar, +0,8 KB Chat, +1,8 KB WifiMenu,
 +0,1 KB WifiSetup. In cambio l'heap non cresce più a ogni apertura/chiusura e
-i callback non allocano. Con 327.680 B di SRAM restano ~205 KB di heap al boot.
+i callback non allocano. Con 327.680 B di SRAM restano ~206 KB di heap al boot.
 
 Codice per oggetto (`size`, text / data+bss):
 
@@ -40,9 +40,9 @@ Codice per oggetto (`size`, text / data+bss):
 | WifiMenu | 87.451 / 257 | 79.438 / 2.043 |
 | RadarMenu | 37.556 / 1.405 | 33.157 / 2.932 |
 | BleSpam | 21.742 / 36 | 19.706 / 1.844 |
-| Chat | 27.490 / 145 | 20.832 / 1.377 |
+| Chat | 27.490 / 145 | 22.061 / 913 |
 | PcapTools | 15.495 / 0 | 15.519 / 0 |
-| WifiSetup | 23.398 / 0 | 23.524 / 128 |
+| WifiSetup | 23.398 / 0 | 24.441 / 128 |
 
 ### Allocazioni per ciclo (stima da codice)
 
@@ -115,17 +115,32 @@ i numeri sotto contano solo le stringhe più lunghe e i contenitori.
 
 ### Chat
 
-- Storico in anello fisso da 8 messaggi; peer e contatori in array fissi
+- Storico in anello fisso da 8 messaggi con campi `char[]` (nessuna
+  `std::string` dentro le sezioni critiche); peer e contatori in array fissi
   (16+16) con indirizzo nativo a 6 byte. Spariscono `std::map`, `std::vector`
   e la crescita illimitata dei peer.
 - Callback: manufacturer data estratta dal payload grezzo, parsing su buffer
   fissi, nickname/indirizzo propri in cache. Nessuna allocazione per
-  advertising; le stringhe dei messaggi restano in SSO.
+  advertising; il messaggio viene copiato nel ring con `copyFixed()`.
 - Derivazione chiave/IV e tag su `char[]` (stesso algoritmo, stesso
   separatore 0x1F, stessa canonicalizzazione/limite 6 caratteri).
 - Snapshot di disegno su array statico; testi con scratch.
 - Invariati: cifratura AES-CBC, formato pacchetto, presence/query/response,
   timeout peer e comportamento stealth.
+
+#### Audit core (post-review)
+
+- **Log seriale**: `Chat.cpp:759` registra solo `byte` e `ctr` del messaggio;
+  il testo non viene più scritto su USB. Esito: applicato.
+- **Sezione critica**: `ChatMessage` è POD (`Chat.cpp:53`, `copyFixed()` a
+  `:61`); `pushMessageLocked` (`:649`) e lo snapshot di `drawChat` (`:788-796`)
+  fanno solo copie/`memcpy` sotto `portENTER_CRITICAL`. Parsing, decifratura e
+  costruzione stringhe restano fuori. Esito: applicato.
+- **Errori NVS**: `wifisetup::saveCredentials` (`WifiSetup.cpp:102`) controlla
+  `putString`, rilegge le chiavi e ritorna `false` senza dichiarare il
+  salvataggio; `editNickname`/`editRecipient`/`toggleNotifications`
+  (`Chat.cpp:981`, `:1003`, `:1136`) verificano `config::save()` e mostrano
+  l'errore. Esito: applicato.
 
 ### PcapTools
 
@@ -178,7 +193,8 @@ i numeri sotto contano solo le stringhe più lunghe e i contenitori.
    stop e popup assenti dopo l'uscita.
 10. **Chat**: due Cardputer, nickname duplicato rifiutato, messaggio
     inviato/ricevuto, duplicato ignorato, presence, stealth, apertura/chiusura
-    10 volte.
+    10 volte. Sul seriale devono comparire solo lunghezza e contatore, mai il
+    testo; con NVS piena/quasi piena il salvataggio deve dichiarare l'errore.
 11. **Impostazioni > Rete WiFi**: schermata ferma 60 s (niente traffico NVS),
     scan/connect/salva/dimentica.
 12. **Capture**: conversione PCAP e estrazione EAPOL su una cattura di test.
@@ -198,6 +214,10 @@ i numeri sotto contano solo le stringhe più lunghe e i contenitori.
   come prima.
 - **Sniffer**: il ring resta su heap (12,8 KB) e viene liberato alla chiusura;
   il collector live ora resta allocato (~3 KB) per tutta la sessione.
+- **NVS**: `saveCredentials` verifica con rilettura; le impostazioni Chat
+  chiamano `config::save()` una seconda volta per conoscere l'esito (NVS viene
+  scritta due volte, solo su azione utente). I testi UI restano invariati nel
+  caso nominale; compaiono solo i messaggi di errore se il salvataggio fallisce.
 - **PcapTools**: il salto dei frame non EAPOL si basa su `isEapol()` calcolato
   da `parsePayload`; se in futuro `parsePayload` cambiasse semantica, va
   riallineato.

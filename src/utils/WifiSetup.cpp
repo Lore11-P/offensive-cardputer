@@ -102,11 +102,22 @@ bool loadCredentials(std::string& ssid, std::string& password) {
 bool saveCredentials(const std::string& ssid, const std::string& password) {
     Preferences prefs;
     if (!prefs.begin(kNetNamespace, false)) {
+        logger::warn("WiFi: NVS non disponibile, credenziali non salvate");
         return false;
     }
-    prefs.putString("ssid", ssid.c_str());
-    prefs.putString("pass", password.c_str());
+    const size_t ssidWrote = prefs.putString("ssid", ssid.c_str());
+    const size_t passWrote = prefs.putString("pass", password.c_str());
+    // putString() ritorna la lunghezza scritta, 0 anche per una password
+    // vuota: il valore effettivo si verifica rileggendo le due chiavi.
+    const bool ok = ssidWrote == ssid.size() && passWrote == password.size() &&
+                    prefs.getString("ssid", "") == ssid.c_str() &&
+                    prefs.getString("pass", "") == password.c_str();
     prefs.end();
+    if (!ok) {
+        logger::warn("WiFi: salvataggio credenziali non riuscito per %s",
+                     ssid.c_str());
+        return false;
+    }
     logger::info("WiFi: credenziali salvate per %s", ssid.c_str());
     return true;
 }
@@ -419,12 +430,19 @@ bool scanAndConnect(const std::string& parent) {
 
     if (connect(network.ssid, password, parent)) {
         // Salva solo a connessione riuscita: una password sbagliata non deve
-        // sovrascrivere credenziali che funzionavano.
-        saveCredentials(network.ssid, password);
+        // sovrascrivere credenziali che funzionavano. Se NVS fallisce la
+        // connessione resta valida ma non va dichiarata salvata.
+        const bool saved = saveCredentials(network.ssid, password);
         std::string ip = WiFi.localIP().toString().c_str();
-        ui::message("WiFi", {">Connesso a " + shortened(network.ssid, 20), "IP: " + ip,
-                             "Credenziali salvate."},
-                    parent);
+        std::vector<std::string> lines = {
+            ">Connesso a " + shortened(network.ssid, 20), "IP: " + ip};
+        if (saved) {
+            lines.push_back("Credenziali salvate.");
+        } else {
+            lines.push_back("!Credenziali non salvate.");
+            lines.push_back("La connessione vale fino al riavvio.");
+        }
+        ui::message("WiFi", lines, parent);
         return true;
     }
     ui::message("WiFi",
