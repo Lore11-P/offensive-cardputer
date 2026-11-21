@@ -120,17 +120,22 @@ void ipOctets(const IPAddress& ip, uint8_t out[4]) {
 }
 
 // Fine del nome DNS a partire da pos (dopo lo zero finale), 0 se malformato.
+// Il nome massimo DNS e' 255 byte incluso lo zero finale.
 size_t skipDnsName(const uint8_t* data, size_t len, size_t pos) {
+    const size_t start = pos;
     size_t guard = 0;
     while (pos < len && guard++ < 128) {
         const uint8_t label = data[pos];
         if (label == 0) {
-            return pos + 1;
+            return (pos - start + 1) <= 255 ? pos + 1 : 0;
         }
         if ((label & 0xC0) != 0 || label > 63) {
             return 0;  // query compresse: non gestite
         }
         pos += static_cast<size_t>(label) + 1;
+        if (pos - start > 255) {
+            return 0;
+        }
     }
     return 0;
 }
@@ -157,6 +162,10 @@ void handleLlmnr() {
     }
     uint8_t out[kUdpMax];
     const size_t nameLen = nameEnd - 12;
+    // 2*nameLen (domanda + risposta) + 30 byte di header/record.
+    if (nameLen == 0 || nameLen > 255 || 2 * nameLen + 30 > sizeof(out)) {
+        return;
+    }
     memcpy(out, in, 4);
     putBe16(out + 2, 0x8000);
     putBe16(out + 4, 1);
@@ -255,6 +264,10 @@ void handleMdns() {
     }
     const size_t nameLen = nameEnd - 12;
     uint8_t out[kUdpMax];
+    if (nameLen == 0 || nameLen > 255 || nameLen + 32 > sizeof(out)) {
+        return;
+    }
+    const bool unicastResponse = (be16(in + nameEnd + 2) & 0x8000) != 0;
     memcpy(out, in, 4);
     putBe16(out + 2, 0x8400);
     putBe16(out + 4, 1);
@@ -262,6 +275,7 @@ void handleMdns() {
     putBe16(out + 8, 0);
     putBe16(out + 10, 0);
     memcpy(out + 12, in + 12, nameLen + 4);
+    putBe16(out + 12 + nameLen + 2, 1);  // classe senza bit QU nella risposta
     size_t offset = 12 + nameLen + 4;
     out[offset++] = 0xC0;  // puntatore al nome della domanda
     out[offset++] = 0x0C;
@@ -278,7 +292,11 @@ void handleMdns() {
     memcpy(out + offset, octets, 4);
     offset += 4;
 
-    g_mdns.beginPacket(IPAddress(224, 0, 0, 251), kMdnsPort);
+    if (unicastResponse) {
+        g_mdns.beginPacket(g_mdns.remoteIP(), g_mdns.remotePort());
+    } else {
+        g_mdns.beginPacket(IPAddress(224, 0, 0, 251), kMdnsPort);
+    }
     g_mdns.write(out, offset);
     g_mdns.endPacket();
     ++g_mdnsCount;
@@ -403,9 +421,13 @@ void captureType3(const uint8_t* ntlm, size_t len, uint64_t messageId) {
     const uint16_t userLen = le16(ntlm + 36);
     const uint32_t userOff = le32(ntlm + 40);
 
-    // Sotto le 24 byte e' NTLMv1 (formato 5500): non supportato qui.
-    if (ntLen < 24 || ntLen > 512 || ntOff + ntLen > len ||
-        domainOff + domainLen > len || userOff + userLen > len) {
+    // NetNTLMv2: 16 byte di proof + blob (almeno 28 byte). Le risposte
+    // NTLMv1 da 24 byte (formato 5500) non vanno scritte in un file 5600.
+    const auto inRange = [len](uint32_t offset, uint16_t size) {
+        return offset <= len && size <= len - offset;
+    };
+    if (ntLen < 44 || ntLen > 512 || !inRange(ntOff, ntLen) ||
+        !inRange(domainOff, domainLen) || !inRange(userOff, userLen)) {
         ++g_skipped;
         return;
     }
@@ -470,9 +492,11 @@ void smbProcess(uint8_t* message, size_t len) {
     if (len < 64 + 24) {
         return;
     }
-    const uint16_t securityOffset = le16(message + 72);
-    const uint16_t securityLength = le16(message + 74);
-    if (securityOffset < 64 || securityLength < 12 ||
+    // SESSION_SETUP request (MS-SMB2 2.2.5): Capabilities a +68, Channel a +72,
+    // SecurityBufferOffset a +76, SecurityBufferLength a +78, buffer a +88.
+    const uint16_t securityOffset = le16(message + 76);
+    const uint16_t securityLength = le16(message + 78);
+    if (securityOffset < 88 || securityLength < 12 ||
         static_cast<size_t>(securityOffset) + securityLength > len) {
         return;
     }
@@ -629,6 +653,7 @@ void runResponder() {
         return;
     }
     if (!wifisetup::ensureConnected(true, "WiFi+")) {
+        wifisetup::disconnect();  // nessuna radio lasciata accesa su annulla/errore
         ui::message("Responder", {"WiFi non connesso.", "Serve una rete per ricevere",
                                   "le query dei client."},
                     "WiFi+");
