@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Audio.h>
+#include <stdint.h>
 
 // Gestore condiviso del decoder ESP32-audioI2S e del bus I2S dello speaker.
 //
@@ -18,14 +19,39 @@ int volume();
 void setVolume(int value);
 
 // Prepara la riproduzione: chiude lo speaker, configura i pin I2S dal
-// M5Unified della board e applica il volume corrente. Ritorna false se il bus
-// non e' stato liberato.
+// M5Unified della board e applica il volume corrente. Reinstalla anche il
+// driver I2S0 se il microfono o un altro modulo lo hanno fermato. Ritorna
+// false se il bus non e' pronto.
 bool beginPlayback();
 
-// Ferma la traccia e restituisce l'I2S a M5Unified (beep della UI).
+// Reinstalla il driver I2S0 del decoder (config identica a quella della
+// libreria). Utile dopo l'uso di M5.Mic, che condivide I2S0.
+void reinit();
+
+// Ferma la traccia e restituisce l'I2S a M5Unified (beep della UI). Se una
+// registrazione e' ancora aperta la chiude prima di rilasciare il bus.
 void endPlayback();
 
-// Va chiamato spesso durante la riproduzione: pompa lo stream del decoder.
+// Va chiamato spesso durante la riproduzione: pompa lo stream del decoder e
+// svuota il ring buffer della registrazione verso la SD.
 void pump();
+
+// --- Metadati ICY ------------------------------------------------------------
+// I callback weak audio_showstation/audio_showstreamtitle della libreria
+// aggiornano questi buffer. Stringhe vuote se lo stream non li fornisce.
+const char* streamStation();
+const char* streamTitle();
+void clearMetadata();
+
+// --- Registrazione WAV (PCM decodificato, 16 bit stereo) --------------------
+// Il callback audio_process_extern copia il PCM in un ring buffer da 16 KB;
+// pump() lo scrive sulla SD, quindi il task audio non tocca mai il filesystem.
+// L'intestazione WAV viene completata alla chiusura con il sample rate reale.
+bool startRecording(const char* path);
+uint32_t stopRecording();  // byte PCM scritti; 0 se non si e' mai registrato
+bool recording();
+uint32_t recordingBytes();       // PCM finora (file + ring non ancora scritto)
+uint32_t recordingSampleRate();
+bool recordingError();           // scrittura SD fallita durante la cattura
 
 }  // namespace audioout
