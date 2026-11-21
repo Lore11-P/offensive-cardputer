@@ -143,8 +143,8 @@
 #endif
 
 namespace fw {
-inline constexpr const char* kVersion = "2.0.1";
-inline constexpr const char* kTitle = "ORBIT OS v2.0.1";
+inline constexpr const char* kVersion = "2.0.2";
+inline constexpr const char* kTitle = "ORBIT OS v2.0.2";
 inline constexpr const char* kShortTitle = "ORBIT OS";
 inline constexpr const char* kBuildDate = __DATE__;
 }  // namespace fw

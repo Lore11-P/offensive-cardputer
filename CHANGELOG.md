@@ -2,6 +2,12 @@
 
 Tutte le modifiche rilevanti del progetto. Formato basato su Keep a Changelog.
 
+## [2.0.2] - 2026-11-21
+
+### Corretto
+
+- **Musica/SD**: aggiunto `storage::remountSD()` (retry con gli stessi pin), schermata “SD non montata” con `R`, diagnostica SD/album/brani e fallback `/data/Music` → `/music` → `/Music`. La SD inserita dopo il boot non richiede più un riavvio.
+
 ## [2.0.1] - 2026-11-21
 
 ### Corretto

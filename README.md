@@ -1,9 +1,13 @@
-# ORBIT OS v2.0.1
+# ORBIT OS v2.0.2
 
 Firmware modulare per **M5Stack Cardputer ADV** (ESP32-S3FN8, 8 MB flash, **senza PSRAM**), scritto in C++17 con PlatformIO/Arduino. Interfaccia a menu con icone, navigazione da tastiera e moduli attivabili/disattivabili a runtime.
 
 > **Avviso legale**
 > Il firmware include moduli radio e IR. Le funzioni offensive (BLE spam, deauth Wi-Fi, evil twin, evil portal, jammer IR) sono **disabilitate di default** (`ENABLE_OFFENSIVE=0`) e nella build pubblica non vengono nemmeno compilate. L'uso di trasmissioni radio non autorizzate, il disturbo di reti altrui e la raccolta non consensuale di credenziali sono reati in Italia e in molti altri Paesi. Usa questo progetto **solo su dispositivi e reti tuoi**, oppure in un ambiente RF isolato con autorizzazione scritta. L'autore non si assume alcuna responsabilità per usi impropri.
+
+## Novità 2.0.2
+
+- **Musica/SD**: `storage::remountSD()` con retry, schermata “SD non montata” con `R`, diagnostica album/brani e fallback di sola lettura `/data/Music` → `/music` → `/Music`. Se la SD viene inserita dopo il boot, la libreria compare senza riavvio.
 
 ## Novità 2.0.1
 
