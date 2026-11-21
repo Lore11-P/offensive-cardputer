@@ -5,8 +5,8 @@
 - 10 feature nuove, 4 ottimizzatori, 10 bug tester, 2 merger, 2 supervisori.
 - Trunk: `feat/10-modules`.
 - Build `cardputer-adv-offensive`: **SUCCESS**.
-- `firmware.bin`: **2.662.784 B**.
-- Slot app 2.0: **2.818.048 B**, usati 2.662.417 B (**94,5%**), liberi **155.264 B**.
+- `firmware.bin`: **2.663.424 B**.
+- Slot app 2.0: **2.818.048 B**, usati 2.663.053 B (**94,5%**), liberi **154.624 B**.
 - RAM statica: **146.976 / 327.680 B (44,9%)**; framebuffer ~64,8 KB; heap residuo stimato ~115 KB.
 - LittleFS 2.0: **2.621.440 B (2,5 MB)**, piena; il database IR completo è su SD.
 
@@ -19,6 +19,7 @@ Menu a 7 hub: Rete, Bluetooth, Analisi RF, Media, Strumenti, Giochi, Sistema.
 ## Verifiche
 
 - 10 report di bug testing in `docs/integration/tests/`.
+- **Fix post-test**: colori RGB565 in `Orbit.cpp` (`ditherSpan` con cast `lgfx::rgb565_t`) e IR ~2,1× più veloce (una sola `listEntries`, niente `exists` per-file, cache preferiti/marche, parser 1 KB). Dettagli in `DIAG_COLORS.md`, `FIX_COLORS.md`, `DIAG_IR.md`, `FIX_IR.md`.
 - P0 chiusi: SMB2/overflow WiFi+, sicurezza BLE HID, race SD ESP-NOW, memoria IR.
 - P1 chiusi: potfile/upload WPA-SEC, WAV/memo Audio, NTP/atomicità Tools, LED/pedometro Sensori, whitelist/legal gate WiFi Lab, TZ/decoder/REC Radio.
 - Ottimizzazioni: ~−32 KB flash, pool fissi rete/BLE, UI senza ridisegni a riposo.
@@ -54,3 +55,5 @@ Usare `flasher\flash.ps1`, il web flasher (Chrome/Edge) o `esptool`. Dopo il fla
 - `E:\downloads\offensive-cardputer-firmware-v2.0.0.bin`.
 - `E:\ir`: 2.255 file `.ir` (8 categorie).
 - SD: `/radio`, `/audio`, `/tools`, `/wifilab`, `/wpasec`, `/wifiext`, `/espnow`.
+
+> Nota: la SD E: non era montata durante l'ultimo rebuild post-fix. La copia su SD va rifatta appena la card viene reinserita; il flasher su PC è già aggiornato.
