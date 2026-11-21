@@ -1,9 +1,18 @@
-# ORBIT OS v1.21
+# ORBIT OS v2.0
 
 Firmware modulare per **M5Stack Cardputer ADV** (ESP32-S3FN8, 8 MB flash, **senza PSRAM**), scritto in C++17 con PlatformIO/Arduino. Interfaccia a menu con icone, navigazione da tastiera e moduli attivabili/disattivabili a runtime.
 
 > **Avviso legale**
 > Il firmware include moduli radio e IR. Le funzioni offensive (BLE spam, deauth Wi-Fi, evil twin, evil portal, jammer IR) sono **disabilitate di default** (`ENABLE_OFFENSIVE=0`) e nella build pubblica non vengono nemmeno compilate. L'uso di trasmissioni radio non autorizzate, il disturbo di reti altrui e la raccolta non consensuale di credenziali sono reati in Italia e in molti altri Paesi. Usa questo progetto **solo su dispositivi e reti tuoi**, oppure in un ambiente RF isolato con autorizzazione scritta. L'autore non si assume alcuna responsabilità per usi impropri.
+
+## Novità 2.0.0
+
+- **10 nuovi moduli**: IR completo su SD, Radio con playlist/ICY/REC, Audio (FFT/REC/memo), BLE HID + Bad BLE, Utility (clock/note/calcolatrice/QR/TOTP), WiFi Lab (PMKID/client/spettro), WPA-SEC, Sensori (livella/goniometro/pedometro/torcia), WiFi+ (Responder/Karma/Auto-Portal), ESP-NOW.
+- **Menu a 7 hub**: Rete, Bluetooth, Analisi RF, Media, Strumenti, Giochi, Sistema.
+- **Ottimizzazioni**: −32 KB di flash, ridisegni UI eliminati a riposo, pool fissi per WiFi/BLE/radar, chat senza log in chiaro.
+- **Layout 2.0**: due slot app da 2,6875 MB e LittleFS da 2,5 MB. Richiede un **flash USB una tantum** con la nuova tabella partizioni; il vecchio LittleFS a `0x510000` non viene più letto (il database IR completo vive su SD).
+- **Correzioni di sicurezza**: BLE HID richiede link cifrato e peer autorizzato; WPA-SEC valida il formato reale del potfile; WiFi+ corregge SMB2/overflow; ESP-NOW serializza la SD e vincola i pacchetti al MAC.
+
 
 ## Stato dei moduli
 
@@ -24,7 +33,8 @@ Firmware modulare per **M5Stack Cardputer ADV** (ESP32-S3FN8, 8 MB flash, **senz
 | BadUSB | ✅ solo env `hid` | Script Ducky/Flipper da `/badusb`, tastiera HID via TinyUSB (nessun mouse) |
 | Aggiornamento OTA | ✅ | Da WiFi: scarica `firmware.bin` dal ramo `main` del repo GitHub e lo scrive nella partizione inattiva; richiede il layout dual-OTA (`partitions.csv`) |
 | microSD | ✅ | File browser, info spazio, screenshot BMP, backup config e punteggi |
-| Database IR | 🟡 | 309 file .ir, 38 cartelle: 32 marche TV complete, 5 parziali, 3 coperte da Universale; verifica i codici sui tuoi apparecchi |
+| Database IR | ✅ | **2.255 file .ir su SD**, 8 categorie (TV, Clima, Audio, DVD, Proiettore, Console, Universale, Altro); fallback LittleFS con 309 file. Verifica i codici sui tuoi apparecchi |
+| Moduli 2.0 | ✅ | IR completo, Radio+ (playlist/ICY/REC), Audio (FFT/REC/memo), BLE HID/Bad BLE, Utility (clock/note/QR/TOTP), WiFi Lab (PMKID/client/spettro), WPA-SEC, Sensori, WiFi+ (Responder/Karma/Portal), ESP-NOW |
 | Asset icone 32×32 | ✅ | BMP 24 bit generati, con fallback se assenti |
 | Test automatici host | ⬜ | Predisposta la cartella `test/`, nessun test incluso |
 | Verifica su hardware reale | ⬜ | Compilazione e filesystem verificati; test su device da fare |

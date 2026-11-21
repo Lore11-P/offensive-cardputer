@@ -2,6 +2,32 @@
 
 Tutte le modifiche rilevanti del progetto. Formato basato su Keep a Changelog.
 
+## [2.0.0] - 2026-11-21
+
+### Aggiunto
+
+- **IR completo su SD**: 2.255 file, 8 categorie (TV, Clima, Audio, DVD, Proiettore, Console, Universale, Altro), parser a righe, preferiti con backend e ricerca per categoria/marca.
+- **Radio estesa**: playlist `/radio/stations.txt`, metadati ICY, registrazione WAV a fette, `decoderRunning()` senza allocare il decoder.
+- **Audio**: FFT 512 punti, registratore WAV 16 kHz, voice memo in streaming, gestione ES8311/I2S.
+- **BLE HID + Bad BLE**: tastiera BLE con pairing, link cifrato, peer autorizzato e parser Ducky.
+- **Utility**: clock NTP/manuale, calendario, note atomiche, calcolatrice, QR e TOTP.
+- **WiFi Lab**: PMKID attivo, client monitor, whitelist fail-closed, spettro 2.4 GHz con waterfall e peak decay.
+- **WPA-SEC**: upload multipart, potfile reale, TLS con CA e fallback controllato.
+- **Sensori**: livella, goniometro, pedometro e torcia LED con gestione sospensione.
+- **WiFi+**: Responder LLMNR/NBT-NS/mDNS con SMB2, Karma e Auto-Portal.
+- **ESP-NOW**: file a blocchi con CRC/ACK, inbox atomica, comandi whitelisted, clipboard e peer.
+- **Menu a hub** (Rete, Bluetooth, Analisi RF, Media, Strumenti, Giochi, Sistema) e 8 icone procedurali.
+
+### Modificato
+
+- **Layout 2.0**: `app0`/`app1` da 2,6875 MB, LittleFS 2,5 MB a `0x570000`. Flash USB una tantum.
+- **Ottimizzazioni**: −32 KB di flash, pool fissi per rete/BLE/radar, UI senza ridisegni a riposo, chat senza log del testo.
+- **Sicurezza**: BLE HID con cifratura e autorizzazione, WPA-SEC potfile/upload reali, WiFi+ SMB2/overflow, ESP-NOW mutex SD e MAC binding.
+
+### Corretto
+
+- OTA/Config/Logger, buffer WAV, header audio, NTP e Wi-Fi cleanup, LED condiviso, pedometro senza RTC, whitelist fail-closed, `.bak` recovery e QR v6.
+
 ## [Unreleased]
 
 ### Aggiunto
