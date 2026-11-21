@@ -17,6 +17,7 @@ uint32_t s_lastMs = 0;
 
 constexpr float kDeadbandDps = 1.2f;  // sotto questa velocita' si considera fermo
 constexpr uint32_t kBiasMs = 400;
+constexpr float kMaxDtSec = 0.25f;  // dopo una pausa lunga non integrare il tempo fermo
 
 }  // namespace
 
@@ -59,9 +60,12 @@ void update() {
         return;
     }
     const uint32_t now = millis();
-    const float dt = static_cast<float>(now - s_lastMs) / 1000.0f;
+    float dt = static_cast<float>(now - s_lastMs) / 1000.0f;
     if (dt < 0.005f) {
         return;  // troppo presto: evita divisioni per dt minuscoli
+    }
+    if (dt > kMaxDtSec) {
+        dt = kMaxDtSec;
     }
     s_lastMs = now;
 
@@ -77,11 +81,11 @@ void update() {
         rate = 0.0f;  // fermo: niente accumulo di deriva
     }
     s_heading += rate * dt;
-    while (s_heading < 0.0f) {
+    // fmod invece dei due while: dopo un overflow di millis() o una pausa
+    // lunghissima il numero di giri puo' essere enorme.
+    s_heading = std::fmod(s_heading, 360.0f);
+    if (s_heading < 0.0f) {
         s_heading += 360.0f;
-    }
-    while (s_heading >= 360.0f) {
-        s_heading -= 360.0f;
     }
 }
 

@@ -28,6 +28,7 @@ const char* const kFirmwareUrl =
 namespace {
 
 constexpr uint32_t kHttpTimeoutMs = 20000;
+constexpr uint32_t kStallTimeoutMs = 60000;
 constexpr size_t kChunkSize = 2048;
 constexpr uint32_t kDrawIntervalMs = 120;
 
@@ -52,18 +53,19 @@ void drawProgress(const std::string& status, float fraction, const std::string& 
     display::push();
 }
 
-std::string humanSize(size_t bytes) {
-    char buf[24];
+// Scrive la dimensione in un buffer del chiamante: durante il download non
+// vengono create stringhe temporanee a ogni ridisegno.
+void formatSize(size_t bytes, char* out, size_t outLen) {
     if (bytes >= 1024 * 1024) {
-        std::snprintf(buf, sizeof(buf), "%.1f MB",
+        std::snprintf(out, outLen, "%.1f MB",
                       static_cast<double>(bytes) / (1024.0 * 1024.0));
     } else {
-        std::snprintf(buf, sizeof(buf), "%u KB", static_cast<unsigned>((bytes + 1023) / 1024));
+        std::snprintf(out, outLen, "%u KB",
+                      static_cast<unsigned>((bytes + 1023) / 1024));
     }
-    return std::string(buf);
 }
 
-// Mostra un errore leggibile e riaccende la radio per non lasciarla attiva.
+// Mostra un errore leggibile.
 void fail(const std::string& title, const std::vector<std::string>& lines,
           const std::string& parent) {
     ui::message(title, lines, parent);
@@ -73,6 +75,7 @@ void fail(const std::string& title, const std::vector<std::string>& lines,
 
 void run(const std::string& parent) {
     if (!wifisetup::ensureConnected(true, parent)) {
+        wifisetup::disconnect();
         fail("Aggiornamento",
              {"!Serve una connessione WiFi.", "Configura la rete da",
               "Impostazioni > Rete WiFi."},
@@ -84,6 +87,7 @@ void run(const std::string& parent) {
                      {"Scaricare firmware.bin dal", "repository GitHub e applicarlo?",
                       "Serve WiFi e il device si", "riavvia al termine."},
                      parent)) {
+        wifisetup::disconnect();
         return;
     }
 
@@ -103,6 +107,7 @@ void run(const std::string& parent) {
     http.setUserAgent("ORBIT-OS-OTA");
 
     if (!http.begin(client, kFirmwareUrl)) {
+        wifisetup::disconnect();
         fail("Aggiornamento", {"!URL firmware non valido.", "Verifica OtaUpdate.cpp."}, parent);
         return;
     }
@@ -110,6 +115,7 @@ void run(const std::string& parent) {
     const int code = http.GET();
     if (code != HTTP_CODE_OK) {
         http.end();
+        wifisetup::disconnect();
         fail("Aggiornamento",
              {"!Download non riuscito.", "HTTP " + std::to_string(code) + ".",
               "Riprova piu' tardi."},
@@ -120,6 +126,7 @@ void run(const std::string& parent) {
     const int contentLength = http.getSize();
     if (contentLength <= 0) {
         http.end();
+        wifisetup::disconnect();
         fail("Aggiornamento", {"!Dimensione firmware sconosciuta.", "Riprova piu' tardi."},
              parent);
         return;
@@ -133,6 +140,7 @@ void run(const std::string& parent) {
     const esp_partition_t* running = esp_ota_get_running_partition();
     if (target == nullptr || running == nullptr || target == running || target->size < total) {
         http.end();
+        wifisetup::disconnect();
         fail("Aggiornamento",
              {"!Layout OTA non disponibile.", "Serve un flash USB con il", "nuovo partitions.csv."},
              parent);
@@ -145,6 +153,7 @@ void run(const std::string& parent) {
     if (!Update.begin(total, U_FLASH)) {
         const std::string err = Update.errorString();
         http.end();
+        wifisetup::disconnect();
         fail("Aggiornamento",
              {"!Partizione OTA non disponibile.", "Serve un flash USB per", "installare il nuovo layout.",
               err},
@@ -168,7 +177,7 @@ void run(const std::string& parent) {
             // Server che tiene la connessione aperta ma non invia piu' nulla:
             // senza un timeout il loop resterebbe appeso per sempre (con
             // powertimer::Hold attivo, quindi senza spegnimento automatico).
-            if (!http.connected() || millis() - lastDataAt > 60000) {
+            if (!http.connected() || millis() - lastDataAt > kStallTimeoutMs) {
                 break;  // connessione chiusa o download bloccato
             }
             navigation::update();
@@ -201,10 +210,14 @@ void run(const std::string& parent) {
         if (millis() - lastDraw > kDrawIntervalMs || written == total) {
             lastDraw = millis();
             const float fraction = static_cast<float>(written) / static_cast<float>(total);
-            drawProgress("Download firmware", fraction,
-                         std::to_string(static_cast<int>(fraction * 100.0f)) + "%  " +
-                             humanSize(written) + " / " + humanSize(total),
-                         parent);
+            char done[16];
+            char full[16];
+            char detail[48];
+            formatSize(written, done, sizeof(done));
+            formatSize(total, full, sizeof(full));
+            std::snprintf(detail, sizeof(detail), "%d%%  %s / %s",
+                          static_cast<int>(fraction * 100.0f), done, full);
+            drawProgress("Download firmware", fraction, detail, parent);
         }
     }
 
@@ -212,6 +225,7 @@ void run(const std::string& parent) {
 
     if (cancelled) {
         Update.abort();
+        wifisetup::disconnect();
         fail("Aggiornamento",
              {"Aggiornamento annullato.", "Il firmware attuale non", "e' stato modificato."},
              parent);
@@ -221,12 +235,27 @@ void run(const std::string& parent) {
     if (writeFailed || written != total || !Update.end(true)) {
         const std::string err = Update.errorString();
         Update.abort();
+        wifisetup::disconnect();
         fail("Aggiornamento",
              {"!Scrittura non riuscita.", err, "Il firmware attuale resta attivo."}, parent);
         return;
     }
 
-    logger::info("OTA: firmware %u byte scritto, riavvio", static_cast<unsigned>(written));
+    // Verifica indipendente dell'immagine appena scritta: controlla la
+    // struttura e il descrittore dell'app. Se non e' valida si ripristina la
+    // partizione di boot corrente, senza riavviare sul firmware nuovo.
+    esp_app_desc_t written_desc = {};
+    if (esp_ota_get_partition_description(target, &written_desc) != ESP_OK) {
+        esp_ota_set_boot_partition(running);
+        wifisetup::disconnect();
+        fail("Aggiornamento",
+             {"!Immagine firmware non valida.", "Il firmware attuale resta attivo."}, parent);
+        return;
+    }
+
+    logger::info("OTA: %u byte scritti, immagine %.32s %.32s, riavvio",
+                 static_cast<unsigned>(written), written_desc.project_name,
+                 written_desc.version);
     drawProgress("Completato", 1.0f, "Riavvio in corso...", parent);
     delay(1200);
     ESP.restart();
