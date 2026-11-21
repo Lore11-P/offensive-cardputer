@@ -5,7 +5,7 @@
 .DESCRIPTION
   Compila l'ambiente indicato (o legge firmware.bin con -SkipBuild) e fallisce
   se il binario supera il tetto di budget. Il tetto predefinito e' la baseline
-  misurata (2.358.560 B) piu' 192 KiB per i 10 moduli; la dimensione dello slot
+  misurata (2.358.560 B) piu' 384 KiB per i 10 moduli; la dimensione dello slot
   app viene letta da partitions.csv e superarla e' sempre un errore critico.
   Vedi docs/integration/BUDGET.md.
 
@@ -13,7 +13,7 @@
   Ambiente PlatformIO. Default: cardputer-adv-offensive.
 
 .PARAMETER MaxBytes
-  Tetto del budget in byte. Default: 2555168 (2.358.560 + 192 KiB).
+  Tetto del budget in byte. Default: 2751776 (2.358.560 + 384 KiB).
 
 .PARAMETER SkipBuild
   Non compila: legge il firmware.bin gia' presente.
@@ -27,7 +27,7 @@
 [CmdletBinding()]
 param(
     [string]$Environment = 'cardputer-adv-offensive',
-    [int]$MaxBytes = 2555168,
+    [int]$MaxBytes = 2751776,
     [switch]$SkipBuild
 )
 

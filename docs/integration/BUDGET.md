@@ -1,11 +1,11 @@
 # Budget flash e RAM — integrazione 10 moduli
 
-Misura del 21/11/2026 sul worktree `orbit-wt-budget`, branch `feat/budget`
-(commit `c7456af`), ambiente `cardputer-adv-offensive`.
+Misura del 21/11/2026 sul worktree `orbit-wt-budget`, branch `feat/budget`,
+ambiente `cardputer-adv-offensive`.
 Toolchain: PlatformIO Core 6.2.0, `espressif32@6.7.0`, GCC xtensa 8.4.0.
 Hardware: M5Stack Cardputer ADV, ESP32-S3FN8, 8 MB flash, 320 KB SRAM, no PSRAM.
 
-## 1. Baseline misurata
+## 1. Baseline e stato integrazione
 
 Comando:
 
@@ -15,20 +15,24 @@ python -m platformio run -e cardputer-adv-offensive
 
 | Voce | Valore | Note |
 |---|---:|---|
-| Flash PlatformIO | 2.358.193 B (90,0%) | `text + data` stimati sul file ELF |
+| Flash PlatformIO | 2.358.193 B (83,7%) | `text + data` stimati sul file ELF |
 | `firmware.bin` | **2.358.560 B** | dimensione reale del binario |
-| Slot app OTA | 2.621.440 B (2,5 MiB) | `0x280000` in `partitions.csv` |
-| Libero nello slot | **262.880 B = 256,7 KiB** | 10,0% dello slot |
+| Slot app OTA | 2.818.048 B (2,6875 MiB) | `0x2B0000` in `partitions.csv` (Piano B) |
+| Libero nello slot | **459.488 B = 448,7 KiB** | 16,3% dello slot |
 | RAM statica | 115.520 / 327.680 B (35,3%) | `.data + .bss` |
 | RAM statica libera | 212.160 B | 207,2 KiB, prima di stack e heap |
 
-> **La baseline attesa di 2.330.085 B non è più valida in questo worktree.**
-> La build attuale misura 2.358.560 B (+28.475 B, circa +27,8 KiB). Gli 8 stub
-> del commit `e153b43` spiegano solo ~5 KB; il resto era già nella build
-> corrente e non nel valore di riferimento, che risulta più vecchio. Il margine
-> reale è quindi **256,7 KiB, non 291 KB**: tutti i conti seguenti usano il
-> valore misurato. Lo script di controllo legge `firmware.bin` (più conservativo
-> di PlatformIO di 367 B di header).
+> La baseline attesa di 2.330.085 B non è più valida: la build scaffold misura
+> 2.358.560 B (+28.475 B). Gli 8 stub spiegano solo ~5 KB; il resto era già
+> nella build corrente. I conti seguono il valore misurato.
+
+Stato del merge (riferito dal supervisore, non misurato in questo worktree):
+
+- 6 feature integrate: circa **2,52 MB**.
+- Mancano WiFi Lab (budget 28 KiB), Sensori (10 KiB) ed ESP-NOW (18 KiB):
+  **56 KiB** di budget residuo.
+- Stima del margine finale: **115–235 KiB**, a seconda che i 2,52 MB siano
+  decimali o MiB. Il valore va rimisurato dopo l'ultimo merge.
 
 Gli stub dei 10 moduli sono già compresi nella baseline: i budget sotto sono
 **delta** rispetto allo stub, cioè il codice che l'integrazione può aggiungere.
@@ -49,17 +53,19 @@ Gli stub dei 10 moduli sono già compresi nella baseline: i budget sotto sono
 | 10 | ESP-NOW (file, comandi, clipboard) | 18 | 4 | 8 | chunk da ~200 B |
 | | **Totale moduli** | **178** | **31** | **48 max** | gli heap non si sommano: i menu sono seriali |
 | | Contingenza condivisa | 14 | 1 | — | solo per sforamenti motivati |
-| | **Tetto integrazione** | **192** | **32** | — | |
-| | Riserva intoccabile | 64 | — | — | ~65.536 B di flash |
+| | **Tetto moduli** | **192** | **32** | — | |
+| | Margine Piano B | 192 | — | — | +192 KiB per slot rispetto al layout 2,5 MB |
+| | **Tetto integrazione** | **384** | **32** | — | |
+| | Riserva intoccabile | 64 | — | — | 65.536 B di flash |
 
 Aritmetica del budget flash:
 
 ```text
 baseline            2.358.560 B
-tetto integrazione    196.608 B  (192 KiB: 178 moduli + 14 contingenza)
+tetto integrazione    393.216 B  (384 KiB)
 ---------------------------------------------------------------
-tetto binario       2.555.168 B
-slot app            2.621.440 B
+tetto binario       2.751.776 B
+slot app            2.818.048 B
 margine finale         66.272 B  (64,7 KiB, >= 64 KiB richiesti)
 ```
 
@@ -120,50 +126,72 @@ Layout attuale (`partitions.csv`, 8 MiB totali):
 |---|---:|---:|---:|
 | `nvs` | `0x009000` | `0x005000` | 20 KiB |
 | `otadata` | `0x00E000` | `0x002000` | 8 KiB |
-| `app0` | `0x010000` | `0x280000` | 2,5 MiB |
-| `app1` | `0x290000` | `0x280000` | 2,5 MiB |
-| `spiffs` (LittleFS) | `0x510000` | `0x2E0000` | 2,875 MiB |
+| `app0` | `0x010000` | `0x2B0000` | 2,6875 MiB |
+| `app1` | `0x2C0000` | `0x2B0000` | 2,6875 MiB |
+| `spiffs` (LittleFS) | `0x570000` | `0x280000` | 2,5 MiB |
 | `coredump` | `0x7F0000` | `0x010000` | 64 KiB |
+
+Verifica: `0x10000 + 0x2B0000 = 0x2C0000`, `0x2C0000 + 0x2B0000 = 0x570000`,
+`0x570000 + 0x280000 = 0x7F0000`, `0x7F0000 + 0x10000 = 0x800000` (8 MiB).
+Offset e dimensioni degli slot sono multipli di `0x10000` (64 KiB).
+
+Perché non 2,75/2,375 MB: la mappa richiesta è aritmeticamente valida, ma con
+il `data/` attuale **LittleFS a 2,375 MB si riempie**. `buildfs` fallisce con
+`lfs_write error(-28): File system is full` prima di Toshiba, Trevi, United,
+Universale e Xiaomi. Il payload è 1.474.017 B, ma l'allocazione LittleFS
+(323 file, 41 directory, blocchi da 4 KiB) supera 2,375 MB. A 2,5 MB `buildfs`
+completa senza errori. Il costo è 64 KiB per slot: margine 448,7 KiB invece
+di 512,7 KiB.
 
 LittleFS:
 
-- Payload in `data/`: **1.474.017 B** su 3.014.656 B di partizione (48,9%,
-  ~1,4 MiB liberi al netto dell'overhead FS).
+- Payload in `data/`: **1.474.017 B** su 2.621.440 B (56,2% del payload, ma
+  l'allocazione è quasi satura).
 - Di cui IR: **1.435.981 B in 309 file** (97,4% del payload); icone 37.512 B
   (12 file); script BadUSB 524 B.
 - `data/` **non entra in `firmware.bin`**: è un'immagine separata. Spostare il
   DB IR su SD non libera flash applicativa, libera solo LittleFS.
+- La LittleFS è quasi piena: non aggiungere altri file in `data/`. Il database
+  IR completo deve stare su SD.
 
 Cosa mettere su SD (e cosa no):
 
-- **SD, sempre**: nuove categorie IR e crescita del DB (il fallback LittleFS
-  resta congelato a 1,436 MB come richiede la spec IR); registrazioni
-  `/audio/rec`, memo, catture `.hc22000`/`.pcap`, potfile, playlist radio,
-  whitelist e PMKID, inbox/outbox ESP-NOW, note/calendario/TOTP, log e cache.
-  Non duplicare questi file in LittleFS.
+- **SD, sempre**: nuove categorie IR e crescita del DB (in LittleFS resta il
+  fallback da 309 file richiesto dalla spec IR); registrazioni `/audio/rec`,
+  memo, catture `.hc22000`/`.pcap`, potfile, playlist radio, whitelist e PMKID,
+  inbox/outbox ESP-NOW, note/calendario/TOTP, log e cache. Non duplicare questi
+  file in LittleFS.
 - **LittleFS**: solo il fallback IR attuale e le icone dei menu (servono prima
   del mount SD). Nessun dato utente o file che cresce nel tempo.
 - Il filesystem **non è la pressione attuale**: il rischio è la flash
-  applicativa, non LittleFS.
+  applicativa, ma la LittleFS è ora vicina al limite.
 
-Piano B, solo se il tetto da 192 KiB viene esaurito: riequilibrare le
-partizioni per dare **+256 KiB per slot app** (2,75 MiB), prendendoli da
-LittleFS (2,375 MiB, ancora capiente per 1,436 MB di IR):
+Piano C (futuro, non applicato): se il merge finale sposta tutto il DB IR su
+SD e riduce `data/ir` sotto ~600 KB, si può tornare a slot da 2,75 MiB con
+LittleFS da 2,375 MiB, guadagnando altri 64 KiB per slot. Richiede una modifica
+alla specifica IR (fallback assente o ridotto) e un altro flash USB una tantum.
 
-```text
-app0    0x010000  0x2C0000
-app1    0x2D0000  0x2C0000
-spiffs  0x590000  0x260000
-coredump 0x7F0000 0x010000
-```
+### Migrazione al nuovo layout
 
-Costo: richiede un flash USB completo una tantum (la tabella non si aggiorna
-via OTA), la LittleFS va riflashata e le immagini OTA già distribuite non sono
-più valide perché `app1` cambia offset. Non farlo durante l'integrazione: è la
-riserva per dopo. Se si applica, alzare anche il default `-MaxBytes` di
-`check_size.ps1` (baseline + 256 KiB extra + budget moduli). Un piano C più
-aggressivo (slot da 3,5 MiB) richiederebbe di ridurre il fallback IR sotto
-~600 KB, quindi una modifica alla specifica IR.
+La tabella partizioni **non si aggiorna via OTA**: `Update.h` scrive solo lo
+slot applicativo. Il passaggio richiede un flash USB una tantum:
+
+1. Aggiorna il flasher con tutti e quattro gli artefatti (bootloader,
+   `partitions.bin`, `firmware.bin`, `littlefs.bin`). Non mischiare la vecchia
+   `littlefs.bin` da 3.014.656 B: non entra nella nuova partizione.
+2. Collega la Cardputer via USB e lancia `flasher\flash.ps1` (o il web
+   flasher). Scrive tabella a `0x8000`, firmware a `0x10000`, LittleFS a
+   `0x570000`. La NVS a `0x9000` non viene toccata; `-Erase` la cancella.
+3. Il vecchio LittleFS a `0x510000` resta fisicamente in flash ma non viene
+   più letto. Il nuovo filesystem parte da `0x570000`.
+4. Metti i file IR sulla microSD (`/ir`); in LittleFS resta il fallback.
+5. Da questo momento l'OTA funziona di nuovo, su entrambi gli slot.
+
+> **Stato del pacchetto in questo branch:** `flasher/bin|web/firmware.bin` resta
+> la release 1.21.0 (2.323.600 B), compatibile con lo slot più grande;
+> `partitions.bin` e `littlefs.bin` sono già quelli nuovi. Al merge finale
+> eseguire `flasher\build.ps1` per rigenerare tutti e quattro gli artefatti
+> insieme.
 
 ## 5. Piano di riduzione se si sfora
 
@@ -171,9 +199,9 @@ Soglie, misurate come spazio libero nello slot (`firmware.bin`):
 
 | Stato | Libero | Azione |
 |---|---:|---|
-| Verde | > 96 KiB | sviluppo normale |
-| Giallo | 64,7–96 KiB | niente nuove feature; preparare i tagli |
-| Rosso | < 64,7 KiB | applicare il piano; `check_size.ps1` fallisce sotto 66.272 B liberi |
+| Verde | > 160 KiB | sviluppo normale |
+| Giallo | 96–160 KiB | niente nuove feature; preparare i tagli |
+| Rosso | < 96 KiB | applicare il piano; `check_size.ps1` fallisce sotto 66.272 B liberi |
 
 Ordine di taglio (1 = primo a cadere). I giochi e le feature esistenti si
 sacrificano prima dei 10 moduli nuovi.
@@ -217,24 +245,26 @@ Da non tagliare mai: `core/` (Display, MenuManager, Navigation, UI), `utils/`
 .\tools\check_size.ps1 -SkipBuild
 
 # soglia diversa (es. prova locale)
-.\tools\check_size.ps1 -SkipBuild -MaxBytes 2560000
+.\tools\check_size.ps1 -SkipBuild -MaxBytes 2800000
 ```
 
 Exit code: `0` ok, `2` budget superato, `3` firmware oltre lo slot app
 (non flashabile via OTA), `1` errore di build o file mancante.
 Lo script legge lo slot da `partitions.csv`, quindi segue automaticamente un
-eventuale piano B.
+eventuale cambio di layout.
 
 ## 7. Rischi principali
 
-1. **Baseline più alta del previsto.** Il margine reale è 256,7 KiB, non 291 KB:
-   ci sono già ~28 KB in più. Se si pianifica sui numeri vecchi si sfora senza
-   accorgersene.
-2. **Quattro moduli nuovi valgono metà del budget.** WiFi Lab (28) + WiFi+
-   (24) + Tools (24) + BLE HID (20) = 96 KiB, il 54% dei 178 KiB pianificati.
-   Un overshoot del 25% su tutti mangia contingenza e riserva. Sono anche
-   quelli che tirano dentro più codice di libreria (raw WiFi, HTTP/DNS, HID).
-3. **La RAM a runtime, non `.bss`.** Framebuffer (~65 KB), TLS WPA-SEC (48 KB),
+1. **Migrazione one-time.** La tabella non si aggiorna via OTA: senza flash USB
+   il device resta sul vecchio layout. Se si scrive una `littlefs.bin` vecchia
+   da 3.014.656 B nella partizione da 2,5 MB si sfora: `flash.ps1` ora rifiuta
+   l'immagine troppo grande, ma il pacchetto web va aggiornato con tutti gli
+   artefatti nuovi.
+2. **Margine reale più stretto della mappa richiesta.** La LittleFS da 2,375 MB
+   non regge il fallback IR attuale; il layout effettivo è 2,6875 MB per slot,
+   con 448,7 KiB liberi e 384 KiB di budget integrazione. Con 6 feature a
+   ~2,52 MB e le 3 mancanti (56 KiB) il margine stimato scende a 115–235 KiB.
+3. **RAM a runtime, non `.bss`.** Framebuffer (~65 KB), TLS WPA-SEC (48 KB),
    NimBLE HID (16 KB), stack e heap WiFi: un deinit mancante o la
    frammentazione causano crash anche con flash abbondante. I gate heap e il
    deinit all'uscita non sono opzionali.

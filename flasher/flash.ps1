@@ -72,6 +72,21 @@ if ($Erase) {
     }
 }
 
+# Offset allineati a partitions.csv (Piano B: slot app 2.6875 MB).
+$appOffset = 0x10000
+$appSize = 0x2B0000
+$littlefsOffset = 0x570000
+$littlefsSize = 0x280000
+
+$firmwareSize = (Get-Item -LiteralPath (Join-Path $bin "firmware.bin")).Length
+if ($firmwareSize -gt $appSize) {
+    throw "firmware.bin ($firmwareSize B) supera lo slot app ($appSize B). Rigenera con build.ps1."
+}
+$littlefsBytes = (Get-Item -LiteralPath (Join-Path $bin "littlefs.bin")).Length
+if ($littlefsBytes -gt $littlefsSize) {
+    throw "littlefs.bin ($littlefsBytes B) supera la partizione LittleFS ($littlefsSize B). Rigenera con build.ps1 -t buildfs."
+}
+
 Write-Host "Scrittura firmware ORBIT OS v1.21.0..." -ForegroundColor Cyan
 & python @common $writeCmd `
     $flashModeFlag dio `
@@ -79,8 +94,8 @@ Write-Host "Scrittura firmware ORBIT OS v1.21.0..." -ForegroundColor Cyan
     $flashSizeFlag 8MB `
     0x0 (Join-Path $bin "bootloader.bin") `
     0x8000 (Join-Path $bin "partitions.bin") `
-    0x10000 (Join-Path $bin "firmware.bin") `
-    0x510000 (Join-Path $bin "littlefs.bin")
+    $appOffset (Join-Path $bin "firmware.bin") `
+    $littlefsOffset (Join-Path $bin "littlefs.bin")
 
 if ($LASTEXITCODE -ne 0) {
     throw "Scrittura non riuscita. Controlla la porta USB e riprova."
