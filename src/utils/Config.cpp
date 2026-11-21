@@ -101,6 +101,23 @@ void refreshCompiledModules() {
         }
     }
 }
+
+// Variante senza save(): usata da setModuleEnabled e da applyJson per fare un
+// solo commit NVS invece di uno per chiave.
+void applyModuleEnabled(Module module, bool enabled) {
+    uint16_t bit = 0;
+    if (module == Module::Settings) {
+        return;
+    }
+    if (!bitFor(module, bit) || !moduleCompiled(module)) {
+        return;
+    }
+    if (enabled) {
+        g_settings.modules |= bit;
+    } else {
+        g_settings.modules &= static_cast<uint16_t>(~bit);
+    }
+}
 }  // namespace
 
 void begin() {
@@ -113,8 +130,8 @@ void begin() {
     }
 
     if (g_prefs.getUInt("magic", 0) != kConfigMagic) {
-        // Primo avvio: prova a importare /config.json, poi salva i default.
-        g_prefs.putUInt("magic", kConfigMagic);
+        // Primo avvio: prova a importare /config.json, poi salva i default
+        // (save() scrive anche la magic, niente scritture ridondanti).
         if (storage::exists("/config.json")) {
             importFromFile();
         }
@@ -138,13 +155,16 @@ void begin() {
             snapSleepTimeout(g_prefs.getUShort("sleep_s", 120));
         g_settings.radarSensitivity =
             static_cast<uint8_t>(std::max(1, std::min(5, static_cast<int>(g_prefs.getUChar("radar_s", 3)))));
-        const String storedNickname =
-            g_prefs.getString("chat_nick", defaultChatNickname().c_str());
-        g_settings.chatNickname = sanitizeChatNickname(storedNickname.c_str());
-        const String storedRecipient =
-            g_prefs.getString("chat_to", g_settings.chatNickname.c_str());
+        // Buffer fisso abbastanza largo per qualsiasi valore creato dalla UI
+        // (la sanificazione taglia poi a kChatNicknameMax). Una chiave
+        // mancante lascia il buffer vuoto e il sanificatore applica il default.
+        char storedNickname[64] = {};
+        g_prefs.getString("chat_nick", storedNickname, sizeof(storedNickname));
+        g_settings.chatNickname = sanitizeChatNickname(storedNickname);
+        char storedRecipient[64] = {};
+        g_prefs.getString("chat_to", storedRecipient, sizeof(storedRecipient));
         g_settings.chatRecipient =
-            sanitizeChatName(storedRecipient.c_str(), g_settings.chatNickname);
+            sanitizeChatName(storedRecipient, g_settings.chatNickname);
         g_settings.chatNotify = g_prefs.getBool("chat_notify", true);
         refreshCompiledModules();
     }
@@ -198,7 +218,7 @@ void reset() {
     refreshCompiledModules();
     if (g_ready) {
         g_prefs.clear();
-        g_prefs.putUInt("magic", kConfigMagic);
+        // save() riscrive tutte le chiavi, magic compresa.
         save();
     }
 }
@@ -277,18 +297,7 @@ bool moduleEnabled(Module module) {
 }
 
 void setModuleEnabled(Module module, bool enabled) {
-    uint16_t bit = 0;
-    if (module == Module::Settings) {
-        return;
-    }
-    if (!bitFor(module, bit) || !moduleCompiled(module)) {
-        return;
-    }
-    if (enabled) {
-        g_settings.modules |= bit;
-    } else {
-        g_settings.modules &= static_cast<uint16_t>(~bit);
-    }
+    applyModuleEnabled(module, enabled);
     save();
 }
 
@@ -346,7 +355,7 @@ void setRadarSensitivity(uint8_t level) {
     save();
 }
 
-std::string chatNickname() {
+const std::string& chatNickname() {
     return g_settings.chatNickname;
 }
 
@@ -355,7 +364,7 @@ void setChatNickname(const std::string& nickname) {
     save();
 }
 
-std::string chatRecipient() {
+const std::string& chatRecipient() {
     return g_settings.chatRecipient;
 }
 
@@ -434,42 +443,42 @@ bool applyJson(const char* json, size_t len) {
     g_settings.rotation = clampRotation(doc["rotation"] | g_settings.rotation);
     g_settings.theme = static_cast<uint8_t>(
         std::min(6, static_cast<int>(doc["theme"] | g_settings.theme)));
-    // Passa dal setter: aggancia il valore al set di timeout ammessi, come fa
-    // la UI (un JSON con 65000 non deve restare in NVS).
-    setSleepTimeoutSec(static_cast<uint16_t>(
+    // Stesso aggancio al set di timeout ammessi del setter, ma senza il
+    // commit NVS: il save() finale copre tutte le chiavi modificate.
+    g_settings.sleepTimeoutSec = snapSleepTimeout(static_cast<uint16_t>(
         doc["sleep_timeout_sec"] | g_settings.sleepTimeoutSec));
 
     if (doc["modules"].is<JsonObject>()) {
         JsonObject modules = doc["modules"].as<JsonObject>();
-        if (modules["ble"].is<bool>()) setModuleEnabled(Module::Ble, modules["ble"].as<bool>());
-        if (modules["wifi"].is<bool>()) setModuleEnabled(Module::Wifi, modules["wifi"].as<bool>());
-        if (modules["ir"].is<bool>()) setModuleEnabled(Module::Ir, modules["ir"].as<bool>());
-        if (modules["games"].is<bool>()) setModuleEnabled(Module::Games, modules["games"].as<bool>());
+        if (modules["ble"].is<bool>()) applyModuleEnabled(Module::Ble, modules["ble"].as<bool>());
+        if (modules["wifi"].is<bool>()) applyModuleEnabled(Module::Wifi, modules["wifi"].as<bool>());
+        if (modules["ir"].is<bool>()) applyModuleEnabled(Module::Ir, modules["ir"].as<bool>());
+        if (modules["games"].is<bool>()) applyModuleEnabled(Module::Games, modules["games"].as<bool>());
         if (modules["settings"].is<bool>())
-            setModuleEnabled(Module::Settings, modules["settings"].as<bool>());
-        if (modules["sd"].is<bool>()) setModuleEnabled(Module::Sd, modules["sd"].as<bool>());
-        if (modules["radar"].is<bool>()) setModuleEnabled(Module::Radar, modules["radar"].as<bool>());
-        if (modules["radio"].is<bool>()) setModuleEnabled(Module::Radio, modules["radio"].as<bool>());
-        if (modules["chat"].is<bool>()) setModuleEnabled(Module::Chat, modules["chat"].as<bool>());
-        if (modules["music"].is<bool>()) setModuleEnabled(Module::Music, modules["music"].as<bool>());
+            applyModuleEnabled(Module::Settings, modules["settings"].as<bool>());
+        if (modules["sd"].is<bool>()) applyModuleEnabled(Module::Sd, modules["sd"].as<bool>());
+        if (modules["radar"].is<bool>()) applyModuleEnabled(Module::Radar, modules["radar"].as<bool>());
+        if (modules["radio"].is<bool>()) applyModuleEnabled(Module::Radio, modules["radio"].as<bool>());
+        if (modules["chat"].is<bool>()) applyModuleEnabled(Module::Chat, modules["chat"].as<bool>());
+        if (modules["music"].is<bool>()) applyModuleEnabled(Module::Music, modules["music"].as<bool>());
         if (modules["badusb"].is<bool>())
-            setModuleEnabled(Module::BadUsb, modules["badusb"].as<bool>());
+            applyModuleEnabled(Module::BadUsb, modules["badusb"].as<bool>());
         if (modules["pcaptools"].is<bool>())
-            setModuleEnabled(Module::PcapTools, modules["pcaptools"].as<bool>());
+            applyModuleEnabled(Module::PcapTools, modules["pcaptools"].as<bool>());
         if (modules["bleext"].is<bool>())
-            setModuleEnabled(Module::BleExt, modules["bleext"].as<bool>());
+            applyModuleEnabled(Module::BleExt, modules["bleext"].as<bool>());
     }
 
-    if (doc["chat"].is<JsonObject>() && doc["chat"]["nickname"].is<const char*>()) {
-        g_settings.chatNickname =
-            sanitizeChatNickname(doc["chat"]["nickname"].as<std::string>());
-    }
-    if (doc["chat"].is<JsonObject>() && doc["chat"]["recipient"].is<const char*>()) {
-        g_settings.chatRecipient = sanitizeChatName(
-            doc["chat"]["recipient"].as<std::string>(), g_settings.chatNickname);
-    }
     if (doc["chat"].is<JsonObject>()) {
-        g_settings.chatNotify = doc["chat"]["notify"] | g_settings.chatNotify;
+        JsonObject chat = doc["chat"].as<JsonObject>();
+        if (chat["nickname"].is<const char*>()) {
+            g_settings.chatNickname = sanitizeChatNickname(chat["nickname"].as<std::string>());
+        }
+        if (chat["recipient"].is<const char*>()) {
+            g_settings.chatRecipient =
+                sanitizeChatName(chat["recipient"].as<std::string>(), g_settings.chatNickname);
+        }
+        g_settings.chatNotify = chat["notify"] | g_settings.chatNotify;
     }
 
     if (doc["ble"].is<JsonObject>()) {

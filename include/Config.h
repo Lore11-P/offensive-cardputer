@@ -94,11 +94,11 @@ uint8_t radarSensitivity();
 void setRadarSensitivity(uint8_t level);
 
 // Nickname della chat BLE, sanificato e non vuoto.
-std::string chatNickname();
+const std::string& chatNickname();
 void setChatNickname(const std::string& nickname);
 
 // Destinatario predefinito della chat BLE, sanificato e non vuoto.
-std::string chatRecipient();
+const std::string& chatRecipient();
 void setChatRecipient(const std::string& recipient);
 
 // Notifiche di presenza della chat BLE.
