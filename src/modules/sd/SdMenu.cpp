@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "Config.h"
@@ -23,6 +24,8 @@ namespace sd_module {
 namespace {
 
 constexpr size_t kMaxViewBytes = 12288;
+// Stesso limite della versione precedente: nessuna parte di file in meno.
+constexpr size_t kMaxLines = 1024;
 
 std::string joinPath(const std::string& base, const std::string& name) {
     if (base.empty() || base == "/") {
@@ -34,59 +37,17 @@ std::string joinPath(const std::string& base, const std::string& name) {
     return base + "/" + name;
 }
 
-std::string parentPath(const std::string& path) {
-    if (path.empty() || path == "/") {
-        return "/";
+// Spezza una riga in segmenti da maxChars senza costruire copie intermedie
+// del file: la memoria usata e' solo quella delle righe visibili.
+void appendWrapped(std::vector<std::string>& out, const char* data, size_t len,
+                   size_t maxChars) {
+    if (len == 0) {
+        out.emplace_back();
+        return;
     }
-    const size_t slash = path.find_last_of('/');
-    if (slash == std::string::npos || slash == 0) {
-        return "/";
+    for (size_t pos = 0; pos < len && out.size() < kMaxLines; pos += maxChars) {
+        out.emplace_back(data + pos, std::min(maxChars, len - pos));
     }
-    return path.substr(0, slash);
-}
-
-std::vector<std::string> splitLines(const std::string& text) {
-    std::vector<std::string> lines;
-    std::string line;
-    for (char c : text) {
-        if (c == '\r') {
-            continue;
-        }
-        if (c == '\n') {
-            lines.push_back(line);
-            line.clear();
-        } else {
-            line.push_back(c);
-        }
-    }
-    if (!line.empty()) {
-        lines.push_back(line);
-    }
-    return lines;
-}
-
-std::vector<std::string> wrapLine(const std::string& line, size_t maxChars) {
-    std::vector<std::string> out;
-    if (line.empty()) {
-        out.push_back("");
-        return out;
-    }
-    for (size_t pos = 0; pos < line.size(); pos += maxChars) {
-        out.push_back(line.substr(pos, maxChars));
-    }
-    return out;
-}
-
-bool looksText(const std::string& path) {
-    const size_t dot = path.find_last_of('.');
-    if (dot == std::string::npos) {
-        return true;
-    }
-    std::string ext = path.substr(dot + 1);
-    std::transform(ext.begin(), ext.end(), ext.begin(),
-                   [](unsigned char c) { return static_cast<char>(c | 0x20); });
-    return ext == "txt" || ext == "ir" || ext == "json" || ext == "cfg" ||
-           ext == "log" || ext == "ini" || ext == "csv" || ext == "md";
 }
 
 void showFile(const std::string& path) {
@@ -100,18 +61,18 @@ void showFile(const std::string& path) {
     }
 
     std::vector<std::string> lines;
-    constexpr size_t kMaxLines = 1024;  // limite di memoria: nessuna PSRAM
     const size_t maxChars = static_cast<size_t>(std::max(16, display::width() - 8) / 6);
-    for (const auto& raw : splitLines(text)) {
-        for (auto& part : wrapLine(raw, maxChars)) {
-            lines.push_back(std::move(part));
-            if (lines.size() >= kMaxLines) {
-                break;
-            }
+    for (size_t start = 0; start < text.size() && lines.size() < kMaxLines;) {
+        size_t end = text.find('\n', start);
+        if (end == std::string::npos) {
+            end = text.size();
         }
-        if (lines.size() >= kMaxLines) {
-            break;
+        size_t len = end - start;
+        if (len > 0 && text[end - 1] == '\r') {
+            --len;
         }
+        appendWrapped(lines, text.c_str() + start, len, maxChars);
+        start = end + 1;
     }
     if (lines.empty()) {
         lines.push_back("");
@@ -171,9 +132,10 @@ void browse(const std::string& path) {
     }
 
     std::vector<storage::Entry> entries = storage::listEntries(path, true);
-    const bool truncated = entries.size() > 200;
+    constexpr size_t kMaxEntries = 200;
+    const bool truncated = entries.size() > kMaxEntries;
     if (truncated) {
-        entries.resize(200);
+        entries.resize(kMaxEntries);
     }
     MenuManager menu("Sfoglia", path == "/" ? "SD" : path);
     ++depth;
@@ -260,13 +222,33 @@ void showScores() {
         return;
     }
     std::vector<std::string> lines;
-    for (const auto& line : splitLines(text)) {
-        if (!line.empty()) {
-            lines.push_back(line);
+    for (size_t start = 0; start < text.size();) {
+        size_t end = text.find('\n', start);
+        if (end == std::string::npos) {
+            end = text.size();
         }
-        if (lines.size() >= 8) {
-            break;
+        size_t len = end - start;
+        if (len > 0 && text[end - 1] == '\r') {
+            --len;
         }
+        if (len > 0) {
+            lines.emplace_back(text.c_str() + start, len);
+        }
+        start = end + 1;
+    }
+    // Il file non e' piu' ordinato alfabeticamente (una volta lo era per via
+    // della std::map): si ordina qui, cosi' la schermata resta identica.
+    for (size_t i = 1; i < lines.size(); ++i) {
+        std::string key = std::move(lines[i]);
+        size_t j = i;
+        while (j > 0 && key < lines[j - 1]) {
+            lines[j] = std::move(lines[j - 1]);
+            --j;
+        }
+        lines[j] = std::move(key);
+    }
+    if (lines.size() > 8) {
+        lines.resize(8);
     }
     ui::message("Punteggi", lines, "SD");
 }

@@ -96,10 +96,6 @@ uint32_t rnd() {
     return g_rng;
 }
 
-float randUnit() {
-    return static_cast<float>(rnd() & 0xFFFF) / 65535.0f;
-}
-
 uint16_t blockColor(uint8_t type) {
     switch (type) {
         case kDirt:

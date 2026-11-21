@@ -51,8 +51,7 @@ constexpr const char* kFolder = "/data/Music";
 constexpr const char* kCoverName = "cover.cvr";
 
 struct Track {
-    std::string path;  // "/data/Music/Album/brano.mp3"
-    std::string name;  // "brano.mp3"
+    std::string name;  // "brano.mp3"; il percorso si ricava dall'album
     bool onSd = false;
 };
 
@@ -118,7 +117,6 @@ std::vector<Track> scanTracks(const std::string& folder, bool onSd) {
             continue;
         }
         Track track;
-        track.path = joinPath(folder, entry.name);
         track.name = entry.name;
         track.onSd = onSd;
         tracks.push_back(track);
@@ -152,7 +150,6 @@ std::vector<Album> scanAlbums(std::vector<Track>& loose) {
             if (isAudioFile(entry.name) &&
                 static_cast<int>(loose.size()) < kMaxTracks) {
                 Track track;
-                track.path = joinPath(kFolder, entry.name);
                 track.name = entry.name;
                 track.onSd = onSd;
                 loose.push_back(track);
@@ -178,12 +175,12 @@ std::string albumLabel(const std::string& name, int count) {
     return fit(name, nameWidth, 2) + suffix;
 }
 
-bool startTrack(const Track& track) {
+bool startTrack(const std::string& path, bool onSd) {
     if (!audioout::beginPlayback()) {
         return false;
     }
-    fs::FS& filesystem = track.onSd ? static_cast<fs::FS&>(SD) : static_cast<fs::FS&>(LittleFS);
-    return audioout::decoder().connecttoFS(filesystem, track.path.c_str());
+    fs::FS& filesystem = onSd ? static_cast<fs::FS&>(SD) : static_cast<fs::FS&>(LittleFS);
+    return audioout::decoder().connecttoFS(filesystem, path.c_str());
 }
 
 void drawVolume(int x, int y, int width) {
@@ -330,9 +327,10 @@ void runPlayer(const std::vector<Track>& tracks, const std::string& albumName,
 
     for (;;) {
         const Track& track = tracks[index];
-        logger::info("Musica: %s", track.path.c_str());
-        if (!startTrack(track)) {
-            ui::message("Musica", {"!Impossibile aprire il file.", track.path,
+        const std::string path = joinPath(albumPath, track.name);
+        logger::info("Musica: %s", path.c_str());
+        if (!startTrack(path, onSd)) {
+            ui::message("Musica", {"!Impossibile aprire il file.", path,
                                    "Controlla che sia un MP3 valido."},
                         "Lettore");
             break;
@@ -393,7 +391,7 @@ void runPlayer(const std::vector<Track>& tracks, const std::string& albumName,
                 action = 1;  // brano finito: passa al successivo
                 break;
             } else if (!started && !paused && millis() - startedAt > 6000) {
-                ui::message("Musica", {"!Formato non riproducibile.", track.path},
+                ui::message("Musica", {"!Formato non riproducibile.", path},
                             "Lettore");
                 action = 2;
                 break;

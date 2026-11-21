@@ -27,10 +27,6 @@ void applyDisplay() {
     display::applyRotation(config::rotation());
 }
 
-int brightnessPercent() {
-    return (static_cast<int>(config::brightness()) * 100 + 127) / 255;
-}
-
 void runBrightness() {
     navigation::waitRelease();
     uint32_t nextRepeat = 0;
@@ -468,8 +464,7 @@ void runModules() {
                 display::text(28, y + 3, rows[i].label, display::kText, 2);
                 const bool compiled = config::moduleCompiled(rows[i].module);
                 const bool on = config::moduleEnabled(rows[i].module);
-                const std::string state =
-                    !compiled ? "[n/d]" : (on ? "[ON]" : "[OFF]");
+                const char* state = !compiled ? "[n/d]" : (on ? "[ON]" : "[OFF]");
                 display::text(w - 42, y + 3, state,
                               (compiled && on) ? display::kAccent : display::kTextDim, 2);
             }

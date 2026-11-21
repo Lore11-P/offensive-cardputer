@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "Display.h"
+#include "GamesUi.h"
 #include "ModuleFlags.h"
 #include "Navigation.h"
 #include "Scores.h"
@@ -193,16 +194,8 @@ void runSimon() {
         drawBoard(static_cast<int>(sequence.size()) - 1, best, -1, "");
         drawGameOver(completed, best);
         display::push();
-        for (;;) {
-            navigation::update();
-            const navigation::EventData ev = navigation::poll();
-            if (ev.type == navigation::Event::Back) {
-                return;
-            }
-            if (ev.type == navigation::Event::Select) {
-                break;
-            }
-            delay(20);
+        if (!ui::waitRetry()) {
+            return;
         }
         navigation::waitRelease();
     }

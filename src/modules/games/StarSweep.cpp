@@ -91,7 +91,7 @@ void drawOverlay(int score, uint32_t best) {
     display::textCentered(y + 35, "RECORD " + std::to_string(best),
                           display::kTextDim, 0);
     // Costruita una sola volta: l'overlay viene ridisegnato piu' volte.
-    static const std::string hint = "INVIO = riprova   ESC = esci";
+    constexpr const char* hint = "INVIO = riprova   ESC = esci";
     display::textCentered(y + 50, hint, display::kTextDim, 0);
 }
 

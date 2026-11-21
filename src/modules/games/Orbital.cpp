@@ -162,7 +162,7 @@ void drawScene(const Asteroid* rocks, const Bullet* shots, float angle, int hp, 
 }
 
 void drawOverlay(uint32_t score, uint32_t best) {
-    static const std::string kHint = "INVIO = riprova   ` = esci";
+    constexpr const char* kHint = "INVIO = riprova   ` = esci";
     const int w = 180;
     const int h = 58;
     const int x = (display::width() - w) / 2;

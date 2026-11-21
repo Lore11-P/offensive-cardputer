@@ -4,9 +4,9 @@
 
 #include <array>
 #include <string>
-#include <vector>
 
 #include "Display.h"
+#include "GamesUi.h"
 #include "ModuleFlags.h"
 #include "Navigation.h"
 #include "Scores.h"
@@ -100,14 +100,14 @@ int chooseAiColumn(const Board& board) {
             return col;
         }
     }
-    std::vector<int> valid;
+    int validCount = 0;
     for (int col = 0; col < kCols; ++col) {
         Board copy = board;
         if (drop(copy, col, kCpu) >= 0) {
-            valid.push_back(col);
+            ++validCount;
         }
     }
-    if (valid.empty()) {
+    if (validCount == 0) {
         return -1;
     }
     constexpr int kCenter = kCols / 2;
@@ -115,7 +115,14 @@ int chooseAiColumn(const Board& board) {
     if (drop(centerCopy, kCenter, kCpu) >= 0 && (esp_random() % 3) != 0) {
         return kCenter;
     }
-    return valid[esp_random() % valid.size()];
+    int pick = static_cast<int>(esp_random() % static_cast<uint32_t>(validCount));
+    for (int col = 0; col < kCols; ++col) {
+        Board copy = board;
+        if (drop(copy, col, kCpu) >= 0 && pick-- == 0) {
+            return col;
+        }
+    }
+    return -1;
 }
 
 void drawBoard(const Board& board, int cursor, int playerScore, int cpuScore,
@@ -253,16 +260,8 @@ void runConnect4() {
         drawGameOver(playerWon, draw, wins);
         display::push();
 
-        for (;;) {
-            navigation::update();
-            const navigation::EventData ev = navigation::poll();
-            if (ev.type == navigation::Event::Back) {
-                return;
-            }
-            if (ev.type == navigation::Event::Select) {
-                break;
-            }
-            delay(20);
+        if (!ui::waitRetry()) {
+            return;
         }
         navigation::waitRelease();
     }

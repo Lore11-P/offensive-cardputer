@@ -5,9 +5,9 @@
 #include <algorithm>
 #include <cstdlib>
 #include <string>
-#include <vector>
 
 #include "Display.h"
+#include "GamesUi.h"
 #include "ModuleFlags.h"
 #include "Navigation.h"
 #include "Scores.h"
@@ -87,11 +87,14 @@ bool reveal(Board& board, int col, int row) {
         return false;
     }
 
-    std::vector<int> stack;
-    stack.push_back(start);
-    while (!stack.empty()) {
-        const int idx = stack.back();
-        stack.pop_back();
+    // Pila a dimensione fissa: al massimo una voce per cella, nessun heap.
+    int stack[kCells];
+    bool queued[kCells] = {false};
+    int top = 0;
+    stack[top++] = start;
+    queued[start] = true;
+    while (top > 0) {
+        const int idx = stack[--top];
         if (board.open[idx] || board.flag[idx]) {
             continue;
         }
@@ -109,8 +112,9 @@ bool reveal(Board& board, int col, int row) {
             for (int dc = -1; dc <= 1; ++dc) {
                 if ((dr != 0 || dc != 0) && inBounds(col2 + dc, row2 + dr)) {
                     const int next = indexOf(col2 + dc, row2 + dr);
-                    if (!board.open[next] && !board.flag[next]) {
-                        stack.push_back(next);
+                    if (!board.open[next] && !board.flag[next] && !queued[next]) {
+                        queued[next] = true;
+                        stack[top++] = next;
                     }
                 }
             }
@@ -267,16 +271,8 @@ void runMinesweeper() {
         drawGameOver(won, seconds, wins);
         display::push();
 
-        for (;;) {
-            navigation::update();
-            const navigation::EventData ev = navigation::poll();
-            if (ev.type == navigation::Event::Back) {
-                return;
-            }
-            if (ev.type == navigation::Event::Select) {
-                break;
-            }
-            delay(20);
+        if (!ui::waitRetry()) {
+            return;
         }
         navigation::waitRelease();
     }
