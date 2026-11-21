@@ -205,24 +205,10 @@ std::vector<Brand> categoryBrands(int category) {
     return out;
 }
 
-std::vector<std::string> brandBases(const Brand& brand) {
-    std::vector<std::string> bases;
-    const std::string dir = categoryPath(brand.category) + "/" + brand.name;
-    if (storage::exists(dir)) {
-        bases.push_back(dir);
-    }
-    if (brand.category == kCategoryTv) {
-        const std::string legacy = "/ir/" + brand.name;
-        if (storage::exists(legacy)) {
-            bases.push_back(legacy);
-        }
-    }
-    return bases;
-}
-
 struct Remote {
     std::string path;
     std::string name;
+    bool onSd = false;
 };
 
 bool isIrFile(const std::string& name) {
@@ -230,41 +216,107 @@ bool isIrFile(const std::string& name) {
     return id.size() > 3 && id.substr(id.size() - 3) == ".IR";
 }
 
+// Una sola enumerazione per cartella: il file appena elencato esiste per
+// costruzione, quindi l'exists() per-file era un doppio lookup inutile.
+// Entry.onSd porta con se' il backend, cosi' openRead non prova LittleFS per
+// i ~2.000 file che stanno solo sulla microSD.
 std::vector<Remote> listRemotes(const Brand& brand) {
     std::vector<Remote> out;
     std::vector<std::string> seen;
-    for (const auto& base : brandBases(brand)) {
-        for (const auto& file : storage::list(base, false)) {
-            if (!isIrFile(file)) {
+    auto collect = [&](const std::string& base) {
+        for (const auto& entry : storage::listEntries(base, false)) {
+            if (entry.isDir || !isIrFile(entry.name)) {
                 continue;
             }
-            const std::string key = lower(file);
+            const std::string key = lower(entry.name);
             if (std::find(seen.begin(), seen.end(), key) != seen.end()) {
                 continue;
             }
-            const std::string path = base + "/" + file;
-            if (!storage::exists(path)) {
-                continue;
-            }
             seen.push_back(key);
-            out.push_back({path, baseName(file)});
+            out.push_back({base + "/" + entry.name, baseName(entry.name),
+                           entry.onSd});
         }
+    };
+    collect(categoryPath(brand.category) + "/" + brand.name);
+    if (brand.category == kCategoryTv) {
+        collect("/ir/" + brand.name);  // vecchio albero piatto
     }
     return out;
 }
 
-bool brandHasFiles(const Brand& brand) {
-    return !listRemotes(brand).empty();
+// --- Cache RAM della sessione ----------------------------------------------
+// Conteggi e visibilita' delle categorie costano un'enumerazione per marca.
+// Si calcolano una volta e restano validi finche' la SD non cambia o
+// runDatabaseInfo() non chiede un refresh esplicito. Una sola categoria in
+// cache: la piu' grande (343 marche) occupa ~12 KB, compatibile col parser.
+struct CategorySnapshot {
+    std::vector<Brand> brands;
+    std::vector<uint16_t> counts;  // parallelo a brands
+    int category = -1;
+    bool valid = false;
+};
+
+CategorySnapshot g_snapshot;
+bool g_categoryChecked[kCategoryCount] = {};
+bool g_categoryHasFiles[kCategoryCount] = {};
+bool g_cacheSd = false;
+
+void invalidateCache() {
+    g_snapshot = CategorySnapshot();
+    for (size_t i = 0; i < kCategoryCount; ++i) {
+        g_categoryChecked[i] = false;
+        g_categoryHasFiles[i] = false;
+    }
+    g_cacheSd = storage::hasSD();
+}
+
+void syncCache() {
+    if (g_cacheSd != storage::hasSD()) {
+        invalidateCache();
+    }
+}
+
+const CategorySnapshot& categorySnapshot(int category) {
+    syncCache();
+    if (!g_snapshot.valid || g_snapshot.category != category) {
+        g_snapshot.brands = categoryBrands(category);
+        g_snapshot.counts.clear();
+        g_snapshot.counts.reserve(g_snapshot.brands.size());
+        for (const auto& brand : g_snapshot.brands) {
+            const size_t count = listRemotes(brand).size();
+            g_snapshot.counts.push_back(
+                static_cast<uint16_t>(std::min<size_t>(count, 0xFFFF)));
+        }
+        g_snapshot.category = category;
+        g_snapshot.valid = true;
+    }
+    return g_snapshot;
 }
 
 // Una categoria senza file non deve comparire nel menu.
 bool categoryHasFiles(int category) {
-    for (const auto& brand : categoryBrands(category)) {
-        if (brandHasFiles(brand)) {
-            return true;
+    syncCache();
+    if (!g_categoryChecked[category]) {
+        bool found = false;
+        for (const auto& brand : categoryBrands(category)) {
+            if (!listRemotes(brand).empty()) {
+                found = true;
+                break;  // basta una marca non vuota
+            }
         }
+        g_categoryChecked[category] = true;
+        g_categoryHasFiles[category] = found;
     }
-    return false;
+    return g_categoryHasFiles[category];
+}
+
+size_t categoryFileCount(int category) {
+    const auto& snapshot = categorySnapshot(category);
+    size_t total = 0;
+    for (uint16_t count : snapshot.counts) {
+        total += count;
+    }
+    return total;
 }
 
 std::string favoriteLabel(const std::string& path) {
@@ -339,8 +391,22 @@ void saveFavorites(const std::vector<Favorite>& favorites) {
     }
 }
 
+// I preferiti stanno in NVS: si leggono una volta per sessione e si
+// aggiornano in RAM a ogni toggle. Prima isFavorite() riapriva l'NVS per ogni
+// voce del menu (una lettura per telecomando).
+bool g_favoritesReady = false;
+std::vector<Favorite> g_favorites;
+
+const std::vector<Favorite>& cachedFavorites() {
+    if (!g_favoritesReady) {
+        g_favorites = loadFavorites();
+        g_favoritesReady = true;
+    }
+    return g_favorites;
+}
+
 bool isFavorite(const std::string& path) {
-    const auto favorites = loadFavorites();
+    const auto& favorites = cachedFavorites();
     return std::any_of(favorites.begin(), favorites.end(),
                        [&](const Favorite& favorite) {
                            return favorite.path == path;
@@ -365,7 +431,7 @@ bool favoriteAlive(const Favorite& favorite) {
 }
 
 FavoriteResult toggleFavorite(const std::string& path) {
-    auto favorites = loadFavorites();
+    std::vector<Favorite> favorites = cachedFavorites();
     const auto it = std::find_if(favorites.begin(), favorites.end(),
                                  [&](const Favorite& favorite) {
                                      return favorite.path == path;
@@ -373,6 +439,8 @@ FavoriteResult toggleFavorite(const std::string& path) {
     if (it != favorites.end()) {
         favorites.erase(it);
         saveFavorites(favorites);
+        g_favorites = std::move(favorites);
+        g_favoritesReady = true;
         return FavoriteResult::Removed;
     }
     favorites.erase(std::remove_if(favorites.begin(), favorites.end(),
@@ -392,6 +460,8 @@ FavoriteResult toggleFavorite(const std::string& path) {
                                   : FavoriteBackend::Unknown);
     favorites.push_back(std::move(favorite));
     saveFavorites(favorites);
+    g_favorites = std::move(favorites);
+    g_favoritesReady = true;
     return FavoriteResult::Added;
 }
 
@@ -403,24 +473,36 @@ std::string favoriteHint(const std::string& path) {
 }
 
 // Ultimo telecomando aperto: riprenderlo e' un tasto in meno rispetto a
-// navigare marca -> modello ogni volta.
+// navigare marca -> modello ogni volta. Il valore e' in RAM: NVS si scrive
+// solo quando cambia davvero.
 constexpr const char* kLastKey = "last";
 
+bool g_lastReady = false;
+std::string g_lastPath;
+
 std::string loadLastRemote() {
-    Preferences preferences;
-    if (!preferences.begin(kFavoriteNamespace, true)) {
-        return std::string();
+    if (!g_lastReady) {
+        Preferences preferences;
+        if (preferences.begin(kFavoriteNamespace, true)) {
+            const String value = preferences.getString(kLastKey, "");
+            g_lastPath = value.c_str();
+            preferences.end();
+            g_lastReady = true;
+        }
     }
-    const String value = preferences.getString(kLastKey, "");
-    preferences.end();
-    return value.c_str();
+    return g_lastPath;
 }
 
 void saveLastRemote(const std::string& path) {
+    if (g_lastReady && g_lastPath == path) {
+        return;
+    }
     Preferences preferences;
     if (preferences.begin(kFavoriteNamespace, false)) {
         preferences.putString(kLastKey, path.c_str());
         preferences.end();
+        g_lastPath = path;
+        g_lastReady = true;
     }
 }
 
@@ -741,7 +823,9 @@ public:
 
 private:
     File& file_;
-    char chunk_[256];
+    // 1 KB: su un .ir da 60 KB le read scendono da ~235 a ~59. Il buffer vive
+    // nello stack di parseIrFile, che ha margine (stack task 16 KB).
+    char chunk_[1024];
     size_t len_ = 0;
     size_t pos_ = 0;
 };
@@ -829,9 +913,9 @@ std::vector<IrCommand> parseIrFile(File& file) {
 }
 
 bool loadCommands(const std::string& path, std::vector<IrCommand>& out,
-                  std::string& error) {
+                  std::string& error, bool preferSD = false) {
     out.clear();
-    File file = storage::openRead(path);
+    File file = storage::openRead(path, preferSD);
     if (!file) {
         error = "Impossibile leggere il file.";
         return false;
@@ -983,10 +1067,11 @@ bool sendCommand(const IrCommand& command) {
                         command.bits);
 }
 
-void openFile(const std::string& path, const std::string& title) {
+void openFile(const std::string& path, const std::string& title,
+              bool preferSD = false) {
     std::vector<IrCommand> commands;
     std::string error;
-    if (!loadCommands(path, commands, error)) {
+    if (!loadCommands(path, commands, error, preferSD)) {
         if (error.rfind("Memoria", 0) == 0) {
             ui::message(title, {error, "Chiudi altre app e riprova."},
                         "Telecomandi");
@@ -1091,9 +1176,10 @@ void openBrand(const Brand& brand) {
         if (isFavorite(remote.path)) {
             title = "* " + title;
         }
-        menu.addItem(title, "ir", [path = remote.path, title] {
-            openFile(path, title);
-        });
+        menu.addItem(title, "ir",
+                     [path = remote.path, title, onSd = remote.onSd] {
+                         openFile(path, title, onSd);
+                     });
     }
     menu.setHint("ENTER=apri  ESC=indietro");
     menu.run(true);
@@ -1158,7 +1244,7 @@ void runScanner(const Brand& brand) {
             commands.clear();
             powerIndex = -1;
             std::string error;
-            if (loadCommands(path, commands, error)) {
+            if (loadCommands(path, commands, error, remotes[index].onSd)) {
                 powerIndex = findPowerCommand(commands);
             }
             loadPending = false;
@@ -1252,12 +1338,14 @@ void runScanner(const Brand& brand) {
 
 void runScannerCategory(int category) {
     MenuManager menu(kCategories[category].label, "Scanner IR");
+    const auto& snapshot = categorySnapshot(category);
     int shown = 0;
-    for (const auto& brand : categoryBrands(category)) {
-        const size_t count = listRemotes(brand).size();
+    for (size_t i = 0; i < snapshot.brands.size(); ++i) {
+        const uint16_t count = snapshot.counts[i];
         if (count == 0) {
             continue;
         }
+        const Brand brand = snapshot.brands[i];
         menu.addItem(brand.name + " (" + std::to_string(count) + ")", "scan",
                      [brand] { runScanner(brand); });
         ++shown;
@@ -1293,7 +1381,7 @@ void runScannerBrands() {
 }
 
 void runFavorites() {
-    const auto stored = loadFavorites();
+    const auto& stored = cachedFavorites();
     std::vector<Favorite> favorites;
     for (const auto& favorite : stored) {
         const bool mounted =
@@ -1323,8 +1411,9 @@ void runFavorites() {
     MenuManager menu("Preferiti", "Infrarossi");
     for (const auto& favorite : favorites) {
         const std::string label = favoriteLabel(favorite.path);
-        menu.addItem(label, "fav", [path = favorite.path, label] {
-            openFile(path, label);
+        const bool onSd = favorite.backend == FavoriteBackend::Sd;
+        menu.addItem(label, "fav", [path = favorite.path, label, onSd] {
+            openFile(path, label, onSd);
         });
     }
     menu.setHint("ENTER=apri  ESC=indietro");
@@ -1333,12 +1422,14 @@ void runFavorites() {
 
 void runCategory(int category) {
     MenuManager menu(kCategories[category].label, "Telecomandi");
+    const auto& snapshot = categorySnapshot(category);
     int shown = 0;
-    for (const auto& brand : categoryBrands(category)) {
-        const size_t count = listRemotes(brand).size();
+    for (size_t i = 0; i < snapshot.brands.size(); ++i) {
+        const uint16_t count = snapshot.counts[i];
         if (count == 0) {
             continue;
         }
+        const Brand brand = snapshot.brands[i];
         menu.addItem(brand.name + " (" + std::to_string(count) + ")", "ir",
                      [brand] { openBrand(brand); });
         ++shown;
@@ -1395,7 +1486,7 @@ void runSearch() {
     constexpr size_t kMaxResults = 40;
     constexpr size_t kPerCategory = 10;
     constexpr size_t kPerBrand = 3;
-    const std::vector<Favorite> favorites = loadFavorites();
+    const std::vector<Favorite>& favorites = cachedFavorites();
     std::vector<MenuItem> buckets[kCategoryCount];
     std::vector<std::string> seenPaths;
     bool hasDatabase = false;
@@ -1438,8 +1529,9 @@ void runSearch() {
                 }
                 buckets[c].emplace_back(
                     title, "ir",
-                    [path = remote.path, name = remote.name] {
-                        openFile(path, name);
+                    [path = remote.path, name = remote.name,
+                     onSd = remote.onSd] {
+                        openFile(path, name, onSd);
                     });
                 seenPaths.push_back(key);
                 ++brandCount;
@@ -1592,10 +1684,11 @@ void runDatabaseInfo() {
 
     size_t counts[kCategoryCount] = {};
     size_t total = 0;
+    // Refresh esplicito: "Database IR" e' la verifica reale del contenuto,
+    // quindi rilegge l'albero e ripristina la cache per i menu successivi.
+    invalidateCache();
     for (size_t c = 0; c < kCategoryCount; ++c) {
-        for (const auto& brand : categoryBrands(static_cast<int>(c))) {
-            counts[c] += listRemotes(brand).size();
-        }
+        counts[c] = categoryFileCount(static_cast<int>(c));
         total += counts[c];
     }
     const auto row = [&](const char* left, size_t leftCount,

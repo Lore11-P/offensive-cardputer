@@ -26,9 +26,8 @@ std::string trimEntryName(const char* name) {
 }
 
 File openOn(fs::FS& filesystem, const std::string& path) {
-    if (!filesystem.exists(path.c_str())) {
-        return File();
-    }
+    // Apertura diretta: open() su un path assente restituisce gia' un File
+    // invalido, l'exists() preventivo era un lookup doppio per ogni apertura.
     return filesystem.open(path.c_str(), FILE_READ);
 }
 
@@ -169,7 +168,7 @@ std::vector<std::string> list(const std::string& path, bool dirsOnly, bool prefe
 
 std::vector<Entry> listEntries(const std::string& path, bool preferSD) {
     std::vector<Entry> out;
-    auto collect = [&](fs::FS& filesystem, const std::string& base) {
+    auto collect = [&](fs::FS& filesystem, const std::string& base, bool onSd) {
         File dir = filesystem.open(base.c_str(), FILE_READ);
         if (!dir || !dir.isDirectory()) {
             return;
@@ -181,6 +180,7 @@ std::vector<Entry> listEntries(const std::string& path, bool preferSD) {
                 Entry item;
                 item.name = name;
                 item.isDir = entry.isDirectory();
+                item.onSd = onSd;
                 item.size = item.isDir ? 0 : static_cast<size_t>(entry.size());
                 out.push_back(std::move(item));
             }
@@ -192,14 +192,14 @@ std::vector<Entry> listEntries(const std::string& path, bool preferSD) {
 
     if (preferSD) {
         if (g_sd) {
-            collect(SD, sdPath(path));
+            collect(SD, sdPath(path), true);
         }
     } else {
         if (g_littlefs) {
-            collect(LittleFS, path);
+            collect(LittleFS, path, false);
         }
         if (g_sd) {
-            collect(SD, sdPath(path));
+            collect(SD, sdPath(path), true);
         }
     }
 

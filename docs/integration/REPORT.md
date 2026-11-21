@@ -1,4 +1,4 @@
-# REPORT — ottimizzazione giochi / musica / storage
+# REPORT — ottimizzazione giochi / musica / storage + fix IR
 
 Branch `feat/opt-media`, worktree `orbit-wt-opt-media`, base `c7456af`.
 Dettaglio completo, misure e test: `docs/integration/OPT_MEDIA.md`.
@@ -82,3 +82,30 @@ Rischi principali:
    del testo: il picco heap scende, il limite visibile non cambia.
 3. Stack: Minesweeper aggiunge ~315 B in `reveal()`; verificare "Stack min" in
    Info dispositivo dopo i test.
+
+## 6. Fix IR lento (branch `fix/fix-irperf`)
+
+Dettaglio completo: `docs/integration/FIX_IR.md`; diagnosi: `DIAG_IR.md`.
+
+- **Enumerazione**: `listRemotes()` fa una sola `storage::listEntries()` per
+  cartella; rimossi i 2.255 `exists` per-file (4.510 lookup) e gli `exists`
+  delle basi marca. `Entry.onSd` porta il backend fino a `openFile()`, che
+  apre direttamente LittleFS o SD. `storage::openRead()` non fa piu' `exists`
+  prima di `open()`.
+- **Cache RAM**: marche+conteggi di una categoria, visibilita' delle 8
+  categorie, preferiti (max 20) e ultimo path. Niente NVS per voce; NVS
+  scritta solo se l'ultimo telecomando cambia. Refresh esplicito da
+  "Database IR"; invalidazione su cambio SD.
+- **Parser**: buffer di lettura 1024 B (da 256); nessuna riparsazione per
+  comando (gia' cosi', verificato).
+- **Indice persistente**: non fatto, motivazione in `FIX_IR.md` §1.5.
+- **FS risparmiate** (stima statica): ~6.300-6.700 operazioni su una scansione
+  completa (~12.300 → ~5.600-6.000, ~2,1x); categoria Altro ~2.900 → ~1.200;
+  categoria gia' aperta 0; apertura marca Samsung −57 letture NVS.
+- **Build** (`python -m platformio run -e cardputer-adv-offensive`):
+  `SUCCESS`. `firmware.bin` 2.690.816 → **2.691.520 B (+704 B)**; flash
+  2.690.449 → **2.691.153 B (95,50%)**; RAM statica 147.280 →
+  **147.368 B (+88 B)**. Cache dinamica ~10-11 KB nel caso peggiore.
+- **Test**: build e verifica statica eseguite; i test su dispositivo sono
+  elencati in `FIX_IR.md` §5.2 e **non** sono stati eseguiti (nessun hardware).
+  Nessun benchmark hardware inventato: i tempi restano stime del DIAG.
