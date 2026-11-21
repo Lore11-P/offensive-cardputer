@@ -221,19 +221,26 @@ bool writeAll(File& file, const uint8_t* data, size_t length) {
 }
 
 bool patchWavHeader(File& file, uint32_t dataBytes) {
+    // La posizione va ripristinata: chi scrive i campioni deve continuare in
+    // coda, altrimenti il patch sovrascrive l'audio.
+    const size_t restore = file.position();
     uint8_t b[4];
-    if (!file.seek(4)) {
-        return false;
+    bool ok = file.seek(4);
+    if (ok) {
+        putLE32(b, 36 + dataBytes);
+        ok = writeAll(file, b, 4);
     }
-    putLE32(b, 36 + dataBytes);
-    if (!writeAll(file, b, 4) || !file.seek(40)) {
-        return false;
+    if (ok) {
+        ok = file.seek(40);
     }
-    putLE32(b, dataBytes);
-    if (!writeAll(file, b, 4)) {
-        return false;
+    if (ok) {
+        putLE32(b, dataBytes);
+        ok = writeAll(file, b, 4);
     }
-    return file.seek(0, SeekEnd);
+    if (!file.seek(restore)) {
+        ok = false;
+    }
+    return ok;
 }
 
 struct WavInfo {
@@ -303,6 +310,27 @@ bool readWavInfo(const std::string& path, WavInfo& info) {
     const bool ok = parseWav(file, info);
     file.close();
     return ok;
+}
+
+// Rilegge il file appena chiuso: RIFF, formato, dimensione e data size devono
+// corrispondere esattamente a quanto dichiarato dal registratore.
+bool verifyRecording(const std::string& path, uint32_t dataBytes) {
+    File file = storage::openRead(path, true);
+    if (!file) {
+        return false;
+    }
+    uint8_t riff[8];
+    const bool riffOk = file.read(riff, sizeof(riff)) == static_cast<int>(sizeof(riff)) &&
+                        std::memcmp(riff, "RIFF", 4) == 0 &&
+                        getLE32(riff + 4) == 36 + dataBytes;
+    file.seek(0);
+    WavInfo info;
+    const bool headerOk = riffOk && parseWav(file, info);
+    const size_t size = file.size();
+    file.close();
+    return headerOk && size == kWavHeader + dataBytes && info.rate == kRate &&
+           info.channels == 1 && info.bits == 16 && info.dataOffset == kWavHeader &&
+           info.dataBytes == dataBytes;
 }
 
 // ---------------------------------------------------------------------------
@@ -423,12 +451,16 @@ void drawSpectrum(bool warm) {
     display::header("Spettro FFT", "Audio");
 
     auto& d = display::g();
+    const int screenH = display::height();
     constexpr int kTop = 27;
-    constexpr int kBottom = 84;
-    constexpr int kBarW = 6;
-    constexpr int kGap = 2;
-    const int startX = (display::width() -
-                        (kBars * kBarW + (kBars - 1) * kGap)) / 2;
+    // In portrait il grafico usa l'altezza disponibile; in orizzontale resta
+    // identico al layout 240x135.
+    const int kBottom = screenH > 160 ? screenH - 56 : 84;
+    const int usableW = display::width() - 12;
+    const int gap = usableW / kBars >= 8 ? 2 : 1;
+    const int barW = std::max(2, (usableW - (kBars - 1) * gap) / kBars);
+    const int totalW = kBars * barW + (kBars - 1) * gap;
+    const int startX = (display::width() - totalW) / 2;
 
     d.fillRect(4, kTop - 2, display::width() - 8, kBottom - kTop + 4,
                display::C(display::T_bg2));
@@ -441,43 +473,47 @@ void drawSpectrum(bool warm) {
 
     const int scale = kBottom - kTop;
     for (int b = 0; b < kBars; ++b) {
-        const int x = startX + b * (kBarW + kGap);
-        d.fillRect(x, kTop, kBarW, scale, display::C(display::T_bg3));
+        const int x = startX + b * (barW + gap);
+        d.fillRect(x, kTop, barW, scale, display::C(display::T_bg3));
         const int h = static_cast<int>(g_bar[b] * scale);
         if (h > 0) {
             const uint16_t color = g_bar[b] > 0.86f ? display::C(display::T_err)
                                    : g_bar[b] > 0.70f ? display::C(display::T_warn)
                                                       : display::C(display::T_acc);
-            d.fillRect(x, kBottom - h, kBarW, h, color);
+            d.fillRect(x, kBottom - h, barW, h, color);
         }
         const int py = kBottom - static_cast<int>(g_barPeak[b] * scale);
         if (g_barPeak[b] > 0.01f) {
-            d.fillRect(x, std::max(kTop, py - 1), kBarW, 1, display::C(display::T_hi));
+            d.fillRect(x, std::max(kTop, py - 1), barW, 1, display::C(display::T_hi));
         }
     }
 
-    display::text(startX, kBottom + 2, "100", display::C(display::T_dim), 0);
-    display::text(startX + 112, kBottom + 2, "1k", display::C(display::T_dim), 0);
-    display::text(display::width() - 22, kBottom + 2, "6k",
+    const int labelY = kBottom + 2;
+    display::text(startX, labelY, "100", display::C(display::T_dim), 0);
+    display::text(startX + (totalW * 56) / 100, labelY, "1k",
+                  display::C(display::T_dim), 0);
+    display::text(startX + totalW - display::textWidth("6k", 0), labelY, "6k",
                   display::C(display::T_dim), 0);
 
+    const int levelY = labelY + 10;
     const float levelDb = std::max(kDbFloor, toDb(g_level));
     const float peakDb = std::max(kDbFloor, toDb(g_peakHold));
     char buf[40];
     std::snprintf(buf, sizeof(buf), "LIV %4.0f dB", static_cast<double>(levelDb));
-    display::text(7, 96, buf,
+    display::text(7, levelY, buf,
                   peakDb > -1.0f ? display::C(display::T_err) : display::C(display::T_text), 0);
     std::snprintf(buf, sizeof(buf), "PK %4.0f dB", static_cast<double>(peakDb));
-    display::text(display::width() - 7 - display::textWidth(buf, 0), 96, buf,
+    display::text(display::width() - 7 - display::textWidth(buf, 0), levelY, buf,
                   display::C(display::T_dim), 0);
 
     const float norm = std::min(1.0f, std::max(0.0f, (levelDb + 60.0f) / 60.0f));
-    display::progressBar(8, 105, display::width() - 16, 5, norm,
+    display::progressBar(8, levelY + 9, display::width() - 16, 5, norm,
                          peakDb > -1.0f ? display::C(display::T_err)
                                         : display::C(display::T_acc));
 
-    display::text(8, 113, warm ? "MIC: riscaldamento ES8311"
-                               : "FFT 512 punti, 16 kHz, mono",
+    display::text(8, levelY + 17,
+                  warm ? "MIC: riscaldamento ES8311"
+                       : "FFT 512 punti, 16 kHz, mono",
                   warm ? display::C(display::T_warn) : display::C(display::T_dim), 0);
     display::footer("ESC=esci", "MIC ON");
     display::push();
@@ -486,12 +522,14 @@ void drawSpectrum(bool warm) {
 void drawRecorderIdle(const std::string& lastSaved, uint32_t lastSeconds) {
     display::clear();
     display::header("Registra", "Audio");
+    const bool narrow = display::width() < 200;
 
     auto& d = display::g();
-    d.fillCircle(12, 32, 3, display::C(display::T_ok));
-    display::text(20, 28, "MIC PRONTO", display::C(display::T_ok), 2);
+    d.fillCircle(12, 32, 3, display::C(display::T_dim));
+    display::text(20, 28, "MIC SPENTO", display::C(display::T_dim), 2);
     display::text(8, 44, "SD libera: " + fmtFree(), display::C(display::T_text), 0);
-    display::text(8, 54, "/audio/rec  WAV 16-bit mono 16 kHz",
+    display::text(8, 54, narrow ? "/audio/rec"
+                                : "/audio/rec  WAV 16-bit mono 16 kHz",
                   display::C(display::T_dim), 0);
 
     d.fillRoundRect(4, 66, display::width() - 8, 30, 3, display::C(display::T_bg2));
@@ -499,9 +537,13 @@ void drawRecorderIdle(const std::string& lastSaved, uint32_t lastSeconds) {
     display::textCentered(76, "ENTER = AVVIA", display::kAccent, 2);
 
     if (!lastSaved.empty()) {
-        display::text(8, 102, "Ultimo: " + clip(lastSaved, display::width() - 100, 0) +
-                                  " (" + fmtDuration(lastSeconds) + ")",
-                      display::C(display::T_dim), 0);
+        const int textW = display::width() - 16 -
+                          display::textWidth("Ultimo: ", 0);
+        std::string line = "Ultimo: " + clip(lastSaved, textW, 0);
+        if (!narrow) {
+            line += " (" + fmtDuration(lastSeconds) + ")";
+        }
+        display::text(8, 102, line, display::C(display::T_dim), 0);
     }
     display::footer("ENTER=registra  ESC=esci");
     display::push();
@@ -511,6 +553,7 @@ void drawRecorderActive(const std::string& name, uint32_t seconds, uint32_t byte
                         float level, bool warming) {
     display::clear();
     display::header("Registrazione", "Audio");
+    const bool narrow = display::width() < 200;
 
     auto& d = display::g();
     const bool blink = (millis() / 500) % 2 == 0;
@@ -529,13 +572,21 @@ void drawRecorderActive(const std::string& name, uint32_t seconds, uint32_t byte
     std::snprintf(buf, sizeof(buf), "Scritti %.2f MB", static_cast<double>(bytes) /
                                                           (1024.0 * 1024.0));
     display::text(8, 70, buf, display::C(display::T_text), 0);
-    display::text(display::width() - 8 - display::textWidth("SD: " + fmtFree(), 0),
-                  70, "SD: " + fmtFree(), display::C(display::T_dim), 0);
-    display::text(8, 84, "WAV 16 kHz mono - 32000 B/s",
-                  display::C(display::T_dim), 0);
-    display::text(8, 96, warming ? "ES8311: scarto i primi campioni a zero"
-                                 : "La registrazione si ferma con ENTER o ESC.",
-                  warming ? display::C(display::T_warn) : display::C(display::T_dim), 0);
+    if (narrow) {
+        display::text(8, 82, "SD: " + fmtFree(), display::C(display::T_dim), 0);
+        display::text(8, 94, "WAV 16 kHz mono", display::C(display::T_dim), 0);
+        display::text(8, 106, warming ? "ES8311: attesa ~1 s"
+                                      : "ENTER/ESC = stop",
+                      warming ? display::C(display::T_warn) : display::C(display::T_dim), 0);
+    } else {
+        display::text(display::width() - 8 - display::textWidth("SD: " + fmtFree(), 0),
+                      70, "SD: " + fmtFree(), display::C(display::T_dim), 0);
+        display::text(8, 84, "WAV 16 kHz mono - 32000 B/s",
+                      display::C(display::T_dim), 0);
+        display::text(8, 96, warming ? "ES8311: scarto i primi campioni a zero"
+                                     : "La registrazione si ferma con ENTER o ESC.",
+                      warming ? display::C(display::T_warn) : display::C(display::T_dim), 0);
+    }
     display::footer("ENTER=stop  ESC=stop");
     display::push();
 }
@@ -633,6 +684,8 @@ struct RecSession {
     bool active = false;
     bool error = false;
     bool discarded = false;
+    bool valid = false;
+    bool removeFailed = false;
     float level = 0.0f;
 };
 
@@ -649,7 +702,7 @@ bool recorderStart(RecSession& r) {
     }
     uint8_t header[kWavHeader];
     fillWavHeader(header, 0);
-    if (!writeAll(r.file, header, sizeof(header))) {
+    if (!writeAll(r.file, header, sizeof(header)) || r.file.getWriteError() != 0) {
         r.file.close();
         storage::removeFile(r.path, true);
         return false;
@@ -659,18 +712,19 @@ bool recorderStart(RecSession& r) {
     r.next = 0;
     r.error = false;
     r.discarded = false;
+    r.valid = false;
+    r.removeFailed = false;
     r.level = 0.0f;
     r.startFree = sdFreeBytes();
     r.startedAt = millis();
-    // Se la cattura e' partita da meno di 1,2 s, i primi campioni possono
-    // essere gli zeri di avvio del codec: non vanno nel WAV.
+    // Il mic viene aperto all'inizio della REC: i primi ~1,2 s possono essere
+    // gli zeri di avvio del codec ES8311 e non vanno nel WAV.
     r.skipUntil = g_micStartedAt ? g_micStartedAt + 1200 : 0;
     if (!M5.Mic.record(g_pcm[0], kPcmSamples, kRate) ||
         !M5.Mic.record(g_pcm[1], kPcmSamples, kRate)) {
         r.file.close();
         storage::removeFile(r.path, true);
-        M5.Mic.end();          // scarta una eventuale richiesta rimasta in coda
-        beginMic();
+        endMic();  // scarta una eventuale richiesta rimasta in coda
         return false;
     }
     r.active = true;
@@ -685,7 +739,8 @@ void recorderWrite(RecSession& r) {
     const size_t bytes = sizeof(g_pcm[idx]);
     const bool warming = static_cast<int32_t>(millis() - r.skipUntil) < 0;
     if (!warming) {
-        if (!writeAll(r.file, reinterpret_cast<const uint8_t*>(g_pcm[idx]), bytes)) {
+        if (!writeAll(r.file, reinterpret_cast<const uint8_t*>(g_pcm[idx]), bytes) ||
+            r.file.getWriteError() != 0) {
             r.error = true;
             return;
         }
@@ -698,9 +753,13 @@ void recorderWrite(RecSession& r) {
     }
     r.next ^= 1;
     // Header aggiornato ogni secondo: se manca la corrente il file resta
-    // riproducibile al netto dell'ultimo secondo.
+    // riproducibile al netto dell'ultimo secondo. Se il patch fallisce non
+    // si aggiorna lastPatch: il chiamante ferma la REC e finalizza.
     if (r.bytes - r.lastPatch >= kRate * 2) {
-        patchWavHeader(r.file, r.bytes);
+        if (!patchWavHeader(r.file, r.bytes)) {
+            r.error = true;
+            return;
+        }
         r.lastPatch = r.bytes;
     }
 }
@@ -716,13 +775,30 @@ void recorderFinish(RecSession& r) {
         navigation::poll();
         delay(1);
     }
-    patchWavHeader(r.file, r.bytes);
+    endMic();  // la REC e' finita: il mic non resta acceso nella schermata
+
+    const bool headerOk = patchWavHeader(r.file, r.bytes);
     r.file.flush();
+    // Nota: su questa core File::write non aggiorna Print::write_error; il
+    // check resta richiesto, ma la garanzia vera e' writeAll + size + rilettura.
+    const bool writeOk = r.file.getWriteError() == 0;
+    const size_t finalSize = r.file.size();
     r.file.close();
     r.active = false;
+
     r.discarded = r.bytes < 3200;  // meno di ~100 ms: niente file
     if (r.discarded) {
-        storage::removeFile(r.path, true);
+        r.valid = false;
+        r.removeFailed = !storage::removeFile(r.path, true);
+        return;
+    }
+
+    // "Salvato" solo se header, write error, dimensione e rilettura tornano.
+    r.valid = headerOk && writeOk && finalSize == kWavHeader + r.bytes &&
+              verifyRecording(r.path, r.bytes);
+    if (!r.valid) {
+        r.error = true;
+        r.removeFailed = !storage::removeFile(r.path, true);
     }
 }
 
@@ -730,18 +806,7 @@ void runRecorder() {
     ensureAudioDirs();
     if (!storage::hasSD()) {
         ui::message("Registra",
-                    {"!microSD non montata.", "Inserisci una card e riavvia",
-                     "oppure usa un adattatore."},
-                    "Audio");
-        return;
-    }
-
-    drawBusy("Registra", "avvio microfono...");
-    if (!beginMic()) {
-        restoreSpeaker();
-        ui::message("Registra",
-                    {"!Microfono non disponibile.", "Il bus I2S e' occupato.",
-                     "Riavvia il dispositivo e riprova."},
+                    {"!microSD non montata.", "Inserisci una microSD e riavvia."},
                     "Audio");
         return;
     }
@@ -755,34 +820,69 @@ void runRecorder() {
     uint32_t lastActivity = 0;
     navigation::waitRelease();
 
+    // Chiude la sessione e aggiorna la riga di stato. "Salvato" solo quando
+    // header, dimensione e rilettura sono stati verificati.
+    auto settle = [&](const char* interrupted) {
+        recorderFinish(rec);
+        lastSeconds = rec.bytes / (kRate * 2);
+        if (rec.valid) {
+            lastSaved = rec.path;
+            notice = interrupted != nullptr ? interrupted : "Registrazione salvata.";
+            noticeError = interrupted != nullptr;
+        } else {
+            lastSaved.clear();
+            if (rec.discarded) {
+                notice = rec.removeFailed ? "!REC troppo breve: rimozione fallita."
+                                          : "Registrazione troppo breve: scartata.";
+            } else {
+                notice = rec.removeFailed ? "!File non valido lasciato sulla SD."
+                                          : "!Salvataggio non valido: file rimosso.";
+            }
+            noticeError = true;
+        }
+    };
+
+    auto start = [&]() {
+        if (sdFreeBytes() < 1024 * 1024) {
+            notice = "Spazio SD insufficiente (serve 1 MB).";
+            noticeError = true;
+            return;
+        }
+        drawBusy("Registra", "avvio microfono...");
+        if (!beginMic()) {
+            restoreSpeaker();
+            notice = "!Microfono non disponibile: bus I2S occupato.";
+            noticeError = true;
+            return;
+        }
+        if (!recorderStart(rec)) {
+            endMic();
+            restoreSpeaker();
+            notice = "!Avvio registrazione non riuscito.";
+            noticeError = true;
+            return;
+        }
+        notice = nullptr;
+        noticeError = false;
+        lastDraw = 0;
+    };
+
     for (;;) {
         const navigation::EventData ev = navigation::poll();
         if (ev.type == navigation::Event::Back) {
             if (rec.active) {
-                recorderFinish(rec);
+                settle(nullptr);
+                if (!rec.valid) {
+                    ui::message("Registra", {notice}, "Audio");
+                }
             }
             break;
         }
         if (ev.type == navigation::Event::Select) {
             if (!rec.active) {
-                if (sdFreeBytes() < 1024 * 1024) {
-                    notice = "Spazio SD insufficiente (serve 1 MB).";
-                    noticeError = true;
-                } else if (!recorderStart(rec)) {
-                    notice = "Avvio registrazione non riuscito.";
-                    noticeError = true;
-                } else {
-                    notice = nullptr;
-                    noticeError = false;
-                    lastDraw = 0;
-                }
+                start();
             } else {
-                recorderFinish(rec);
-                lastSaved = rec.discarded ? std::string() : rec.path;
-                lastSeconds = rec.bytes / (kRate * 2);
-                notice = rec.discarded ? "Registrazione troppo breve: scartata."
-                                       : "Registrazione salvata.";
-                noticeError = rec.discarded;
+                settle(nullptr);
             }
         }
 
@@ -795,31 +895,19 @@ void runRecorder() {
             }
             const uint32_t elapsed = millis() - rec.startedAt;
             if (rec.error) {
-                recorderFinish(rec);
-                lastSaved = rec.discarded ? std::string() : rec.path;
-                lastSeconds = rec.bytes / (kRate * 2);
-                notice = "!Errore di scrittura sulla SD.";
-                noticeError = true;
+                settle("REC interrotta: file parziale valido.");
             } else if (rec.startFree < static_cast<uint64_t>(rec.bytes) + 512 * 1024) {
-                recorderFinish(rec);
-                lastSaved = rec.discarded ? std::string() : rec.path;
-                lastSeconds = rec.bytes / (kRate * 2);
-                notice = "SD piena: registrazione interrotta.";
-                noticeError = true;
+                settle("SD piena: file parziale valido.");
             } else if (elapsed >= 3600000UL) {
-                recorderFinish(rec);
-                lastSaved = rec.discarded ? std::string() : rec.path;
-                lastSeconds = rec.bytes / (kRate * 2);
-                notice = "Limite di 60 minuti raggiunto.";
-                noticeError = false;
+                settle("Limite 60 minuti: file parziale valido.");
             }
         }
 
         if (millis() - lastDraw >= 100) {
             lastDraw = millis();
             if (rec.active) {
-                drawRecorderActive(rec.path, (millis() - rec.startedAt) / 1000,
-                                   rec.bytes, rec.level,
+                drawRecorderActive(rec.path, rec.bytes / (kRate * 2), rec.bytes,
+                                   rec.level,
                                    static_cast<int32_t>(millis() - rec.skipUntil) < 0);
             } else {
                 drawRecorderIdle(lastSaved, lastSeconds);
@@ -835,7 +923,7 @@ void runRecorder() {
     }
 
     if (rec.active) {
-        recorderFinish(rec);
+        settle(nullptr);
     }
     endMic();
     restoreSpeaker();
@@ -850,6 +938,19 @@ struct Memo {
     uint32_t seconds = 0;
 };
 
+bool reservedName(const std::string& base) {
+    const std::string upper = lower(base);
+    if (upper == "con" || upper == "prn" || upper == "aux" || upper == "nul") {
+        return true;
+    }
+    if (upper.size() == 4 && (upper.compare(0, 3, "com") == 0 ||
+                              upper.compare(0, 3, "lpt") == 0) &&
+        upper[3] >= '1' && upper[3] <= '9') {
+        return true;
+    }
+    return false;
+}
+
 std::string sanitizeName(const std::string& in) {
     std::string out;
     for (char c : in) {
@@ -863,11 +964,15 @@ std::string sanitizeName(const std::string& in) {
             break;
         }
     }
-    while (!out.empty() && out.front() == ' ') {
+    while (!out.empty() && (out.front() == ' ' || out.front() == '.')) {
         out.erase(out.begin());
     }
-    while (!out.empty() && out.back() == ' ') {
+    // FAT non accetta nomi che finiscono con punto o spazio.
+    while (!out.empty() && (out.back() == ' ' || out.back() == '.')) {
         out.pop_back();
+    }
+    if (out.empty() || reservedName(out)) {
+        return "";
     }
     return out;
 }
@@ -890,11 +995,26 @@ bool renameMemo(const std::string& name) {
     if (target == source) {
         return false;
     }
-    if (storage::exists(target, true)) {
+    const bool caseOnly = lower(target) == lower(source);
+    if (!caseOnly && storage::exists(target, true)) {
         ui::message("Voice memo", {"!Esiste gia' un memo", "con questo nome."}, "Voice memo");
         return false;
     }
-    if (!SD.rename(source.c_str(), target.c_str())) {
+    bool renamed = false;
+    if (caseOnly) {
+        // FAT non rinomina direttamente una differenza di sole maiuscole:
+        // passaggio intermedio con un nome temporaneo.
+        const std::string temp = joinPath(kMemoDir, ".orbit_rename.tmp");
+        SD.remove(temp.c_str());
+        renamed = SD.rename(source.c_str(), temp.c_str()) &&
+                  SD.rename(temp.c_str(), target.c_str());
+        if (!renamed) {
+            SD.rename(temp.c_str(), source.c_str());  // ripristino best effort
+        }
+    } else {
+        renamed = SD.rename(source.c_str(), target.c_str());
+    }
+    if (!renamed) {
         ui::message("Voice memo", {"!Rinomina non riuscita.", "La SD potrebbe essere",
                                    "in sola lettura."}, "Voice memo");
         return false;
@@ -920,6 +1040,7 @@ bool deleteMemo(const std::string& name) {
 void drawPlayback(const std::string& name, const WavInfo& info, uint32_t played) {
     display::clear();
     display::header("Voice memo", "Audio");
+    const bool narrow = display::width() < 200;
     display::text(8, 28, clip(stem(name), display::width() - 16, 2),
                   display::kAccent, 2);
     display::text(8, 42, "in riproduzione", display::kText, 0);
@@ -941,7 +1062,7 @@ void drawPlayback(const std::string& name, const WavInfo& info, uint32_t played)
     std::snprintf(buf, sizeof(buf), "%u Hz %s 16-bit", static_cast<unsigned>(info.rate),
                   info.channels == 2 ? "stereo" : "mono");
     display::text(8, 84, buf, display::kTextDim, 0);
-    display::footer("ESC=stop  volume fisso");
+    display::footer(narrow ? "ESC=stop" : "ESC=stop  volume fisso");
     display::push();
 }
 
@@ -983,6 +1104,26 @@ void playMemo(const std::string& name) {
         if (ev.type == navigation::Event::Back ||
             ev.type == navigation::Event::Select) {
             userStop = true;
+            break;
+        }
+        // Con 2 buffer e 2 slot per canale il buffer che stiamo per
+        // sovrascrivere e' il piu' vecchio in coda: si aspetta che uno slot
+        // sia libero PRIMA della read, altrimenti il blocco successivo
+        // finirebbe sopra l'audio ancora in riproduzione.
+        while (!userStop && M5.Speaker.isPlaying(1) >= 2) {
+            const navigation::EventData waitEv = navigation::poll();
+            if (waitEv.type == navigation::Event::Back ||
+                waitEv.type == navigation::Event::Select) {
+                userStop = true;
+                break;
+            }
+            if (millis() - lastDraw >= 150) {
+                lastDraw = millis();
+                drawPlayback(name, info, played);
+            }
+            delay(2);
+        }
+        if (userStop) {
             break;
         }
         size_t want = std::min<size_t>(remain, sizeof(g_pcm[0]));
@@ -1035,24 +1176,45 @@ void playMemo(const std::string& name) {
     logger::info("Audio: memo %s", userStop ? "interrotto" : "riprodotto");
 }
 
+std::string baseName(const char* path) {
+    std::string name = path != nullptr ? path : "";
+    const size_t slash = name.find_last_of("/\\");
+    return slash == std::string::npos ? name : name.substr(slash + 1);
+}
+
 std::vector<Memo> scanMemos() {
     ensureAudioDirs();
+    constexpr size_t kMaxMemos = 40;
     std::vector<Memo> memos;
-    for (const auto& entry : storage::listEntries(kMemoDir, true)) {
-        if (entry.isDir || !isWav(entry.name)) {
+    // Iterazione diretta della directory: niente vettore con tutti i nomi
+    // (e niente sort) per una cartella potenzialmente grande.
+    File dir = SD.open(kMemoDir);
+    if (!dir || !dir.isDirectory()) {
+        dir.close();
+        return memos;
+    }
+    size_t scanned = 0;
+    while (memos.size() < kMaxMemos && scanned < 200) {
+        ++scanned;
+        File entry = dir.openNextFile();
+        if (!entry) {
+            break;
+        }
+        const bool isDir = entry.isDirectory();
+        const std::string name = baseName(entry.name());
+        entry.close();
+        if (isDir || name.empty() || name[0] == '.' || !isWav(name)) {
             continue;
         }
         Memo memo;
-        memo.name = entry.name;
+        memo.name = name;
         WavInfo info;
-        if (readWavInfo(joinPath(kMemoDir, entry.name), info)) {
+        if (readWavInfo(joinPath(kMemoDir, name), info)) {
             memo.seconds = wavSeconds(info);
         }
         memos.push_back(std::move(memo));
-        if (memos.size() >= 40) {
-            break;  // shortcut: oltre 40 memo la lista si ferma qui
-        }
     }
+    dir.close();
     return memos;
 }
 
