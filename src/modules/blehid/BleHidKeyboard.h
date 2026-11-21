@@ -47,18 +47,40 @@ enum Special : uint8_t {
 
 namespace hid {
 
+enum class StartError : uint8_t {
+    None = 0,
+    LowHeap,       // meno di ~32 KB liberi prima di NimBLE
+    PeerConnected, // un altro modulo ha gia' un host BLE connesso
+    Stack          // init/creazione HID fallita
+};
+
 // Inizializza NimBLE e il servizio HID (0x1812) con nome ORBIT-<nick>.
-// Se lo stack e' gia' attivo (Chat, BLE Spam) viene prima fermato e
-// ricreato: nessun modulo resta in esecuzione in parallelo.
+// Se lo stack e' gia' attivo (Chat, BLE Spam, Radar) e non ha host connessi,
+// viene fermato e ricreato: il modulo e' esclusivo. Con un host connesso
+// altrove non tocca nulla e ritorna false (StartError::PeerConnected).
 bool begin(const std::string& name);
 
 // Ferma advertising e connessioni, poi deinit(true) per restituire la RAM.
 void end();
 
+StartError lastError();
 bool active();
+
+// Stato del singolo peer tracciato. La sessione e' utilizzabile solo con
+// link cifrato, peer autorizzato esplicitamente e report 0x2A4D sottoscritto.
+bool linkUp();
+bool linkSecure();
+bool authorized();
+bool ready();
+// Compatibilita' con il resto del modulo: equivale a ready().
 bool connected();
-// True se l'host ha sottoscritto almeno un report: le notifiche arrivano.
 bool subscribed();
+bool bootProtocol();
+uint16_t peerCount();
+std::string peerAddress();
+bool authorizePeer();
+void deauthorizePeer();
+
 const std::string& deviceName();
 
 Layout layout();

@@ -411,7 +411,12 @@ bool parseLine(const std::string& line, Action& out) {
             }
             uint8_t key = 0;
             if (token.size() == 1) {
-                const unsigned char c = static_cast<unsigned char>(token[0]);
+                unsigned char c = static_cast<unsigned char>(token[0]);
+                // Ducky: CTRL C / GUI R non aggiungono Shift. Il caso
+                // maiuscolo del token non deve diventare un tasto Shift.
+                if (c >= 'A' && c <= 'Z') {
+                    c = static_cast<unsigned char>(c - 'A' + 'a');
+                }
                 if (c >= 0x20 && c < 0x7F) {
                     key = c;
                 }
@@ -435,6 +440,26 @@ bool parseLine(const std::string& line, Action& out) {
         }
     }
     return false;
+}
+
+// Self-check del parser: CTRL C / GUI R non devono aggiungere Shift.
+bool parserSanity() {
+    Action action;
+    if (!parseLine("CTRL C", action) || action.type != ActionType::Chord ||
+        action.key != 'c' || action.mods != kModCtrl) {
+        return false;
+    }
+    action.reset();
+    if (!parseLine("GUI R", action) || action.type != ActionType::Chord ||
+        action.key != 'r' || action.mods != kModGui) {
+        return false;
+    }
+    action.reset();
+    if (!parseLine("STRING hello", action) || action.type != ActionType::Text ||
+        action.text != "hello") {
+        return false;
+    }
+    return true;
 }
 
 std::string shorten(const std::string& text, size_t maxChars) {
@@ -487,6 +512,11 @@ ScriptResult runScript(const std::string& path, const std::string& name,
                        bool preferSd) {
     ScriptResult result;
 
+    if (!parserSanity()) {
+        logger::error("Bad BLE: self-check parser fallito");
+        return result;
+    }
+
     File file = storage::openRead(path, preferSd);
     if (!file) {
         logger::warn("Bad BLE: impossibile aprire %s", path.c_str());
@@ -500,6 +530,12 @@ ScriptResult runScript(const std::string& path, const std::string& name,
         ++result.total;
         if ((result.total & 0x3F) == 0) {
             navigation::update();
+            if (!hid::connected()) {
+                file.close();
+                result.aborted = true;
+                result.disconnected = true;
+                return result;
+            }
             if (navigation::poll().type == navigation::Event::Back) {
                 file.close();
                 result.aborted = true;
