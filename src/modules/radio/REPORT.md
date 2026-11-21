@@ -15,7 +15,8 @@
   - percorso `/audio/rec/radio_YYYYmmdd_HHMMSS.wav` (crea `/audio/rec` se
     serve);
   - PCM catturato dal callback weak `audio_process_extern` (16 bit, stereo,
-    sample rate reale) in un ring buffer da **16 KB** in RAM;
+    sample rate reale) in un ring buffer da **16 KB allocato sull'heap solo
+    all'avvio della REC** e liberato allo stop;
   - scrittura su SD dal loop principale in `audioout::pump()`, mai dal
     callback del decoder;
   - intestazione WAV da 44 byte scritta all'apertura e **riscritta alla
@@ -24,10 +25,13 @@
     salvataggio o errore;
   - stop con `R`, con `INVIO`/`ESC` o automaticamente all'uscita.
 - **I2S robusto**: `audioout::beginPlayback()` reinstalla il driver I2S0 del
-  decoder (stessa configurazione della libreria) prima di ogni stream, così
-  la radio funziona anche dopo che `M5.Mic` ha usato o fermato I2S0.
+  decoder (stessa configurazione della libreria) prima di ogni stream. Se
+  `M5.Mic` stava usando I2S0 viene fermato; poiché `Mic.end()` resetta il
+  codec ES8311, il percorso DAC viene riacceso con un ciclo
+  `Speaker.begin()`/`Speaker.end()` che non lascia I2S1 installato.
   `audioout::endPlayback()` ferma lo stream, finalizza il WAV, **disinstalla
-  I2S0** e restituisce lo speaker a M5Unified.
+  I2S0** e restituisce lo speaker a M5Unified (`Speaker.begin()` su I2S1, per
+  i beep della UI).
 - Un solo oggetto `Audio`, sempre tramite `audioout::decoder()`.
 
 File modificati: `src/modules/radio/RadioMenu.cpp`, `src/utils/AudioOut.cpp`,
@@ -102,13 +106,17 @@ Build `python -m platformio run -e cardputer-adv-offensive`: **SUCCESS**.
 
 | Voce | Valore |
 |---|---|
-| `firmware.bin` | **2.379.728 byte** (2,27 MiB) |
-| Flash slot | 2.379.365 / 2.621.440 byte = **90,8 %** |
-| RAM statica | 132.264 / 327.680 byte = **40,4 %** |
-| di cui ring REC | 16.384 byte |
+| `firmware.bin` | **2.381.088 byte** (2,27 MiB) |
+| Flash slot | 2.380.725 / 2.621.440 byte = **90,8 %** |
+| RAM statica | 115.880 / 327.680 byte = **35,4 %** |
+| Heap durante REC | +16.384 byte per il ring, liberati allo stop |
 
-La feature aggiunge ~20,7 KB di flash e ~16,7 KB di RAM statica rispetto alla
-baseline (2.358.193 byte di flash, 35,3 % RAM).
+La feature aggiunge ~22 KB di flash e **~360 byte** di RAM statica rispetto
+alla baseline (2.358.193 byte di flash, 115.520 byte di RAM statica). Il ring
+da 16 KB non è più statico: viene allocato con `new (std::nothrow)` solo
+quando parte la registrazione, dopo un controllo di heap, e liberato in
+`finishRecording()`. Se l'allocazione fallisce la radio resta in ascolto e
+avvisa "Registrazione non avviata".
 
 ## 6. Test eseguiti
 
@@ -122,9 +130,20 @@ baseline (2.358.193 byte di flash, 35,3 % RAM).
   Authorization vuota, **senza User-Agent**) verso:
   - `http://ice1.somafm.com/groovesalad-128-mp3` → `HTTP/1.0 200 OK`
   - `http://ice1.somafm.com/dronezone-128-mp3` → `HTTP/1.0 200 OK`
+- **Ciclo I2S verificato sul codice di M5Unified 0.3.0** (non su hardware):
+  - `M5.Speaker` usa `I2S_NUM_1` su Cardputer ADV; decoder e `M5.Mic` usano
+    `I2S_NUM_0`;
+  - `Speaker.end()` scrive una lista di registri ES8311 vuota su questa
+    board (`disabled_bulk_data = {0}`), quindi non spegne il codec: il
+    decoder può pilotare lo stesso ES8311 via I2S0;
+  - `Mic.end()` invece resetta l'ES8311 (`CSM POWER DOWN`). Per questo, se il
+    mic era attivo, `beginPlayback()` esegue `Speaker.begin()` +
+    `Speaker.end()` per riscrivere i registri DAC e poi libera subito I2S1;
+  - `Mic.begin()` dopo la radio trova I2S0 libero, perché `endPlayback()` lo
+    disinstalla.
 - Non è stato possibile eseguire test su hardware reale da questo ambiente
-  (niente Cardputer/SD collegate): i test di ascolto e registrazione sono
-  manuali, elencati sotto.
+  (niente Cardputer/SD collegate): i test di ascolto, registrazione e ciclo
+  I2S sono manuali, elencati sotto.
 
 ## 7. Limiti e rischi
 
@@ -137,9 +156,16 @@ baseline (2.358.193 byte di flash, 35,3 % RAM).
 - **HTTPS**: il parser accetta `https://`, ma il decoder usa TLS con
   `setInsecure()` e molta RAM; la documentazione del progetto consiglia HTTP.
 - **Mic/I2S0**: la radio prende I2S0 all'avvio dello stream e lo rilascia
-  all'uscita; con `M5.Mic` attivo non possono convivere. La reinizializzazione
-  è pensata per il caso "mic usato prima della radio", non per l'uso
-  contemporaneo.
+  all'uscita. Se `M5.Mic` stava già usando I2S0, `beginPlayback()` chiama
+  `Mic.end()` (la registrazione del modulo Audio in corso viene interrotta),
+  riaccende il DAC ES8311 e reinstalla il driver del decoder. Dopo
+  `endPlayback()` il driver I2S0 è disinstallato, quindi
+  `M5.Mic.begin()` può ripartire. L'uso **contemporaneo** di radio e
+  microfono resta impossibile: è lo stesso periferico.
+- **Heap per il ring REC**: 16 KB vengono allocati solo durante la
+  registrazione, con controllo `ESP.getFreeHeap()` (margine 8 KB) e
+  `new (std::nothrow)`. In caso di fallimento la REC non parte e la radio
+  continua; il file parziale viene rimosso.
 - **Sample rate variabile** a metà stream: l'header usa l'ultimo rate noto;
   un cambio di rate durante la registrazione produrrebbe un WAV con durata
   errata. Non capita con gli MP3 CBR usati come predefiniti.
@@ -168,8 +194,17 @@ baseline (2.358.193 byte di flash, 35,3 % RAM).
 4. Registrare 30 s con `R`, fermare con `R`, aprire il WAV sul PC: deve
    durare ~30 s, essere stereo 16 bit e avere audio anche a volume 0.
 5. Con SD piena o rimossa durante la REC: avviso, nessun hang, WAV
-   finalizzato con l'header corretto.
-6. Dopo aver usato il modulo Audio/microfono, riaprire la radio: l'audio deve
-   ripartire (reinit I2S0) e i beep della UI tornare all'uscita.
-7. Premere ESC in riproduzione: ritorno al menu, beep UI funzionante,
+   finalizzato con l'header corretto; verificare anche che il ring venga
+   liberato (heap che torna al valore pre-REC).
+6. Premere ESC in riproduzione: ritorno al menu, beep UI funzionante,
    nessun file WAV lasciato aperto.
+7. **Radio → Audio → Radio**: ascoltare la radio, uscire, aprire il modulo
+   Audio e registrare un memo con `M5.Mic` (poi fermarlo), uscire e riaprire
+   la radio. L'ascolto deve ripartire, la REC radio deve funzionare e i beep
+   della UI devono essere udibili in entrambi i ritorni al menu.
+8. **Mic già attivo → Radio**: avviare un memo, senza fermarlo aprire la
+   radio. `Mic.end()` deve interrompere il memo, la radio deve prendersi
+   I2S0 e suonare; all'uscita `M5.Mic.begin()` deve poter ripartire.
+9. **Radio → uscita → beep**: dopo `endPlayback()` premere un tasto che
+   produce un beep UI (es. cambio voce menu) senza riaprire la radio:
+   `Speaker.begin()` su I2S1 deve ripristinare l'audio.

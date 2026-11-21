@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <new>
 
 #include "Logger.h"
 #include "Storage.h"
@@ -20,10 +21,12 @@ char g_station[96] = {0};
 char g_title[128] = {0};
 
 // --- Registrazione -----------------------------------------------------------
-// Ring piccolo: il callback copia solo in RAM, la SD viene scritta da pump().
+// Ring piccolo, allocato solo durante la REC: il callback copia in RAM, la SD
+// viene scritta da pump(). Nessun buffer fisso quando la radio non registra.
 constexpr uint32_t kRingSamples = 8192;  // 16 KB, circa 85 ms a 48 kHz stereo
+constexpr uint32_t kRingBytes = kRingSamples * sizeof(int16_t);
 constexpr uint32_t kRingMask = kRingSamples - 1;
-int16_t g_ring[kRingSamples];
+int16_t* g_ring = nullptr;
 volatile uint32_t g_head = 0;
 volatile uint32_t g_tail = 0;
 
@@ -70,6 +73,9 @@ void copyText(char* dst, size_t cap, const char* src) {
 }
 
 uint32_t ringUsed() {
+    if (g_ring == nullptr) {
+        return 0;
+    }
     const uint32_t used = g_head - g_tail;
     return used <= kRingSamples ? used : kRingSamples;
 }
@@ -107,6 +113,9 @@ void writeWavHeader(File& file, uint32_t dataBytes, uint32_t sampleRate) {
 }
 
 void pushInterleaved(const int16_t* src, uint32_t count) {
+    if (g_ring == nullptr) {
+        return;
+    }
     const uint32_t freeSamples = kRingSamples - ringUsed();
     if (count > freeSamples) {
         g_droppedSamples += count - freeSamples;
@@ -127,6 +136,9 @@ void pushInterleaved(const int16_t* src, uint32_t count) {
 // Gli stream mono vengono salvati come stereo (stesso campione L/R), cosi'
 // l'intestazione resta sempre 16 bit / 2 canali come richiesto.
 void pushMono(const int16_t* src, uint32_t frames) {
+    if (g_ring == nullptr) {
+        return;
+    }
     const uint32_t freeFrames = (kRingSamples - ringUsed()) / 2;
     if (frames > freeFrames) {
         g_droppedSamples += (frames - freeFrames) * 2;
@@ -142,7 +154,7 @@ void pushMono(const int16_t* src, uint32_t frames) {
 }
 
 bool drainChunk() {
-    if (!g_file) {
+    if (!g_file || g_ring == nullptr) {
         return false;
     }
     const uint32_t used = ringUsed();
@@ -188,6 +200,9 @@ void finishRecording() {
         logger::warn("Audio: REC, %u campioni persi (ring pieno)",
                      static_cast<unsigned>(g_droppedSamples));
     }
+    // Il ring vive solo durante la registrazione.
+    delete[] g_ring;
+    g_ring = nullptr;
     g_head = 0;
     g_tail = 0;
 }
@@ -217,7 +232,8 @@ static void setTitle(const char* info) {
 }
 
 static void capturePcm(int16_t* buff, uint16_t len) {
-    if (!g_recording || buff == nullptr || len == 0 || g_decoder == nullptr) {
+    if (!g_recording || buff == nullptr || len == 0 || g_decoder == nullptr ||
+        g_ring == nullptr) {
         return;
     }
     if (g_decoder->getBitsPerSample() != 16) {
@@ -280,6 +296,15 @@ bool beginPlayback() {
         stopRecording();  // una REC rimasta aperta non deve restare orfana
     }
     releaseSpeaker();
+    // Se il modulo Audio sta usando il microfono, I2S0 e' occupato e
+    // M5.Mic.end() resetta anche il codec ES8311: la radio deve riprendersi
+    // il bus e riaccendere il percorso DAC prima di (ri)creare il decoder.
+    const bool micWasRunning = M5Cardputer.Mic.isRunning();
+    M5Cardputer.Mic.end();
+    if (micWasRunning) {
+        M5Cardputer.Speaker.begin();  // riscrive i registri ES8311 del DAC
+        M5Cardputer.Speaker.end();    // libera subito I2S1
+    }
     Audio& audio = decoder();
     // Il microfono (M5.Mic) usa I2S_NUM_0 come il decoder: se un altro modulo
     // lo ha fermato o riconfigurato, qui il driver viene ripristinato prima
@@ -364,6 +389,25 @@ bool startRecording(const char* path) {
     if (!file) {
         return false;
     }
+    if (g_ring == nullptr) {
+        // 16 KB servono solo mentre si registra: controllo e allocazione qui.
+        const uint32_t freeHeap = ESP.getFreeHeap();
+        if (freeHeap < kRingBytes + 8192U) {
+            logger::warn("Audio: heap insufficiente per ring REC (%u byte)", freeHeap);
+            file.close();
+            storage::removeFile(path, true);
+            return false;
+        }
+        g_ring = new (std::nothrow) int16_t[kRingSamples];
+        if (g_ring == nullptr) {
+            logger::warn("Audio: ring REC non allocato");
+            file.close();
+            storage::removeFile(path, true);
+            return false;
+        }
+        logger::info("Audio: ring REC allocato (%u byte, heap %u)",
+                     static_cast<unsigned>(kRingBytes), freeHeap);
+    }
 
     const uint32_t live = g_decoder ? g_decoder->getSampleRate() : 0;
     g_recRate = live >= 8000 ? live : 44100;
@@ -378,6 +422,9 @@ bool startRecording(const char* path) {
     if (g_file.getWriteError() != 0) {
         g_file.close();
         g_file = File();
+        delete[] g_ring;
+        g_ring = nullptr;
+        storage::removeFile(path, true);
         return false;
     }
     g_recording = true;
