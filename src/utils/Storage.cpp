@@ -76,6 +76,22 @@ bool begin() {
     return g_littlefs || g_sd;
 }
 
+bool remountSD() {
+    if (g_sd) {
+        return true;
+    }
+    // Stessi parametri di begin(); SPI viene riavviato perche' la card puo'
+    // essere stata inserita dopo il boot. LittleFS resta montato.
+    SPI.begin(SD_SCK_PIN, SD_MISO_PIN, SD_MOSI_PIN, SD_CS_PIN);
+    if (SD.begin(SD_CS_PIN, SPI, 25000000, "/sd")) {
+        g_sd = true;
+        logger::info("microSD montata (remount)");
+        return true;
+    }
+    logger::warn("microSD remount fallito");
+    return false;
+}
+
 bool hasLittleFS() {
     return g_littlefs;
 }

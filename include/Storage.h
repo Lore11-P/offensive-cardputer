@@ -22,6 +22,11 @@ bool begin();
 bool hasLittleFS();
 bool hasSD();
 
+// Ritenta il mount della microSD con gli stessi pin, frequenza e mountpoint
+// di begin(). Serve quando la card viene inserita dopo l'avvio.
+// LittleFS non viene toccato. True se la SD e' (o era gia') montata.
+bool remountSD();
+
 // Apre un file in sola lettura su LittleFS o SD. Con preferSD=true usa solo
 // la microSD (utile per il file browser e i backup).
 File openRead(const std::string& path, bool preferSD = false);
