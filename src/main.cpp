@@ -55,6 +55,30 @@
 #if ENABLE_MODULE_BADUSB
 #include "modules/badusb/BadUsbMenu.h"
 #endif
+#if ENABLE_MODULE_AUDIO
+#include "modules/audio/AudioMenu.h"
+#endif
+#if ENABLE_MODULE_BLEHID
+#include "modules/blehid/BleHidMenu.h"
+#endif
+#if ENABLE_MODULE_TOOLS
+#include "modules/tools/ToolsMenu.h"
+#endif
+#if ENABLE_MODULE_WIFILAB
+#include "modules/wifilab/WifiLabMenu.h"
+#endif
+#if ENABLE_MODULE_WPASEC
+#include "modules/wpasec/WpaSecMenu.h"
+#endif
+#if ENABLE_MODULE_SENSORS
+#include "modules/sensors/SensorsMenu.h"
+#endif
+#if ENABLE_MODULE_WIFIEXT
+#include "modules/wifiext/WifiExtMenu.h"
+#endif
+#if ENABLE_MODULE_ESPNOW
+#include "modules/espnow/EspNowMenu.h"
+#endif
 
 namespace {
 
@@ -83,8 +107,23 @@ void buildAndRunMainMenu() {
 #if ENABLE_MODULE_CHAT && ENABLE_MODULE_BLE
     menu.addItem("Chat", "chat", guardedModule("Chat", config::Module::Chat, chat::runMenu));
 #endif
+#if ENABLE_MODULE_BLEHID
+    menu.addItem("BLE HID", "ble", [] { blehid::runMenu(); });
+#endif
 #if ENABLE_MODULE_WIFI
     menu.addItem("WiFi", "wifi", guardedModule("WiFi", config::Module::Wifi, wifi::runMenu));
+#endif
+#if ENABLE_MODULE_WIFILAB
+    menu.addItem("WiFi Lab", "wifi", [] { wifilab::runMenu(); });
+#endif
+#if ENABLE_MODULE_WIFIEXT
+    menu.addItem("WiFi+", "wifi", [] { wifiext::runMenu(); });
+#endif
+#if ENABLE_MODULE_WPASEC
+    menu.addItem("WPA-SEC", "lock", [] { wpasec::runMenu(); });
+#endif
+#if ENABLE_MODULE_ESPNOW
+    menu.addItem("ESP-NOW", "chat", [] { espnow::runMenu(); });
 #endif
 #if ENABLE_MODULE_RADAR
     menu.addItem("Radar", "radar", guardedModule("Radar", config::Module::Radar, radar::runMenu));
@@ -94,6 +133,9 @@ void buildAndRunMainMenu() {
 #endif
 #if ENABLE_MODULE_MUSIC
     menu.addItem("Musica", "music", guardedModule("Musica", config::Module::Music, music::runMenu));
+#endif
+#if ENABLE_MODULE_AUDIO
+    menu.addItem("Audio", "music", [] { audio::runMenu(); });
 #endif
 #if ENABLE_MODULE_PCAPTOOLS
     menu.addItem("Capture", "capture",
@@ -111,6 +153,12 @@ void buildAndRunMainMenu() {
 #endif
 #if ENABLE_MODULE_SD
     menu.addItem("SD", "sd", guardedModule("SD", config::Module::Sd, sd_module::runMenu));
+#endif
+#if ENABLE_MODULE_TOOLS
+    menu.addItem("Utility", "settings", [] { tools::runMenu(); });
+#endif
+#if ENABLE_MODULE_SENSORS
+    menu.addItem("Sensori", "radar", [] { sensors::runMenu(); });
 #endif
 #if ENABLE_MODULE_SETTINGS
     menu.addItem("Impostazioni", "settings", settings_module::run);

@@ -65,6 +65,46 @@
 #define ENABLE_MODULE_BLEEXT 1
 #endif
 
+// Microfono: spettro FFT, registratore WAV, voice memo.
+#ifndef ENABLE_MODULE_AUDIO
+#define ENABLE_MODULE_AUDIO 1
+#endif
+
+// BLE HID: tastiera BLE e DuckyScript via BLE (Bad BLE).
+#ifndef ENABLE_MODULE_BLEHID
+#define ENABLE_MODULE_BLEHID 1
+#endif
+
+// Utility: clock, calendario, note, calcolatrice, QR, TOTP.
+#ifndef ENABLE_MODULE_TOOLS
+#define ENABLE_MODULE_TOOLS 1
+#endif
+
+// WiFi Lab: PMKID attivo, client monitor, whitelist, waterfall 2.4 GHz.
+#ifndef ENABLE_MODULE_WIFILAB
+#define ENABLE_MODULE_WIFILAB 1
+#endif
+
+// WPA-SEC: upload catture e download potfile.
+#ifndef ENABLE_MODULE_WPASEC
+#define ENABLE_MODULE_WPASEC 1
+#endif
+
+// Sensori: livella, goniometro, pedometro, torcia LED.
+#ifndef ENABLE_MODULE_SENSORS
+#define ENABLE_MODULE_SENSORS 1
+#endif
+
+// WiFi+: Responder, Karma, Auto-Portal.
+#ifndef ENABLE_MODULE_WIFIEXT
+#define ENABLE_MODULE_WIFIEXT 1
+#endif
+
+// ESP-NOW: file, comandi e clipboard mesh.
+#ifndef ENABLE_MODULE_ESPNOW
+#define ENABLE_MODULE_ESPNOW 1
+#endif
+
 // Presenza via Wi-Fi CSI: sperimentale, richiede traffico 802.11 reale.
 // Le API esp_wifi_set_csi* esistono su ESP32-S3 in arduino-esp32 2.0.x
 // (CONFIG_ESP32_WIFI_CSI_ENABLED=1), ma la sensibilita' dipende dai frame
