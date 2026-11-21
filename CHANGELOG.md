@@ -2,6 +2,13 @@
 
 Tutte le modifiche rilevanti del progetto. Formato basato su Keep a Changelog.
 
+## [2.0.1] - 2026-11-21
+
+### Corretto
+
+- **Colori**: `src/core/Orbit.cpp` (`ditherSpan`) passa i colori RGB565 nativi a `pushImage()` con il cast `lgfx::rgb565_t`; M5GFX non inverte più i byte. Verificato con test host.
+- **IR lento**: `listRemotes` usa una sola `listEntries()` (niente `exists` per file), `openRead` apre direttamente, cache di preferiti/marche/conteggi, NVS scritta solo se cambia, parser a 1024 B. Guadagno stimato ~2,1× su Cerca/Database e ~2,4× su Altro.
+
 ## [2.0.0] - 2026-11-21
 
 ### Aggiunto

@@ -1,10 +1,11 @@
-# ORBIT OS 2.0.0 — report di integrazione
+# ORBIT OS 2.0.1 — report di integrazione
 
 ## Riepilogo
 
 - 10 feature nuove, 4 ottimizzatori, 10 bug tester, 2 merger, 2 supervisori.
 - Trunk: `feat/10-modules`.
 - Build `cardputer-adv-offensive`: **SUCCESS**.
+- Versione: **2.0.1** (colori + IR speed).
 - `firmware.bin`: **2.663.424 B**.
 - Slot app 2.0: **2.818.048 B**, usati 2.663.053 B (**94,5%**), liberi **154.624 B**.
 - RAM statica: **146.976 / 327.680 B (44,9%)**; framebuffer ~64,8 KB; heap residuo stimato ~115 KB.
@@ -52,7 +53,8 @@ Usare `flasher\flash.ps1`, il web flasher (Chrome/Edge) o `esptool`. Dopo il fla
 
 - `flasher/bin` e `flasher/web`: bootloader, partitions, firmware, littlefs 2.0.
 - `E:\orbit\flash`: copia dei quattro binari + manifest per il flasher.
-- `E:\downloads\offensive-cardputer-firmware-v2.0.0.bin`.
+- `E:\downloads\ORBIT-OS-2.0.1-flasher.zip` e `E:\downloads\offensive-cardputer-flasher`.
+- `E:\downloads\ORBIT-OS-2.0.1-firmware.bin`.
 - `E:\ir`: 2.255 file `.ir` (8 categorie).
 - SD: `/radio`, `/audio`, `/tools`, `/wifilab`, `/wpasec`, `/wifiext`, `/espnow`.
 

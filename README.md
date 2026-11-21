@@ -1,9 +1,14 @@
-# ORBIT OS v2.0
+# ORBIT OS v2.0.1
 
 Firmware modulare per **M5Stack Cardputer ADV** (ESP32-S3FN8, 8 MB flash, **senza PSRAM**), scritto in C++17 con PlatformIO/Arduino. Interfaccia a menu con icone, navigazione da tastiera e moduli attivabili/disattivabili a runtime.
 
 > **Avviso legale**
 > Il firmware include moduli radio e IR. Le funzioni offensive (BLE spam, deauth Wi-Fi, evil twin, evil portal, jammer IR) sono **disabilitate di default** (`ENABLE_OFFENSIVE=0`) e nella build pubblica non vengono nemmeno compilate. L'uso di trasmissioni radio non autorizzate, il disturbo di reti altrui e la raccolta non consensuale di credenziali sono reati in Italia e in molti altri Paesi. Usa questo progetto **solo su dispositivi e reti tuoi**, oppure in un ambiente RF isolato con autorizzazione scritta. L'autore non si assume alcuna responsabilità per usi impropri.
+
+## Novità 2.0.1
+
+- **Colori corretti**: `ditherSpan()` converte i colori RGB565 nativi con `lgfx::rgb565_t`; niente più byte invertiti in cielo/sfondi.
+- **IR più veloce**: una sola enumerazione per cartella, niente `exists` per file, cache di marche/conteggi/preferiti, NVS solo se cambia, parser a 1 KB (~2,1× stimato).
 
 ## Novità 2.0.0
 
