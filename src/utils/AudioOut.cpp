@@ -375,6 +375,31 @@ bool beginPlayback() {
     return g_speakerReleased && pinsOk;
 }
 
+// Percorso 1.21: niente Mic.end(), niente reinit I2S0, niente deinit.
+// Ripristina il comportamento del lettore Musica senza toccare Radio/Audio.
+bool beginPlaybackLegacy() {
+    releaseSpeaker();
+    if (!decoderReady()) {
+        restoreSpeaker();
+        return false;
+    }
+    const auto cfg = M5Cardputer.Speaker.config();
+    g_decoder->setPinout(cfg.pin_bck, cfg.pin_ws, cfg.pin_data_out);
+    g_decoder->setVolume(static_cast<uint8_t>(g_volume));
+    clearMetadata();
+    logger::info("Audio legacy: I2S bck=%d ws=%d dout=%d",
+                 static_cast<int>(cfg.pin_bck), static_cast<int>(cfg.pin_ws),
+                 static_cast<int>(cfg.pin_data_out));
+    return g_speakerReleased;
+}
+
+void endPlaybackLegacy() {
+    if (g_decoder != nullptr) {
+        g_decoder->stopSong();
+    }
+    restoreSpeaker();
+}
+
 void reinit() {
     // Config identica a quella del costruttore di Audio: 16 DMA buffer da
     // 512 frame, TX master, 16 bit stereo. Il sample rate viene poi impostato

@@ -221,7 +221,7 @@ std::string albumLabel(const std::string& name, int count) {
 }
 
 bool startTrack(const std::string& path, bool onSd) {
-    if (!audioout::beginPlayback()) {
+    if (!audioout::beginPlaybackLegacy()) {
         return false;
     }
     fs::FS& filesystem = onSd ? static_cast<fs::FS&>(SD) : static_cast<fs::FS&>(LittleFS);
@@ -458,7 +458,7 @@ void runPlayer(const std::vector<Track>& tracks, const std::string& albumName,
         index = (action < 0) ? (index - 1 + count) % count : (index + 1) % count;
     }
 
-    audioout::endPlayback();
+    audioout::endPlaybackLegacy();
     logger::info("Musica: fermata");
 }
 
