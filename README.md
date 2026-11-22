@@ -1,9 +1,16 @@
-# ORBIT OS v2.0.2
+# ORBIT OS v2.0.3
 
 Firmware modulare per **M5Stack Cardputer ADV** (ESP32-S3FN8, 8 MB flash, **senza PSRAM**), scritto in C++17 con PlatformIO/Arduino. Interfaccia a menu con icone, navigazione da tastiera e moduli attivabili/disattivabili a runtime.
 
 > **Avviso legale**
 > Il firmware include moduli radio e IR. Le funzioni offensive (BLE spam, deauth Wi-Fi, evil twin, evil portal, jammer IR) sono **disabilitate di default** (`ENABLE_OFFENSIVE=0`) e nella build pubblica non vengono nemmeno compilate. L'uso di trasmissioni radio non autorizzate, il disturbo di reti altrui e la raccolta non consensuale di credenziali sono reati in Italia e in molti altri Paesi. Usa questo progetto **solo su dispositivi e reti tuoi**, oppure in un ambiente RF isolato con autorizzazione scritta. L'autore non si assume alcuna responsabilità per usi impropri.
+
+## Novità 2.0.3
+
+- **Musica 1.21**: ripristinato il percorso di riproduzione della 1.21 (`beginPlaybackLegacy`/`endPlaybackLegacy`) e riallineate le librerie M5Unified 0.2.29 / M5GFX 0.2.36. Restano il remount SD, la Diagnostica e il fallback `/music` → `/Music` introdotti nella 2.0.2.
+- **Cover**: buffer RGB332 da 4 KB caricato dopo il decoder; con gli 8 KB RGB565 caricati prima, l'heap della 2.0.2 faceva fallire `connecttoFS` e il brano non partiva.
+- **I2S condiviso**: la Musica reinstalla I2S0 solo se Radio l'ha rilasciato e lo rilascia all'uscita. Risolte le sequenze Radio → Musica (prima muta) e Musica → Audio (il microfono non trovava piu' il bus).
+- **Nessuna funzione 2.0.2 rimossa**: IR, Radio, Audio, BLE HID, Utility, WiFi Lab, WPA-SEC, Sensori, WiFi+ ed ESP-NOW restano invariati.
 
 ## Novità 2.0.2
 

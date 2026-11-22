@@ -191,8 +191,10 @@ std::vector<Album> scanAlbums(std::vector<Track>& loose) {
     scanRoot(kFolder, onSd, albums, loose);
 
     // Fallback di sola lettura: se /data/Music non ha album ma la SD contiene
-    // una libreria gia' nella root, la si usa senza spostare nulla.
-    if (albums.empty() && onSd) {
+    // una libreria gia' nella root, la si usa senza spostare nulla. Non
+    // scatta se ci sono brani sciolti nella root standard: restano visibili
+    // come "Senza album" (comportamento 1.21).
+    if (albums.empty() && loose.empty() && onSd) {
         for (const char* candidate : {"/music", "/Music"}) {
             if (!storage::exists(candidate, true)) {
                 logger::info("Musica: fallback %s assente", candidate);
@@ -239,8 +241,10 @@ void drawVolume(int x, int y, int width) {
     }
 }
 
-// Cover caricata una sola volta per album: 64x64 RGB565 little-endian.
-// Su ESP32 (little-endian) i byte del file si leggono direttamente in uint16_t.
+// Cover caricata una sola volta per album. Il file e' 64x64 RGB565 (8 KB),
+// ma in RAM si tiene a 8 bit per pixel (RGB332, 4 KB): dopo il decoder
+// l'heap non ha piu' 8 KB contigui e connecttoFS fallirebbe. Il colore
+// viene riespanso a RGB565 al disegno.
 class Cover {
 public:
     Cover() = default;
@@ -250,33 +254,46 @@ public:
 
     void load(const std::string& albumPath, bool onSd) {
         reset();
-        pixels_ = new (std::nothrow) uint16_t[kCoverSide * kCoverSide];
-        if (pixels_ == nullptr) {
-            return;
-        }
         File file = storage::openRead(joinPath(albumPath, kCoverName), onSd);
         if (!file || static_cast<size_t>(file.size()) != kCoverBytes) {
             file.close();
-            reset();
             return;
         }
-        size_t total = 0;
-        while (total < kCoverBytes) {
-            const int got = file.read(reinterpret_cast<uint8_t*>(pixels_) + total,
-                                      kCoverBytes - total);
-            if (got <= 0) {
-                break;
+        pixels_ = new (std::nothrow) uint8_t[kCoverSide * kCoverSide];
+        if (pixels_ == nullptr) {
+            file.close();
+            return;
+        }
+        uint8_t row[kCoverSide * 2];
+        for (int y = 0; y < kCoverSide; ++y) {
+            size_t got = 0;
+            while (got < sizeof(row)) {
+                const int n = file.read(row + got, sizeof(row) - got);
+                if (n <= 0) {
+                    break;
+                }
+                got += static_cast<size_t>(n);
             }
-            total += static_cast<size_t>(got);
+            if (got != sizeof(row)) {
+                reset();
+                file.close();
+                return;
+            }
+            for (int x = 0; x < kCoverSide; ++x) {
+                const uint16_t px =
+                    static_cast<uint16_t>(row[x * 2] | (row[x * 2 + 1] << 8));
+                const uint8_t r5 = (px >> 11) & 0x1F;
+                const uint8_t g6 = (px >> 5) & 0x3F;
+                const uint8_t b5 = px & 0x1F;
+                pixels_[y * kCoverSide + x] =
+                    static_cast<uint8_t>((r5 << 3) | (g6 << 2) | (b5 >> 3));
+            }
         }
         file.close();
-        if (total != kCoverBytes) {
-            reset();
-        }
     }
 
     bool ready() const { return pixels_ != nullptr; }
-    const uint16_t* pixels() const { return pixels_; }
+    const uint8_t* pixels() const { return pixels_; }
 
 private:
     void reset() {
@@ -284,7 +301,7 @@ private:
         pixels_ = nullptr;
     }
 
-    uint16_t* pixels_ = nullptr;
+    uint8_t* pixels_ = nullptr;
 };
 
 void drawCover(const Cover& cover, int x, int y) {
@@ -292,10 +309,18 @@ void drawCover(const Cover& cover, int x, int y) {
     if (cover.ready()) {
         // drawPixel passa dalla conversione colore del display: pushImage
         // riswappa i 16 bit e inverte i canali RGB della cover.
-        const uint16_t* px = cover.pixels();
+        const uint8_t* px = cover.pixels();
         for (int row = 0; row < kCoverSide; ++row) {
             for (int col = 0; col < kCoverSide; ++col) {
-                d.drawPixel(x + col, y + row, px[row * kCoverSide + col]);
+                const uint8_t v = px[row * kCoverSide + col];
+                const uint16_t r = (v >> 5) & 0x07;
+                const uint16_t g = (v >> 2) & 0x07;
+                const uint16_t b = v & 0x03;
+                const uint16_t color = static_cast<uint16_t>(
+                    (((r << 2) | (r >> 1)) << 11) |
+                    (((g << 3) | g) << 5) |
+                    ((b << 3) | (b << 1) | (b >> 1)));
+                d.drawPixel(x + col, y + row, color);
             }
         }
         d.drawRect(x - 1, y - 1, kCoverSide + 2, kCoverSide + 2,
@@ -365,7 +390,7 @@ void runPlayer(const std::vector<Track>& tracks, const std::string& albumName,
     powertimer::Hold hold;  // l'ascolto non deve far scattare lo spegnimento
 
     Cover cover;  // una lettura di cover.cvr per album, non per frame
-    cover.load(albumPath, onSd);
+    bool coverTried = false;
 
     int index = startIndex;
     navigation::waitRelease();
@@ -379,6 +404,13 @@ void runPlayer(const std::vector<Track>& tracks, const std::string& albumName,
                                    "Controlla che sia un MP3 valido."},
                         "Lettore");
             break;
+        }
+
+        // La cover si carica DOPO il decoder: con 8 KB in meno l'heap non
+        // riuscirebbe ad allocare i buffer MP3 e connecttoFS fallirebbe.
+        if (!coverTried) {
+            coverTried = true;
+            cover.load(albumPath, onSd);
         }
 
         bool paused = false;

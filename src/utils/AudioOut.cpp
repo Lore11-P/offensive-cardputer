@@ -16,6 +16,10 @@ namespace {
 Audio* g_decoder = nullptr;
 int g_volume = 12;  // 0..21, come la scala del decoder
 bool g_speakerReleased = false;
+// true se I2S_NUM_0 e' installato dal decoder. endPlayback() della Radio lo
+// rilascia: senza questo flag la Musica (percorso legacy) scriverebbe su un
+// driver assente e resterebbe muta.
+bool g_i2sOwned = false;
 
 // --- Metadati ICY ------------------------------------------------------------
 // Limiti doc: 255 byte stazione, 511 byte titolo (UTF-8, terminatore escluso).
@@ -314,6 +318,9 @@ bool decoderReady() {
         if (g_decoder == nullptr) {
             logger::error("Audio: decoder non allocato (heap %u)",
                           static_cast<unsigned>(ESP.getFreeHeap()));
+        } else {
+            // Il costruttore di Audio installa I2S_NUM_0.
+            g_i2sOwned = true;
         }
     }
     return g_decoder != nullptr;
@@ -357,6 +364,10 @@ bool beginPlayback() {
     // lo ha fermato o riconfigurato, qui il driver viene ripristinato prima
     // di aprire lo stream.
     reinit();
+    if (!g_i2sOwned) {
+        restoreSpeaker();
+        return false;
+    }
     // I pin non sono cablati a mano: si leggono dalla board.
     const auto cfg = M5Cardputer.Speaker.config();
     const bool pinsOk = audio.setPinout(cfg.pin_bck, cfg.pin_ws, cfg.pin_data_out);
@@ -364,6 +375,7 @@ bool beginPlayback() {
         // Non lasciare I2S0 installato ne' lo speaker chiuso se la
         // configurazione dei pin fallisce.
         i2s_driver_uninstall(I2S_NUM_0);
+        g_i2sOwned = false;
         restoreSpeaker();
         logger::warn("Audio: setPinout fallito, I2S0 rilasciato");
         return false;
@@ -375,7 +387,8 @@ bool beginPlayback() {
     return g_speakerReleased && pinsOk;
 }
 
-// Percorso 1.21: niente Mic.end(), niente reinit I2S0, niente deinit.
+// Percorso 1.21: niente Mic.end() e niente reinit I2S0 nel caso normale.
+// Se Radio ha rilasciato I2S0 (endPlayback), viene reinstallato solo allora.
 // Ripristina il comportamento del lettore Musica senza toccare Radio/Audio.
 bool beginPlaybackLegacy() {
     releaseSpeaker();
@@ -383,8 +396,21 @@ bool beginPlaybackLegacy() {
         restoreSpeaker();
         return false;
     }
+    if (!g_i2sOwned) {
+        reinit();
+        if (!g_i2sOwned) {
+            restoreSpeaker();
+            return false;
+        }
+    }
     const auto cfg = M5Cardputer.Speaker.config();
-    g_decoder->setPinout(cfg.pin_bck, cfg.pin_ws, cfg.pin_data_out);
+    if (!g_decoder->setPinout(cfg.pin_bck, cfg.pin_ws, cfg.pin_data_out)) {
+        i2s_driver_uninstall(I2S_NUM_0);
+        g_i2sOwned = false;
+        restoreSpeaker();
+        logger::warn("Audio legacy: setPinout fallito, I2S0 rilasciato");
+        return false;
+    }
     g_decoder->setVolume(static_cast<uint8_t>(g_volume));
     clearMetadata();
     logger::info("Audio legacy: I2S bck=%d ws=%d dout=%d",
@@ -394,8 +420,14 @@ bool beginPlaybackLegacy() {
 }
 
 void endPlaybackLegacy() {
-    if (g_decoder != nullptr) {
+    if (g_decoder != nullptr && g_i2sOwned) {
         g_decoder->stopSong();
+    }
+    // Rilascia I2S0 a fine ascolto: senza questo il microfono del modulo
+    // Audio (stesso I2S_NUM_0) non riuscirebbe ad aprirsi.
+    if (g_i2sOwned) {
+        i2s_driver_uninstall(I2S_NUM_0);
+        g_i2sOwned = false;
     }
     restoreSpeaker();
 }
@@ -404,7 +436,10 @@ void reinit() {
     // Config identica a quella del costruttore di Audio: 16 DMA buffer da
     // 512 frame, TX master, 16 bit stereo. Il sample rate viene poi impostato
     // dal decoder quando conosce lo stream.
-    i2s_driver_uninstall(I2S_NUM_0);
+    if (g_i2sOwned) {
+        i2s_driver_uninstall(I2S_NUM_0);
+        g_i2sOwned = false;
+    }
     i2s_config_t cfg = {};
     cfg.mode = static_cast<i2s_mode_t>(I2S_MODE_MASTER | I2S_MODE_TX);
     cfg.sample_rate = 16000;
@@ -419,6 +454,7 @@ void reinit() {
     cfg.tx_desc_auto_clear = true;
     cfg.fixed_mclk = I2S_PIN_NO_CHANGE;
     const esp_err_t err = i2s_driver_install(I2S_NUM_0, &cfg, 0, nullptr);
+    g_i2sOwned = (err == ESP_OK);
     if (err != ESP_OK) {
         logger::warn("Audio: i2s_driver_install su I2S0 fallita (%d)",
                      static_cast<int>(err));
@@ -428,14 +464,17 @@ void reinit() {
 void endPlayback() {
     // Prima si ferma la sorgente, poi si chiude il WAV: nessun altro PCM
     // arriva nel ring mentre lo si svuota e si riscrive l'header.
-    if (g_decoder != nullptr) {
+    if (g_decoder != nullptr && g_i2sOwned) {
         g_decoder->stopSong();
     }
     if (g_recording || g_file) {
         stopRecording();
     }
     // Libera I2S0: il microfono (M5.Mic) e altri moduli possono riusarlo.
-    i2s_driver_uninstall(I2S_NUM_0);
+    if (g_i2sOwned) {
+        i2s_driver_uninstall(I2S_NUM_0);
+        g_i2sOwned = false;
+    }
     restoreSpeaker();
 }
 

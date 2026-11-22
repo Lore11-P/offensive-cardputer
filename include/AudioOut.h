@@ -34,12 +34,13 @@ void setVolume(int value);
 // false se il bus non e' pronto.
 bool beginPlayback();
 
-// Percorso 1.21 per il solo lettore Musica: non tocca il microfono, non
-// reinstalla I2S0 e non cambia la configurazione del decoder. Serve a
-// ripristinare il comportamento del player senza alterare Radio/Audio.
+// Percorso 1.21 per il solo lettore Musica: non tocca il microfono e non
+// cambia la configurazione del decoder nel caso normale. Se Radio ha
+// rilasciato I2S0, lo reinstalla; all'uscita lo rilascia per Audio/microfono.
 bool beginPlaybackLegacy();
 
-// Ferma la traccia e restituisce lo speaker alla UI, senza deinit I2S0.
+// Ferma la traccia, rilascia I2S0 (per Audio/microfono) e restituisce lo
+// speaker alla UI.
 void endPlaybackLegacy();
 
 // Reinstalla il driver I2S0 del decoder (config identica a quella della
