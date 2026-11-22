@@ -120,8 +120,10 @@ Nuovo `include/NetGuard.h` + `src/utils/NetGuard.cpp`:
 - **Deauth target**: target protetto → bloccato;
 - **Deauth Flood**: reti protette escluse dal flood; la UI mostra
   `WL: N`; se restano zero target, non parte nulla;
-- **Evil Twin / Evil Portal** (`runFakeAccessPoint`): SSID/BSSID protetto →
-  bloccato.
+- **Evil Twin / Evil Portal**: controllo esplicito in `runEvilTwin()` e
+  `runEvilPortal()` prima di `legalWarning`, più il gate centrale in
+  `runFakeAccessPoint()` (difesa per futuri chiamanti): SSID/BSSID protetto →
+  messaggio "Rete in whitelist" e nessun AP/portale avviato.
 
 Policy quando il file manca: **fail-closed** in tutti i punti (messaggio che
 rimanda a `WiFi Lab > Whitelist`). Non esiste più il percorso "attacco senza
@@ -134,8 +136,9 @@ whitelist".
 - tabella SSID del collector live da 8 a **48 voci** (`kMaxLiveSsids`), con
   sostituzione **LRU** (`seen` aggiornato ad ogni beacon/probe response). Non
   tocca il ring REC dello sniffer.
-- Un **PMKID senza ESSID non viene più scritto**: viene contato in
-  `skippedNoEssid`, come già avveniva per gli M2.
+- Un **PMKID senza ESSID non viene più scritto**, né dal collector live né dal
+  convertitore offline: viene contato in `skippedNoEssid`, come già avveniva
+  per gli M2. La conversione offline mostra già "Senza SSID: N" in UI.
 - `WifiMenu` mostra a fine cattura quanti hash sono stati esclusi senza SSID
   (oltre al log seriale già presente).
 
@@ -179,12 +182,12 @@ Comando: `python -m platformio run -e cardputer-adv-offensive` (timeout
 
 | Voce | Valore |
 |---|---:|
-| `firmware.bin` | **2.708.784 B** |
-| Flash `text+data` (PlatformIO) | 2.708.425 B (96,1%) |
+| `firmware.bin` | **2.709.184 B** |
+| Flash `text+data` (PlatformIO) | 2.708.813 B (96,1%) |
 | Slot app OTA (`0x2B0000`) | 2.818.048 B |
-| Libero nello slot | **109.264 B** (106,7 KiB) |
+| Libero nello slot | **108.864 B** (106,3 KiB) |
 | Budget `check_size.ps1` | 2.751.776 B |
-| Margine al budget | **42.992 B** |
+| Margine al budget | **42.592 B** |
 | RAM statica `.data+.bss` | **147.416 B** (45,0%) |
 
 Rispetto ai ~145 KiB liberi indicati dal supervisore, il fix OTA + manifest +
@@ -198,8 +201,8 @@ heap, allocata una volta.
 
 ### 4.1 Eseguiti
 
-- Build `cardputer-adv-offensive`: `SUCCESS` (2.708.784 B).
-- `tools/check_size.ps1 -SkipBuild`: budget rispettato, 109.264 B liberi.
+- Build `cardputer-adv-offensive`: `SUCCESS` (2.709.184 B).
+- `tools/check_size.ps1 -SkipBuild`: budget rispettato, 108.864 B liberi.
 - `python tools/sign_ota.py selftest`: OK (firma e rifiuto di un digest
   diverso).
 - Firma del `firmware.bin` appena compilato + `verify` con la chiave pubblica
@@ -207,7 +210,6 @@ heap, allocata una volta.
 - Firma con un bit alterato: **FIRMA NON VALIDA** (exit 1).
 - `manifest` genera `version/size/sha256` coerenti con il binario.
 - Compilazione senza errori dei file modificati; nessun errore di link.
-
 ### 4.2 Da eseguire sul dispositivo (non eseguiti)
 
 1. OTA con manifest/firma validi: aggiorna e riavvia; con un byte alterato:
@@ -223,6 +225,8 @@ heap, allocata una volta.
    handshake; i PMKID senza ESSID sono assenti e contati in UI.
 8. Karma senza `/wifiext/karma.txt`: non parte; con file: solo gli SSID
    elencati.
+9. Convertire offline un pcap con PMKID/M1 ma senza beacon dell'AP: nessuna
+   riga PMKID scritta e contatore "Senza SSID" incrementato.
 
 ---
 
@@ -253,6 +257,6 @@ richieste in volo. La whitelist è una sola e copre deauth target, flood, evil
 twin/portal. Il collector live scrive solo hc22000 verificabili, e Karma non
 impersona più reti senza una lista esplicita.
 
-Il firmware cresce a 2.708.784 B (96,1% dello slot, 109.264 B liberi): entra
-nel budget con 42.992 B di margine. Restano da fare i test su hardware e il
+Il firmware cresce a 2.709.184 B (96,1% dello slot, 108.864 B liberi): entra
+nel budget con 42.592 B di margine. Restano da fare i test su hardware e il
 publishing del primo `firmware.json` firmato.
