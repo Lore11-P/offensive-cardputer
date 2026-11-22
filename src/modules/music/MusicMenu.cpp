@@ -2,9 +2,11 @@
 //  Lettore MP3 - riproduzione di file locali dalla microSD
 //
 //  I brani si leggono da /data/Music/<Album> (mount SD "/sd" ->
-//  SD.open("/data/Music/...")); i file audio sciolti nella root compaiono
-//  nella voce "Senza album". Se la SD non e' montata si usa /data/Music su
-//  LittleFS, utile per qualche file di prova (la partizione interna e' piccola).
+//  SD.open("/data/Music/...")); se /data/Music non ha album si prova in
+//  sola lettura /music e /Music sulla SD. I file audio sciolti nella root
+//  compaiono nella voce "Senza album". Se la SD non e' montata si usa
+//  /data/Music su LittleFS, utile per qualche file di prova (la partizione
+//  interna e' piccola).
 //
 //  La cover opzionale di un album e' <Album>/cover.cvr: 64x64 pixel RGB565
 //  little-endian, 8192 byte esatti (4096 pixel x 2 byte).
@@ -23,6 +25,7 @@
 #include <cctype>
 #include <new>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "AudioOut.h"
@@ -50,9 +53,12 @@ constexpr size_t kCoverBytes = static_cast<size_t>(kCoverSide) * kCoverSide * 2;
 constexpr const char* kFolder = "/data/Music";
 constexpr const char* kCoverName = "cover.cvr";
 
+// Radice effettivamente in uso: /data/Music oppure un fallback di sola
+// lettura sulla SD (/music, /Music) quando la cartella standard e' vuota.
+std::string g_root = kFolder;
+
 struct Track {
-    std::string path;  // "/data/Music/Album/brano.mp3"
-    std::string name;  // "brano.mp3"
+    std::string name;  // "brano.mp3"; il percorso si ricava dall'album
     bool onSd = false;
 };
 
@@ -118,7 +124,6 @@ std::vector<Track> scanTracks(const std::string& folder, bool onSd) {
             continue;
         }
         Track track;
-        track.path = joinPath(folder, entry.name);
         track.name = entry.name;
         track.onSd = onSd;
         tracks.push_back(track);
@@ -142,17 +147,21 @@ int countTracks(const std::string& folder, bool onSd) {
     return count;
 }
 
-// Sottocartelle di /data/Music = album. I file audio nella root finiscono in
+// Sottocartelle di `root` = album. I file audio nella root finiscono in
 // `loose` e vengono mostrati come album virtuale "Senza album".
-std::vector<Album> scanAlbums(std::vector<Track>& loose) {
-    const bool onSd = storage::hasSD();
-    std::vector<Album> albums;
-    for (const auto& entry : storage::listEntries(kFolder, onSd)) {
+void scanRoot(const std::string& root, bool onSd, std::vector<Album>& albums,
+              std::vector<Track>& loose) {
+    const std::vector<storage::Entry> entries = storage::listEntries(root, onSd);
+    if (entries.empty()) {
+        logger::info("Musica: %s %s", root.c_str(),
+                     storage::exists(root, onSd) ? "vuota (0 entry)" : "non trovata");
+        return;
+    }
+    for (const auto& entry : entries) {
         if (!entry.isDir) {
             if (isAudioFile(entry.name) &&
                 static_cast<int>(loose.size()) < kMaxTracks) {
                 Track track;
-                track.path = joinPath(kFolder, entry.name);
                 track.name = entry.name;
                 track.onSd = onSd;
                 loose.push_back(track);
@@ -163,11 +172,44 @@ std::vector<Album> scanAlbums(std::vector<Track>& loose) {
             continue;
         }
         Album album;
-        album.path = joinPath(kFolder, entry.name);
+        album.path = joinPath(root, entry.name);
         album.name = entry.name;
         album.onSd = onSd;
         album.count = countTracks(album.path, onSd);
         albums.push_back(album);
+    }
+    if (albums.empty()) {
+        logger::info("Musica: %s nessun album, %u brani sciolti",
+                     root.c_str(), static_cast<unsigned>(loose.size()));
+    }
+}
+
+std::vector<Album> scanAlbums(std::vector<Track>& loose) {
+    const bool onSd = storage::hasSD();
+    g_root = kFolder;
+    std::vector<Album> albums;
+    scanRoot(kFolder, onSd, albums, loose);
+
+    // Fallback di sola lettura: se /data/Music non ha album ma la SD contiene
+    // una libreria gia' nella root, la si usa senza spostare nulla.
+    if (albums.empty() && onSd) {
+        for (const char* candidate : {"/music", "/Music"}) {
+            if (!storage::exists(candidate, true)) {
+                logger::info("Musica: fallback %s assente", candidate);
+                continue;
+            }
+            std::vector<Album> alt;
+            std::vector<Track> altLoose;
+            scanRoot(candidate, true, alt, altLoose);
+            if (!alt.empty()) {
+                logger::info("Musica: uso fallback %s (%u album)", candidate,
+                             static_cast<unsigned>(alt.size()));
+                g_root = candidate;
+                albums = std::move(alt);
+                loose = std::move(altLoose);
+                break;
+            }
+        }
     }
     return albums;
 }
@@ -178,12 +220,12 @@ std::string albumLabel(const std::string& name, int count) {
     return fit(name, nameWidth, 2) + suffix;
 }
 
-bool startTrack(const Track& track) {
+bool startTrack(const std::string& path, bool onSd) {
     if (!audioout::beginPlaybackLegacy()) {
         return false;
     }
-    fs::FS& filesystem = track.onSd ? static_cast<fs::FS&>(SD) : static_cast<fs::FS&>(LittleFS);
-    return audioout::decoder().connecttoFS(filesystem, track.path.c_str());
+    fs::FS& filesystem = onSd ? static_cast<fs::FS&>(SD) : static_cast<fs::FS&>(LittleFS);
+    return audioout::decoder().connecttoFS(filesystem, path.c_str());
 }
 
 void drawVolume(int x, int y, int width) {
@@ -330,9 +372,10 @@ void runPlayer(const std::vector<Track>& tracks, const std::string& albumName,
 
     for (;;) {
         const Track& track = tracks[index];
-        logger::info("Musica: %s", track.path.c_str());
-        if (!startTrack(track)) {
-            ui::message("Musica", {"!Impossibile aprire il file.", track.path,
+        const std::string path = joinPath(albumPath, track.name);
+        logger::info("Musica: %s", path.c_str());
+        if (!startTrack(path, onSd)) {
+            ui::message("Musica", {"!Impossibile aprire il file.", path,
                                    "Controlla che sia un MP3 valido."},
                         "Lettore");
             break;
@@ -393,7 +436,7 @@ void runPlayer(const std::vector<Track>& tracks, const std::string& albumName,
                 action = 1;  // brano finito: passa al successivo
                 break;
             } else if (!started && !paused && millis() - startedAt > 6000) {
-                ui::message("Musica", {"!Formato non riproducibile.", track.path},
+                ui::message("Musica", {"!Formato non riproducibile.", path},
                             "Lettore");
                 action = 2;
                 break;
@@ -444,16 +487,104 @@ void openAlbum(const Album& album) {
     openTracks(album.name, album.path, album.onSd, tracks);
 }
 
+// Schermata di mount: R (o ENTER) riprova, ESC prosegue in sola lettura.
+// True se il remount e' riuscito e la libreria va riscansionata sulla SD.
+bool promptSdRetry() {
+    navigation::waitRelease();
+    bool failed = false;
+    for (;;) {
+        const std::vector<std::string> lines = {
+            failed ? "!Mount non riuscito." : "!microSD non montata.",
+            "Inserisci la card e premi R",
+            "per riprovare il mount.",
+            "ESC = cerca in LittleFS."};
+        ui::drawScreen("Musica", "Libreria", lines, "R=rimonta  ESC=continua",
+                       display::C(display::T_err));
+        for (;;) {
+            const navigation::EventData ev = navigation::poll();
+            if (ev.type == navigation::Event::Back) {
+                navigation::waitRelease();
+                return false;
+            }
+            if (ev.type == navigation::Event::Select ||
+                (ev.type == navigation::Event::Text &&
+                 (ev.ch == 'r' || ev.ch == 'R'))) {
+                navigation::waitRelease();
+                logger::info("Musica: remount SD richiesto");
+                if (storage::remountSD()) {
+                    return true;
+                }
+                failed = true;
+                break;  // ridisegna con l'esito del mount
+            }
+            delay(25);
+        }
+    }
+}
+
+// Diagnostica: stato SD, backend, radice e conteggi. Il log contiene tutti
+// gli album; a schermo entrano le prime voci (ui::drawScreen ~8 righe).
+void showDiagnostics(const std::vector<Album>& albums,
+                     const std::vector<Track>& loose) {
+    const bool onSd = storage::hasSD();
+    const char* backend = onSd ? "SD" : "LittleFS";
+    int totalTracks = static_cast<int>(loose.size());
+    for (const auto& album : albums) {
+        totalTracks += album.count;
+    }
+
+    logger::info("Musica diag: SD=%s backend=%s root=%s album=%u brani=%d",
+                 onSd ? "SI" : "NO", backend, g_root.c_str(),
+                 static_cast<unsigned>(albums.size()), totalTracks);
+    for (const auto& album : albums) {
+        logger::info("Musica diag: %s -> %d brani", album.path.c_str(), album.count);
+    }
+    if (!loose.empty()) {
+        logger::info("Musica diag: Senza album -> %u brani",
+                     static_cast<unsigned>(loose.size()));
+    }
+
+    std::vector<std::string> lines = {
+        std::string("SD: ") + (onSd ? "SI" : "NO"),
+        std::string("Backend: ") + backend,
+        "Root: " + g_root,
+        "Album: " + std::to_string(albums.size()) + "  brani: " +
+            std::to_string(totalTracks)};
+    size_t shown = 0;
+    for (const auto& album : albums) {
+        if (lines.size() >= 7) {
+            break;
+        }
+        lines.push_back("> " + fit(album.name, 150, 0) + ": " +
+                        std::to_string(album.count));
+        ++shown;
+    }
+    if (shown < albums.size()) {
+        lines.push_back("... +" + std::to_string(albums.size() - shown) + " album");
+    } else if (!loose.empty()) {
+        lines.push_back("> Senza album: " + std::to_string(loose.size()));
+    }
+    ui::message("Musica", lines, "Diagnostica");
+}
+
 }  // namespace
 
 void runMenu() {
+    // La SD e' montata solo all'avvio: se manca, offre un remount esplicito
+    // (card inserita dopo il boot). ESC prosegue sulla sola LittleFS.
+    if (!storage::hasSD() && !promptSdRetry()) {
+        logger::info("Musica: SD assente, cerco in LittleFS");
+    }
+
     std::vector<Track> loose;
     const std::vector<Album> albums = scanAlbums(loose);
 
     if (albums.empty() && loose.empty()) {
-        ui::message("Musica", {"!Nessun file in /data/Music.",
-                               "Copia i brani sulla microSD",
-                               "in /data/Music/<Album>/."},
+        logger::info("Musica: libreria vuota in %s", g_root.c_str());
+        ui::message("Musica", {"!Nessun brano in " + g_root,
+                               storage::hasSD() ? "microSD montata"
+                                                : "microSD NON montata",
+                               "Crea " + g_root + "/<Album>/"},
                     "Musica");
         return;
     }
@@ -469,9 +600,10 @@ void runMenu() {
     if (!loose.empty()) {
         menu.addItem(albumLabel("Senza album", static_cast<int>(loose.size())), "music",
                      [&loose] {
-                         openTracks("Senza album", kFolder, storage::hasSD(), loose);
+                         openTracks("Senza album", g_root, storage::hasSD(), loose);
                      });
     }
+    menu.addItem("Diagnostica", "sd", [&albums, &loose] { showDiagnostics(albums, loose); });
     menu.setHint("ENTER=album  ESC=indietro");
     menu.run(true);
 }
