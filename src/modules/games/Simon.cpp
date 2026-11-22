@@ -8,6 +8,7 @@
 
 #include "Display.h"
 #include "GamesUi.h"
+#include "Logger.h"
 #include "ModuleFlags.h"
 #include "Navigation.h"
 #include "Scores.h"
@@ -122,6 +123,17 @@ void drawGameOver(int score, uint32_t best) {
     display::textCentered(y + 35, "INVIO=riprova  `=esci", display::kMuted, 0);
 }
 
+// Un solo salvataggio a fine partita o su ESC, mai a ogni livello.
+void saveScore(int completed) {
+    const uint32_t points = static_cast<uint32_t>(std::max(0, completed));
+    if (points == 0) {
+        return;
+    }
+    if (!scores::submit("simon", points)) {
+        logger::warn("Simon: record non salvato (%u)", static_cast<unsigned>(points));
+    }
+}
+
 }  // namespace
 
 void runSimon() {
@@ -136,6 +148,7 @@ void runSimon() {
 
         while (!dead) {
             if (!showSequence(sequence, best)) {
+                saveScore(completed);
                 return;
             }
 
@@ -147,6 +160,7 @@ void runSimon() {
                 navigation::update();
                 const navigation::EventData ev = navigation::poll();
                 if (ev.type == navigation::Event::Back) {
+                    saveScore(completed);
                     return;
                 }
                 int pad = -1;
@@ -177,16 +191,16 @@ void runSimon() {
             }
 
             if (dead) {
-                scores::submit("simon", static_cast<uint32_t>(std::max(0, completed)));
+                saveScore(completed);
                 best = std::max(best, static_cast<uint32_t>(std::max(0, completed)));
                 break;
             }
 
             completed = static_cast<int>(sequence.size());
-            scores::submit("simon", static_cast<uint32_t>(completed));
             best = std::max(best, static_cast<uint32_t>(completed));
             sequence.push_back(static_cast<uint8_t>(esp_random() % 4));
             if (!pauseWithBackCheck(320)) {
+                saveScore(completed);
                 return;
             }
         }

@@ -200,6 +200,9 @@ void runOrbital() {
             navigation::update();
             const navigation::EventData ev = navigation::poll();
             if (ev.type == navigation::Event::Back) {
+                if (score > 0) {
+                    scores::submit("orbital", score);
+                }
                 return;
             }
 

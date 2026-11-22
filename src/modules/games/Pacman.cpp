@@ -7,6 +7,7 @@
 #include <cstring>
 
 #include "Display.h"
+#include "Logger.h"
 #include "ModuleFlags.h"
 #include "Navigation.h"
 #include "Scores.h"
@@ -324,7 +325,10 @@ void collide(uint32_t now) {
         beep(180.0f, 320);
         if (g_lives <= 0) {
             g_gameOver = true;
-            scores::submit("pacman", static_cast<uint32_t>(g_score));
+            if (!scores::submit("pacman", static_cast<uint32_t>(g_score))) {
+                logger::warn("Pacman: record non salvato (%u)",
+                             static_cast<unsigned>(g_score));
+            }
             if (static_cast<uint32_t>(g_score) > g_best) {
                 g_best = static_cast<uint32_t>(g_score);
             }
@@ -518,8 +522,10 @@ void runPacman() {
             navigation::update();
             const navigation::EventData ev = navigation::poll();
             if (ev.type == navigation::Event::Back) {
-                if (g_score > 0) {
-                    scores::submit("pacman", static_cast<uint32_t>(g_score));
+                if (g_score > 0 &&
+                    !scores::submit("pacman", static_cast<uint32_t>(g_score))) {
+                    logger::warn("Pacman: record non salvato (%u)",
+                                 static_cast<unsigned>(g_score));
                 }
                 return;
             }
@@ -546,7 +552,7 @@ void runPacman() {
 
             if (now >= g_pauseUntil) {
                 if (g_pelletsLeft == 0) {
-                    scores::submit("pacman", static_cast<uint32_t>(g_score));
+                    // Il record si salva a morte o su ESC, non a ogni livello.
                     if (static_cast<uint32_t>(g_score) > g_best) {
                         g_best = static_cast<uint32_t>(g_score);
                     }
