@@ -97,6 +97,22 @@ La matematica di griglia e' stata estratta in `include/GridMath.h`
 (`gridmath::move`) e `MenuManager::moveGrid()` ora usa quella, cosi' il test
 copre la stessa implementazione del firmware.
 
+### 1.6 Pulizia — fallback icone morto
+
+`src/core/Display.cpp`:
+
+- Rimossi `arrow()` (12 righe) e `drawFallbackIcon()` (314 righe), 330 righe
+  in totale.
+- `display::drawIcon()` ora usa il fallback minimo: riquadro arrotondato +
+  iniziale dell'id (o `?`), lo stesso blocco che era in fondo a
+  `drawFallbackIcon`. Sono ~40 B di codice.
+- Il fallback era raggiungibile solo da `SettingsMenu::runModules()`, i cui
+  id (`ble chat wifi radar tv music ir games sd usb capture`) sono **tutti**
+  coperti da `drawOrbitIcon`, `radar` compreso (`OrbitIcons.cpp:167`).
+  Quindi la rimozione non cambia nessuna icona visibile: il ramo era gia'
+  irraggiungibile, non solo per `radar`.
+- Nessun'altra funzione toccata.
+
 ---
 
 ## 2. File toccati
@@ -105,7 +121,7 @@ copre la stessa implementazione del firmware.
 |---|---|
 | `src/core/MenuManager.cpp` | M1, S1, `moveGrid` su `GridMath.h` |
 | `src/core/Navigation.cpp` | S2, usa `NavCore.h` |
-| `src/core/Display.cpp` | M2, ramo VBUS |
+| `src/core/Display.cpp` | M2 ramo VBUS; rimozione fallback icone (330 righe) |
 | `include/Display.h` | commento `chargingLikely` |
 | `src/core/PowerTimer.cpp` | M2, stato iniziale schermata sospensione |
 | `include/NavCore.h` | nuovo, logica tastiera pura |
@@ -122,16 +138,21 @@ altre aree.
 Env `cardputer-adv-offensive`, timeout 900.000 ms.
 
 - Build completa (cache vuota): `SUCCESS`, 576,8 s.
-- Build incrementale dopo l'ultima modifica: `SUCCESS`, 83,0 s.
+- Build dopo il fix core (`4d78087`): `SUCCESS`, 576,8 s complessivi,
+  incrementale 83,0 s.
+- Build dopo la rimozione del fallback: `SUCCESS`, 44,8 s.
 - Baseline: stessi numeri di `FIX_MUSIC.md` sullo stesso HEAD `ec5a601`
   (firmware 2.697.712 B, flash 2.697.341 B, RAM 147.392 B).
 
-| Voce | Prima | Dopo | Delta |
-|---|---:|---:|---:|
-| `firmware.bin` | 2.697.712 B | **2.698.384 B** | **+672 B (+0,02%)** |
-| Flash `text+data` | 2.697.341 B (95,7%) | **2.698.017 B (95,74%)** | **+676 B** |
-| RAM statica `.data+.bss` | 147.392 B (45,0%) | **147.392 B (45,0%)** | **0 B** |
-| Libero nello slot app 2.0 | 120.707 B | **120.031 B** | −676 B |
+| Voce | Base `ec5a601` | Dopo fix core | Dopo rimozione fallback | Δ ultimo |
+|---|---:|---:|---:|---:|
+| `firmware.bin` | 2.697.712 B | 2.698.384 B | **2.690.160 B** | **−8.224 B** |
+| Flash `text+data` | 2.697.341 B (95,7%) | 2.698.017 B (95,74%) | **2.689.793 B (95,45%)** | **−8.224 B** |
+| RAM statica `.data+.bss` | 147.392 B (45,0%) | 147.392 B (45,0%) | **147.392 B (45,0%)** | **0 B** |
+| Libero nello slot app 2.0 | 120.707 B | 120.031 B | **128.255 B** | **+8.224 B** |
+
+Saldo rispetto a `ec5a601`: −7.548 B di flash e −7.552 B di `firmware.bin`.
+La riserva di 64 KiB (65.536 B) lascia **62.719 B** di margine oltre la soglia.
 
 ---
 

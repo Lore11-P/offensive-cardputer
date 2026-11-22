@@ -109,3 +109,20 @@ Dettaglio completo: `docs/integration/FIX_IR.md`; diagnosi: `DIAG_IR.md`.
 - **Test**: build e verifica statica eseguite; i test su dispositivo sono
   elencati in `FIX_IR.md` §5.2 e **non** sono stati eseguiti (nessun hardware).
   Nessun benchmark hardware inventato: i tempi restano stime del DIAG.
+
+## 7. Core: fallback icone morto rimosso (branch `review/fix-core`)
+
+Dettaglio completo: `docs/integration/FIX_CORE.md`.
+
+- Rimossi `drawFallbackIcon()` e `arrow()` in `src/core/Display.cpp` (330
+  righe). Erano raggiungibili solo da `display::drawIcon()`, ma tutti gli id
+  del suo unico chiamante (`SettingsMenu::runModules()`) sono coperti da
+  `drawOrbitIcon`: `ble chat wifi radar tv music ir games sd usb capture`.
+  `radar` compreso (`OrbitIcons.cpp:167`), quindi nessuna icona cambia.
+- `drawIcon()` mantiene il fallback minimo gia' esistente (riquadro +
+  iniziale/`?`, ~40 B) per eventuali id futuri.
+- **Build** (`python -m platformio run -e cardputer-adv-offensive`):
+  `SUCCESS`, 44,8 s. `firmware.bin` 2.698.384 -> **2.690.160 B (−8.224 B)**;
+  flash 2.698.017 -> **2.689.793 B (95,45%, −8.224 B)**; RAM statica
+  147.392 B invariata. Liberi nello slot app 2.0: 120.031 -> **128.255 B**.
+- **Test host**: 6/6 invariati (`native:test_core`); nessun test su hardware.
