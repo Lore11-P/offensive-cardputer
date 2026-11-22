@@ -1083,15 +1083,20 @@ bool convertToHc22000(const std::string& pcapPath, const std::string& outPath,
         uint8_t pmkid[16];
         if (findPmkid(info, pmkid)) {
           const SsidEntry* ssid = ssids.find(info.bssid);
-          const std::string line =
-              formatPmkid(pmkid, info.bssid, info.sta, ssid ? ssid->text : nullptr,
-                          ssid ? ssid->len : 0);
-          const LineWriter::Result res = writer.write(line);
-          if (res == LineWriter::Result::Written) {
-            ++result.pmkid;
-          } else if (res == LineWriter::Result::Error) {
-            aborted = true;
-            break;
+          if (ssid == nullptr || ssid->len == 0) {
+            // Senza ESSID la riga non e' verificabile da hashcat: non
+            // scriverla, come nel collector live.
+            ++result.skippedNoEssid;
+          } else {
+            const std::string line =
+                formatPmkid(pmkid, info.bssid, info.sta, ssid->text, ssid->len);
+            const LineWriter::Result res = writer.write(line);
+            if (res == LineWriter::Result::Written) {
+              ++result.pmkid;
+            } else if (res == LineWriter::Result::Error) {
+              aborted = true;
+              break;
+            }
           }
         }
 

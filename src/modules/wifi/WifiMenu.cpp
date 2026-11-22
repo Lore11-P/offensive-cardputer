@@ -1957,6 +1957,18 @@ bool networkProtected(const Network& network) {
                                  ssidLength(network.ssid));
 }
 
+// Gate comune per Evil Twin/Evil Portal: niente avvio se la rete e' protetta.
+bool blockIfWhitelisted(const Network& network, const char* title) {
+    if (!whitelistReadyOrBlock("WiFi")) {
+        return true;
+    }
+    if (!networkProtected(network)) {
+        return false;
+    }
+    ui::message(title, {"Rete in whitelist.", "Attacco bloccato."}, "WiFi");
+    return true;
+}
+
 void runDeauth() {
     if (!collectNetworks(g_networks) || g_networks.empty()) {
         return;
@@ -2516,12 +2528,7 @@ void drawAccessPoint(const std::string& title, const Network& target,
 }
 
 void runFakeAccessPoint(const Network& target, bool portal) {
-    if (!whitelistReadyOrBlock("WiFi")) {
-        return;
-    }
-    if (networkProtected(target)) {
-        ui::message(portal ? "Evil Portal" : "Evil Twin",
-                    {"Rete in whitelist.", "Attacco bloccato."}, "WiFi");
+    if (blockIfWhitelisted(target, portal ? "Evil Portal" : "Evil Twin")) {
         return;
     }
 
@@ -2618,6 +2625,10 @@ void runEvilTwin() {
     if (choice < 0) {
         return;
     }
+    const Network target = g_networks[choice];
+    if (blockIfWhitelisted(target, "Evil Twin")) {
+        return;
+    }
     if (!ui::legalWarning("Evil Twin",
                           {"Crea un access point con lo stesso SSID",
                            "della rete selezionata.",
@@ -2628,7 +2639,7 @@ void runEvilTwin() {
     credLock();
     g_credentials.clear();
     credUnlock();
-    runFakeAccessPoint(g_networks[choice], false);
+    runFakeAccessPoint(target, false);
 }
 
 void runEvilPortal() {
@@ -2642,6 +2653,10 @@ void runEvilPortal() {
     if (choice < 0) {
         return;
     }
+    const Network target = g_networks[choice];
+    if (blockIfWhitelisted(target, "Evil Portal")) {
+        return;
+    }
     if (!ui::legalWarning("Evil Portal",
                           {"Crea un portale web per raccogliere credenziali.",
                            "I dati restano solo in RAM e sono cancellati",
@@ -2652,7 +2667,7 @@ void runEvilPortal() {
     credLock();
     g_credentials.clear();
     credUnlock();
-    runFakeAccessPoint(g_networks[choice], true);
+    runFakeAccessPoint(target, true);
 }
 
 void runAttacksMenu() {
