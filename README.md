@@ -52,8 +52,6 @@ Firmware modulare per **M5Stack Cardputer ADV** (ESP32-S3FN8, 8 MB flash, **senz
 | Database IR | ✅ | **2.255 file .ir su SD**, 8 categorie (TV, Clima, Audio, DVD, Proiettore, Console, Universale, Altro); fallback LittleFS con 309 file. Verifica i codici sui tuoi apparecchi |
 | Moduli 2.0 | ✅ | IR completo, Radio+ (playlist/ICY/REC), Audio (FFT/REC/memo), BLE HID/Bad BLE, Utility (clock/note/QR/TOTP), WiFi Lab (PMKID/client/spettro), WPA-SEC, Sensori, WiFi+ (Responder/Karma/Portal), ESP-NOW |
 | Asset icone 32×32 | ✅ | BMP 24 bit generati, con fallback se assenti |
-| Test automatici host | ⬜ | Predisposta la cartella `test/`, nessun test incluso |
-| Verifica su hardware reale | ⬜ | Compilazione e filesystem verificati; test su device da fare |
 
 ## Funzionalità
 
