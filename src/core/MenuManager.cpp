@@ -6,6 +6,7 @@
 #include <cstdio>
 
 #include "Display.h"
+#include "GridMath.h"
 #include "Navigation.h"
 #include "Orbit.h"
 
@@ -293,53 +294,9 @@ void MenuManager::moveGrid(int dx, int dy) {
     if (items_.empty()) {
         return;
     }
-    const int cols = gridColumns();
-    const int rows = gridRows();
-    const int size = pageSize();
-    if (cols <= 0 || rows <= 0 || size <= 0) {
-        return;
-    }
-
-    const int count = static_cast<int>(items_.size());
-    const int pageStart = (selected_ / size) * size;
-    int row = (selected_ - pageStart) / cols;
-    int col = (selected_ - pageStart) % cols;
-
-    if (dx != 0) {
-        col = (col + dx + cols) % cols;
-    }
-
-    int target = pageStart + row * cols + col;
-
-    if (dy != 0) {
-        const int nextRow = row + dy;
-        if (nextRow >= 0 && nextRow < rows) {
-            target = pageStart + nextRow * cols + col;
-        } else {
-            const int direction = (dy > 0) ? 1 : -1;
-            int nextPageStart = pageStart + direction * size;
-            if (nextPageStart < 0) {
-                nextPageStart = ((count - 1) / size) * size;
-            } else if (nextPageStart >= count) {
-                nextPageStart = 0;
-            }
-            const int nextRowInPage = (direction > 0) ? 0 : (rows - 1);
-            target = nextPageStart + nextRowInPage * cols + col;
-        }
-    }
-
-    if (target >= count) {
-        target = count - 1;
-    }
-
-    for (int attempt = 0; attempt < count; ++attempt) {
-        if (target >= 0 && target < count && selectable(target)) {
-            selected_ = target;
-            ensureVisible();
-            return;
-        }
-        target = (target + 1) % count;
-    }
+    selected_ = gridmath::move(selected_, static_cast<int>(items_.size()), gridColumns(),
+                               gridRows(), dx, dy, [this](int index) { return selectable(index); });
+    ensureVisible();
 }
 
 void MenuManager::ensureVisible() {
@@ -449,10 +406,15 @@ void MenuManager::run(bool allowBack) {
         } else if (ev.type == navigation::Event::Right && mode_ == Mode::Carousel) {
             moveSelection(1, true);
         } else if (ev.type == navigation::Event::Select) {
-            if (selectable(selected_) && items_[selected_].action) {
-                navigation::waitRelease();
-                items_[selected_].action();
-                navigation::waitRelease();
+            if (selectable(selected_)) {
+                // Copia: l'azione puo' chiamare setItems()/addItem() e
+                // ricostruire items_, distruggendo la callback in esecuzione.
+                auto action = items_[selected_].action;
+                if (action) {
+                    navigation::waitRelease();
+                    action();
+                    navigation::waitRelease();
+                }
             }
             dirty = true;
         } else if (ev.type == navigation::Event::Back) {
@@ -460,9 +422,11 @@ void MenuManager::run(bool allowBack) {
                 running = false;
             }
         } else if (ev.type == navigation::Event::Text && textHandler_) {
+            // Copia anche l'handler: puo' essere sostituito mentre gira.
+            auto handler = textHandler_;
             // Ridisegna solo se il tasto e' stato gestito: prima anche un
             // carattere ignorato forzava un frame completo.
-            if (textHandler_(ev.ch)) {
+            if (handler(ev.ch)) {
                 dirty = true;
             }
         }
@@ -670,6 +634,23 @@ void MenuManager::drawCarousel() {
 
     if (total == 0) {
         display::textCentered(bodyTop + 30, "NESSUN SEGNALE", display::C(display::T_dim), 2);
+        return;
+    }
+
+    if (w < 200) {
+        // In portrait il carosello non entra: lista verticale centrata sulla
+        // voce selezionata. ensureVisible() non calcola top_ in carosello.
+        carouselAnim_ = 0;
+        visibleRows_ = rowsPerPage();
+        top_ = selected_ - visibleRows_ / 2;
+        if (top_ < 0) {
+            top_ = 0;
+        }
+        const int maxTop = std::max(0, total - visibleRows_);
+        if (top_ > maxTop) {
+            top_ = maxTop;
+        }
+        drawList();
         return;
     }
 
