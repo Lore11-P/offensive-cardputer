@@ -86,8 +86,10 @@ struct Action {
 
 struct RunContext {
     uint32_t defaultDelayMs = 0;
+    uint32_t dropsAtStart = 0;
     bool aborted = false;
     bool lost = false;
+    bool flow = false;
 };
 
 bool isSpace(char c) {
@@ -222,6 +224,12 @@ bool pollAbort(RunContext& ctx) {
     }
     if (!hid::connected()) {
         ctx.lost = true;
+        ctx.aborted = true;
+        return true;
+    }
+    if (hid::reportDrops() != ctx.dropsAtStart) {
+        // La coda host non regge: fermarsi e dirlo, non fingere l'invio.
+        ctx.flow = true;
         ctx.aborted = true;
         return true;
     }
@@ -561,6 +569,7 @@ ScriptResult runScript(const std::string& path, const std::string& name,
     navigation::waitRelease();
 
     RunContext ctx;
+    ctx.dropsAtStart = hid::reportDrops();
     Action action;
     Action last;
     bool hasLast = false;
@@ -626,13 +635,18 @@ ScriptResult runScript(const std::string& path, const std::string& name,
 
     result.aborted = ctx.aborted;
     result.disconnected = ctx.lost;
-    result.completed = !ctx.aborted && result.lines >= result.total;
+    result.flowError = ctx.flow || hid::reportDrops() != ctx.dropsAtStart;
+    result.completed =
+        !ctx.aborted && !result.flowError && result.lines >= result.total;
     if (capped) {
         logger::warn("Bad BLE: limite di %u righe raggiunto",
                      static_cast<unsigned>(kMaxLines));
     }
     if (result.disconnected) {
         logger::warn("Bad BLE: script interrotto, host disconnesso");
+    }
+    if (result.flowError) {
+        logger::warn("Bad BLE: report HID scartati, script interrotto");
     }
     return result;
 }

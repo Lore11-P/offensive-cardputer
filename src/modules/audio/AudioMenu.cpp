@@ -731,21 +731,28 @@ bool recorderStart(RecSession& r) {
     return true;
 }
 
+bool recorderEmit(RecSession& r, uint8_t idx) {
+    if (static_cast<int32_t>(millis() - r.skipUntil) < 0) {
+        return true;  // warm-up del codec: zeri non validi, non vanno nel WAV
+    }
+    const size_t bytes = sizeof(g_pcm[idx]);
+    if (!writeAll(r.file, reinterpret_cast<const uint8_t*>(g_pcm[idx]), bytes) ||
+        r.file.getWriteError() != 0) {
+        r.error = true;
+        return false;
+    }
+    r.bytes += bytes;
+    r.level = bufferLevel(g_pcm[idx], kPcmSamples);
+    return true;
+}
+
 void recorderWrite(RecSession& r) {
     if (!r.active || r.error || M5.Mic.isRecording() > 1) {
         return;
     }
     const uint8_t idx = r.next;
-    const size_t bytes = sizeof(g_pcm[idx]);
-    const bool warming = static_cast<int32_t>(millis() - r.skipUntil) < 0;
-    if (!warming) {
-        if (!writeAll(r.file, reinterpret_cast<const uint8_t*>(g_pcm[idx]), bytes) ||
-            r.file.getWriteError() != 0) {
-            r.error = true;
-            return;
-        }
-        r.bytes += bytes;
-        r.level = bufferLevel(g_pcm[idx], kPcmSamples);
+    if (!recorderEmit(r, idx)) {
+        return;
     }
     if (!M5.Mic.record(g_pcm[idx], kPcmSamples, kRate)) {
         r.error = true;
@@ -768,12 +775,19 @@ void recorderFinish(RecSession& r) {
     if (!r.active) {
         return;
     }
-    // Le ultime due richieste possono essere ancora in coda: si lasciano
-    // completare (max 128 ms) senza accodarne altre, poi si chiude il file.
+    // A stop ci sono due buffer accodati: quello in cattura e il successivo.
+    // Si lasciano completare (max 128 ms) e si scrivono entrambi: senza,
+    // la coda della registrazione (fino a ~128 ms) andrebbe persa.
     const uint32_t start = millis();
     while (M5.Mic.isRecording() != 0 && millis() - start < 250) {
         navigation::poll();
         delay(1);
+    }
+    if (!r.error && M5.Mic.isRecording() == 0) {
+        // Coda FIFO: r.next e' il buffer piu' vecchio, poi l'altro.
+        if (recorderEmit(r, r.next)) {
+            recorderEmit(r, static_cast<uint8_t>(r.next ^ 1));
+        }
     }
     endMic();  // la REC e' finita: il mic non resta acceso nella schermata
 

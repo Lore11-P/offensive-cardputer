@@ -78,7 +78,18 @@ bool subscribed();
 bool bootProtocol();
 uint16_t peerCount();
 std::string peerAddress();
-bool authorizePeer();
+
+// Handle + indirizzo del peer tracciati insieme, per mostrare all'utente
+// esattamente il dispositivo che sta per essere autorizzato.
+struct PeerIdentity {
+    uint16_t handle = 0xFFFF;
+    std::string address;
+};
+bool peerIdentity(PeerIdentity& out);
+
+// Autorizza solo se handle e indirizzo sono ancora quelli confermati
+// dall'utente; se il peer e' cambiato nel frattempo ritorna false.
+bool authorizePeer(uint16_t expectedHandle, const std::string& expectedAddress);
 void deauthorizePeer();
 
 const std::string& deviceName();
@@ -88,8 +99,12 @@ void setLayout(Layout value);
 // Stato LED ricevuto dall'host (bit 0 num, 1 caps, 2 scroll).
 uint8_t leds();
 
-// Conteggio dei report di tasto inviati dall'inizio della sessione.
+// Conteggio dei tasti inviati dall'inizio della sessione (pressione e
+// rilascio accettati dallo stack, non solo richiesti).
 uint32_t sentKeys();
+
+// Report rifiutati dallo stack/controller dall'inizio della sessione.
+uint32_t reportDrops();
 
 // Traduce un code point Unicode nei tasti del layout corrente.
 bool mapCodepoint(uint32_t codepoint, uint8_t& usage, uint8_t& mods);
