@@ -820,6 +820,14 @@ bool chargingLikely() {
     if (s_battExplicit) {
         return true;
     }
+    // Se il PMIC espone VBUS (M5PM1/AXP), quello e' il dato affidabile:
+    // l'euristica sotto non vede una ricarica gia' attiva al boot. -1 =
+    // modello senza monitor VBUS (Cardputer/ADV: ADC batteria).
+    const int16_t vbus = M5Cardputer.Power.getVBUSVoltage();
+    if (vbus >= 0) {
+        s_battCharging = vbus > 4000;
+        return s_battCharging;
+    }
     const int16_t mv = M5Cardputer.Power.getBatteryVoltage();
     if (mv <= 0) {
         return false;

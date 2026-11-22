@@ -142,7 +142,8 @@ int textHeight(uint8_t font = 2);
 // Barra superiore telemetrica: titolo, breadcrumb, segnale e batteria.
 void header(const std::string& title, const std::string& parent = "");
 
-// Rilevamento della ricarica (euristico sui modelli senza PMIC).
+// Rilevamento della ricarica: VBUS se il PMIC lo espone, altrimenti
+// euristico sui modelli senza PMIC.
 bool chargingLikely();
 void resetChargingDetector();
 

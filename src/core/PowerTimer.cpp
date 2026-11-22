@@ -183,16 +183,16 @@ void powerOff() {
     display::resetChargingDetector();
     M5Cardputer.Display.setBrightness(kDimBrightness);
     const int initialPct = suspendPercent();
-    drawSuspendScreen(false, initialPct, 0);
+    bool charging = display::chargingLikely();
+    drawSuspendScreen(charging, initialPct, 0);
 
     setCpuFrequencyMhz(80);
     const uint32_t suspendStart = millis();
     uint32_t lastRefresh = 0;
     int16_t suspendRefMv = -1;
-    bool charging = false;
     bool screenOn = true;
     int lastPct = initialPct;
-    bool lastCharging = false;
+    bool lastCharging = charging;
 
     for (;;) {
         M5Cardputer.update();
