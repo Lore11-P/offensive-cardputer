@@ -392,6 +392,15 @@ bool beginPlayback() {
 // Ripristina il comportamento del lettore Musica senza toccare Radio/Audio.
 bool beginPlaybackLegacy() {
     releaseSpeaker();
+    // Solo se il microfono e' davvero acceso (modulo Audio): chiude I2S0 e
+    // riaccende il DAC ES8311. Nel percorso normale non fa nulla, quindi la
+    // Musica 1.21 resta invariata.
+    if (M5Cardputer.Mic.isRunning()) {
+        M5Cardputer.Mic.end();
+        M5Cardputer.Speaker.begin();
+        M5Cardputer.Speaker.end();
+        g_i2sOwned = false;
+    }
     if (!decoderReady()) {
         restoreSpeaker();
         return false;
