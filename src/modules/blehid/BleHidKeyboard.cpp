@@ -20,7 +20,9 @@ namespace {
 
 constexpr uint8_t kShift = 0x02;
 constexpr uint8_t kAltGr = 0x40;  // tasto Alt di destra
-constexpr uint32_t kKeyGapMs = 3;
+// Ritmo minimo tra due report HID: un host a 15-30 ms di connection interval
+// non regge i ~222 report/s del vecchio press+release a 9 ms.
+constexpr uint32_t kReportGapMs = 15;
 
 // Report Map HID: tastiera boot (8 byte) con Report ID 1 + LED output.
 const uint8_t kReportMap[] = {
@@ -83,6 +85,7 @@ NimBLECharacteristic* g_output = nullptr;
 NimBLECharacteristic* g_bootOutput = nullptr;
 volatile uint8_t g_leds = 0;
 uint32_t g_sentKeys = 0;
+volatile uint32_t g_reportDrops = 0;
 Layout g_layout = Layout::It;
 bool g_layoutLoaded = false;
 
@@ -235,22 +238,55 @@ bool bootInputSubscribed() {
 
 // Notifica una sola caratteristica, solo se sottoscritta e solo su un link
 // cifrato e autorizzato. 0x2A22 esiste solo in Boot Protocol.
+//
+// NimBLECharacteristic::notify() e' void e scarta in silenzio: qui si usa la
+// chiamata di basso livello per sapere se il report e' stato accodato.
+bool notifyReport(NimBLECharacteristic* characteristic, uint16_t connHandle,
+                  const uint8_t report[8]) {
+    if (characteristic == nullptr || connHandle == kNoHandle ||
+        characteristic->getHandle() == 0xFFFF) {
+        ++g_reportDrops;
+        return false;
+    }
+    characteristic->setValue(report, 8);
+    os_mbuf* om = ble_hs_mbuf_from_flat(report, 8);
+    if (om == nullptr) {
+        if (g_reportDrops == 0) {
+            logger::warn("BLE HID: mbuf esaurito, report scartato");
+        }
+        ++g_reportDrops;
+        return false;
+    }
+    // Il mbuf viene consumato dalla chiamata in ogni caso.
+    const int rc = ble_gatts_notify_custom(connHandle, characteristic->getHandle(), om);
+    if (rc != 0) {
+        if (g_reportDrops == 0) {
+            logger::warn("BLE HID: notify rc=%d, report scartato", rc);
+        }
+        ++g_reportDrops;
+        return false;
+    }
+    delay(kReportGapMs);
+    return true;
+}
+
 bool sendReport(const uint8_t report[8]) {
     if (!g_begun || !g_connected || !g_secure || !g_authorized) {
         return false;
     }
+    uint16_t handle = kNoHandle;
+    portENTER_CRITICAL(&g_peerMux);
+    handle = g_peerHandle;
+    portEXIT_CRITICAL(&g_peerMux);
+
     if (g_bootProtocol) {
         if (bootInputSubscribed()) {
-            g_bootInput->setValue(report, 8);
-            g_bootInput->notify(report, 8);
-            return true;
+            return notifyReport(g_bootInput, handle, report);
         }
         return false;
     }
     if (inputSubscribed()) {
-        g_input->setValue(report, 8);
-        g_input->notify(report, 8);
-        return true;
+        return notifyReport(g_input, handle, report);
     }
     return false;
 }
@@ -534,6 +570,7 @@ bool begin(const std::string& name) {
     g_name = name;
     g_leds = 0;
     g_sentKeys = 0;
+    g_reportDrops = 0;
     portENTER_CRITICAL(&g_peerMux);
     g_connected = false;
     g_secure = false;
@@ -637,15 +674,47 @@ std::string peerAddress() {
     return std::string(buffer);
 }
 
-bool authorizePeer() {
-    if (!linkSecure()) {
+bool peerIdentity(PeerIdentity& out) {
+    char buffer[18];
+    bool up = false;
+    portENTER_CRITICAL(&g_peerMux);
+    up = g_connected && g_peerHandle != kNoHandle;
+    if (up) {
+        out.handle = g_peerHandle;
+        std::memcpy(buffer, g_peerAddress, sizeof(buffer));
+        buffer[sizeof(buffer) - 1] = '\0';
+    }
+    portEXIT_CRITICAL(&g_peerMux);
+    if (!up) {
         return false;
     }
-    portENTER_CRITICAL(&g_peerMux);
-    g_authorized = true;
-    portEXIT_CRITICAL(&g_peerMux);
-    logger::info("BLE HID: host autorizzato dall'utente");
+    // Fuori dalla sezione critica: std::string puo' allocare.
+    out.address.assign(buffer);
     return true;
+}
+
+bool authorizePeer(uint16_t expectedHandle, const std::string& expectedAddress) {
+    if (expectedAddress.size() >= sizeof(g_peerAddress)) {
+        return false;
+    }
+    bool ok = false;
+    portENTER_CRITICAL(&g_peerMux);
+    // Confronto sotto lo stesso mutex che onConnect/onDisconnect usano per
+    // aggiornare handle e indirizzo: il peer confermato deve essere ancora
+    // quello collegato e cifrato.
+    if (expectedHandle != kNoHandle && g_peerHandle == expectedHandle &&
+        std::strcmp(g_peerAddress, expectedAddress.c_str()) == 0 && g_connected &&
+        g_secure) {
+        g_authorized = true;
+        ok = true;
+    }
+    portEXIT_CRITICAL(&g_peerMux);
+    if (ok) {
+        logger::info("BLE HID: host autorizzato dall'utente");
+    } else {
+        logger::warn("BLE HID: autorizzazione negata, peer cambiato nel frattempo");
+    }
+    return ok;
 }
 
 void deauthorizePeer() {
@@ -680,6 +749,10 @@ uint32_t sentKeys() {
     return g_sentKeys;
 }
 
+uint32_t reportDrops() {
+    return g_reportDrops;
+}
+
 bool mapCodepoint(uint32_t codepoint, uint8_t& usage, uint8_t& mods) {
     loadLayout();
     if (codepoint < 0x80) {
@@ -711,8 +784,10 @@ bool tapUsage(uint8_t usage, uint8_t mods, uint32_t holdMs) {
     }
     delay(holdMs);
     uint8_t release[8] = {};
-    sendReport(release);
-    delay(kKeyGapMs);
+    if (!sendReport(release)) {
+        return false;
+    }
+    // Conta solo il tasto i cui due report sono stati accodati davvero.
     ++g_sentKeys;
     return true;
 }

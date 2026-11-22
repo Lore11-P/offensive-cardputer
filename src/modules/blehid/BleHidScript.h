@@ -16,6 +16,7 @@ struct ScriptResult {
     bool completed = false;
     bool aborted = false;
     bool disconnected = false;
+    bool flowError = false;  // report HID scartati dallo stack/controller
     uint32_t lines = 0;
     uint32_t total = 0;
 };

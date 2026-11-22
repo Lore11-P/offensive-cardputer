@@ -96,16 +96,27 @@ bool waitHost(const std::string& title, const std::string& name, bool script) {
         // pairing serve la conferma sulla Cardputer: Just Works non
         // autentica il central, quindi l'utente verifica l'indirizzo.
         if (hid::linkUp() && hid::linkSecure() && !hid::authorized()) {
+            // Cattura handle e indirizzo mostrati: il task NimBLE puo'
+            // cambiare peer mentre il modale e' aperto.
+            hid::PeerIdentity peer;
+            if (!hid::peerIdentity(peer)) {
+                delay(20);
+                continue;
+            }
             if (!ui::confirm("Autorizza host",
-                             {"Host: " + hid::peerAddress(),
+                             {"Host: " + peer.address,
                               "Link Bluetooth cifrato (Just Works).",
                               "Autorizza solo un PC/telefono tuo.",
                               "ENTER = autorizza   ESC = rifiuta"},
                              title)) {
                 return false;
             }
-            if (!hid::authorizePeer()) {
-                return false;
+            if (!hid::authorizePeer(peer.handle, peer.address)) {
+                // Peer cambiato durante la conferma: si ridisegna il prompt
+                // sul nuovo indirizzo invece di autorizzarlo.
+                lastDraw = 0;
+                delay(20);
+                continue;
             }
             lastDraw = 0;
             continue;
@@ -171,6 +182,8 @@ void drawLive(const std::string& name, uint32_t typed,
 // Tastiera dal vivo: ogni tasto della Cardputer diventa un report HID.
 // ESC (') esce senza essere inviato all'host; DEL invia backspace.
 void runLive(const std::string& name) {
+    // Sessione interattiva: non deve sospendere mentre si digita.
+    const powertimer::Hold hold;
     M5Cardputer.update();
     auto& initial = M5Cardputer.Keyboard.keysState();
     std::vector<char> lastWord = initial.word;
@@ -186,7 +199,6 @@ void runLive(const std::string& name) {
 
     for (;;) {
         M5Cardputer.update();
-        powertimer::tick();
         auto& state = M5Cardputer.Keyboard.keysState();
         const uint32_t now = millis();
 
@@ -384,11 +396,20 @@ void runBadScript(const std::string& name, bool preferSd) {
                     "Bad BLE");
         return;
     }
-    if (result.aborted) {
+    if (result.aborted && !result.flowError) {
         ui::message("Bad BLE",
                     {"Script annullato.",
                      "Riga " + std::to_string(result.lines) + " / " +
                          std::to_string(result.total)},
+                    "Bad BLE");
+        return;
+    }
+    if (result.flowError) {
+        ui::message("Bad BLE",
+                    {"!Report BLE scartati.", "Host troppo lento o coda piena.",
+                     "Riga " + std::to_string(result.lines) + " / " +
+                         std::to_string(result.total),
+                     "Script NON completato."},
                     "Bad BLE");
         return;
     }

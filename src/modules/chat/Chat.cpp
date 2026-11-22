@@ -763,6 +763,11 @@ public:
     }
 };
 
+// Una sola istanza viva per tutto il programma: NimBLEScan::stop() non
+// attende il task host, quindi onResult() puo' arrivare dopo lo stop. Un
+// oggetto di stack verrebbe distrutto mentre la vtable e' ancora in uso.
+ChatScanCallbacks g_chatScanCallbacks;
+
 void addLocalMessage(const std::string& text) {
     portENTER_CRITICAL(&g_lock);
     pushMessageLocked(g_selfNick, text.c_str(), true);
@@ -898,8 +903,7 @@ NameCheck checkNicknameAvailable(const std::string& candidate) {
 
     refreshIdentity();
 
-    ChatScanCallbacks callbacks;
-    scan->setAdvertisedDeviceCallbacks(&callbacks, true);
+    scan->setAdvertisedDeviceCallbacks(&g_chatScanCallbacks, true);
     scan->setActiveScan(false);
     scan->setInterval(50);
     scan->setWindow(50);
@@ -1044,8 +1048,7 @@ void runChat() {
         advertising->stop();
     }
 
-    ChatScanCallbacks callbacks;
-    scan->setAdvertisedDeviceCallbacks(&callbacks, true);
+    scan->setAdvertisedDeviceCallbacks(&g_chatScanCallbacks, true);
     scan->setActiveScan(false);
     scan->setInterval(50);
     scan->setWindow(50);
