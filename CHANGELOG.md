@@ -5,7 +5,7 @@ Tutte le modifiche rilevanti del progetto. Formato basato su Keep a Changelog.
 ## [2.0.3] - 2026-11-22
 
 - **Musica/SD**: remount SD, Diagnostica e fallback `/music`/`/Music` della 2.0.2 restano disponibili.
-- **Cover**: il buffer 64x64 passa a RGB332 (4 KB) e viene caricato **dopo** l'avvio del decoder. Con gli 8 KB RGB565 allocati prima, l'heap della 2.0.2 non riusciva piu' a creare i buffer MP3 e `connecttoFS` falliva (il brano sembrava non partire).
+- **Cover**: il buffer 64x64 passa a RGB332 (4 KB, fallback 32x32/2 KB) e viene caricato **dopo** l'avvio del decoder. Corretto anche il packing RGB332: i bit R/G/B non si sovrappongono piu' e la cover mostra i colori giusti. Con gli 8 KB RGB565 allocati prima, l'heap della 2.0.2 non riusciva piu' a creare i buffer MP3 e `connecttoFS` falliva (il brano sembrava non partire).
 - **I2S condiviso**: `beginPlaybackLegacy()` reinstalla I2S0 solo se Radio l'ha rilasciato; `endPlaybackLegacy()` lo rilascia per il microfono di Audio. Verificate su hardware le sequenze Radio → Musica e Musica → Audio.
 - Tutti i moduli e le funzioni della 2.0.2 restano inclusi e compilati.
 

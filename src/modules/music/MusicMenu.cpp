@@ -241,10 +241,19 @@ void drawVolume(int x, int y, int width) {
     }
 }
 
+// Converte un pixel RGB565 in RGB332 (3 bit R, 3 bit G, 2 bit B).
+uint8_t packRgb332(uint16_t px) {
+    const uint8_t r5 = (px >> 11) & 0x1F;
+    const uint8_t g6 = (px >> 5) & 0x3F;
+    const uint8_t b5 = px & 0x1F;
+    return static_cast<uint8_t>(((r5 >> 2) << 5) | ((g6 >> 3) << 2) |
+                                (b5 >> 3));
+}
+
 // Cover caricata una sola volta per album. Il file e' 64x64 RGB565 (8 KB),
-// ma in RAM si tiene a 8 bit per pixel (RGB332, 4 KB): dopo il decoder
-// l'heap non ha piu' 8 KB contigui e connecttoFS fallirebbe. Il colore
-// viene riespanso a RGB565 al disegno.
+// ma in RAM si tiene a 8 bit per pixel (RGB332): 4 KB a 64x64, oppure 2 KB
+// a 32x32 se l'heap e' troppo stretto. Il colore viene riespanso a RGB565
+// al disegno.
 class Cover {
 public:
     Cover() = default;
@@ -254,6 +263,7 @@ public:
 
     void load(const std::string& albumPath, bool onSd) {
         reset();
+        side_ = kCoverSide;
         File file = storage::openRead(joinPath(albumPath, kCoverName), onSd);
         if (!file || static_cast<size_t>(file.size()) != kCoverBytes) {
             file.close();
@@ -261,9 +271,16 @@ public:
         }
         pixels_ = new (std::nothrow) uint8_t[kCoverSide * kCoverSide];
         if (pixels_ == nullptr) {
-            file.close();
-            return;
+            // Fallback 32x32 (2 KB): meglio una cover meno definita che
+            // nessuna cover quando l'heap e' frammentato.
+            pixels_ = new (std::nothrow) uint8_t[(kCoverSide / 2) * (kCoverSide / 2)];
+            if (pixels_ == nullptr) {
+                file.close();
+                return;
+            }
+            side_ = kCoverSide / 2;
         }
+        const bool full = side_ == kCoverSide;
         uint8_t row[kCoverSide * 2];
         for (int y = 0; y < kCoverSide; ++y) {
             size_t got = 0;
@@ -279,20 +296,25 @@ public:
                 file.close();
                 return;
             }
-            for (int x = 0; x < kCoverSide; ++x) {
-                const uint16_t px =
-                    static_cast<uint16_t>(row[x * 2] | (row[x * 2 + 1] << 8));
-                const uint8_t r5 = (px >> 11) & 0x1F;
-                const uint8_t g6 = (px >> 5) & 0x3F;
-                const uint8_t b5 = px & 0x1F;
-                pixels_[y * kCoverSide + x] =
-                    static_cast<uint8_t>((r5 << 3) | (g6 << 2) | (b5 >> 3));
+            if (full) {
+                for (int x = 0; x < kCoverSide; ++x) {
+                    const uint16_t px = static_cast<uint16_t>(
+                        row[x * 2] | (row[x * 2 + 1] << 8));
+                    pixels_[y * kCoverSide + x] = packRgb332(px);
+                }
+            } else if ((y & 1) == 0) {
+                for (int x = 0; x < kCoverSide; x += 2) {
+                    const uint16_t px = static_cast<uint16_t>(
+                        row[x * 2] | (row[x * 2 + 1] << 8));
+                    pixels_[(y / 2) * side_ + x / 2] = packRgb332(px);
+                }
             }
         }
         file.close();
     }
 
     bool ready() const { return pixels_ != nullptr; }
+    int side() const { return side_; }
     const uint8_t* pixels() const { return pixels_; }
 
 private:
@@ -302,6 +324,7 @@ private:
     }
 
     uint8_t* pixels_ = nullptr;
+    int side_ = kCoverSide;
 };
 
 void drawCover(const Cover& cover, int x, int y) {
@@ -310,9 +333,12 @@ void drawCover(const Cover& cover, int x, int y) {
         // drawPixel passa dalla conversione colore del display: pushImage
         // riswappa i 16 bit e inverte i canali RGB della cover.
         const uint8_t* px = cover.pixels();
+        const int side = cover.side();
         for (int row = 0; row < kCoverSide; ++row) {
+            const int sy = row * side / kCoverSide;
             for (int col = 0; col < kCoverSide; ++col) {
-                const uint8_t v = px[row * kCoverSide + col];
+                const int sx = col * side / kCoverSide;
+                const uint8_t v = px[sy * side + sx];
                 const uint16_t r = (v >> 5) & 0x07;
                 const uint16_t g = (v >> 2) & 0x07;
                 const uint16_t b = v & 0x03;
@@ -411,6 +437,9 @@ void runPlayer(const std::vector<Track>& tracks, const std::string& albumName,
         if (!coverTried) {
             coverTried = true;
             cover.load(albumPath, onSd);
+            logger::info("Musica: cover %s (%dpx) heap=%u",
+                         cover.ready() ? "OK" : "assente", cover.side(),
+                         static_cast<unsigned>(ESP.getFreeHeap()));
         }
 
         bool paused = false;
