@@ -80,26 +80,6 @@ bool loadListFile() {
     return g_ssidCount > 0;
 }
 
-void loadFallback() {
-    std::vector<wifisetup::Network> networks;
-    if (wifisetup::scanNetworks(networks, "WiFi+")) {
-        for (const auto& network : networks) {
-            if (network.ssid != "(nascosta)") {
-                addSsid(network.ssid);
-                if (g_ssidCount == 1 && network.channel >= 1 && network.channel <= 13) {
-                    g_channel = static_cast<uint8_t>(network.channel);
-                }
-            }
-        }
-    }
-    if (g_ssidCount == 0) {
-        static const char* kDefaults[] = {"FreeWiFi", "WiFi", "Guest", "Home"};
-        for (const char* ssid : kDefaults) {
-            addSsid(ssid);
-        }
-    }
-}
-
 // Allinea il canale dell'AP a quello della prima rete della lista, se visibile:
 // i probe arrivano solo sul canale su cui ascolta la radio.
 void alignChannel() {
@@ -303,10 +283,13 @@ void runKarma() {
     g_sequence = 0;
 
     if (!loadListFile()) {
-        loadFallback();
-    } else {
-        alignChannel();
+        ui::message("Karma AP",
+                    {"Serve /wifiext/karma.txt.", "Senza una lista esplicita",
+                     "nessun SSID viene impersonato."},
+                    "WiFi+");
+        return;
     }
+    alignChannel();
     if (g_ssidCount == 0) {
         ui::message("Karma AP", {"Nessun SSID disponibile."}, "WiFi+");
         return;
