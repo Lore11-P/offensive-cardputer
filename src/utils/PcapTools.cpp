@@ -18,6 +18,7 @@ constexpr uint16_t kLinkRadiotap = 127;
 constexpr size_t kPcapGlobalSize = 24;
 constexpr size_t kPcapRecordSize = 16;
 constexpr size_t kMaxSsids = 128;
+constexpr uint16_t kMaxLiveSsids = 48;
 constexpr size_t kMaxNonces = 64;
 constexpr size_t kMaxPending = 32;
 
@@ -1291,18 +1292,21 @@ struct LiveCollector::Impl {
     uint8_t bssid[6] = {};
     uint8_t len = 0;
     uint8_t text[32] = {};
+    uint32_t seen = 0;  // ultimo frame in cui il BSSID e' stato visto (LRU)
   };
 
   Event events[kMaxLiveEntries];
   uint16_t count = 0;
-  Ssid ssids[kMaxLiveEntries];
+  Ssid ssids[kMaxLiveSsids];
   uint16_t ssidCount = 0;
+  uint32_t ssidTick = 0;
   uint32_t frames = 0;
   uint32_t eapol = 0;
 
   void reset() {
     count = 0;
     ssidCount = 0;
+    ssidTick = 0;
     frames = 0;
     eapol = 0;
   }
@@ -1311,22 +1315,34 @@ struct LiveCollector::Impl {
     if (text == nullptr || len == 0 || len > 32) {
       return;
     }
+    ++ssidTick;
     for (uint16_t i = 0; i < ssidCount; ++i) {
       if (std::memcmp(ssids[i].bssid, bssid, 6) == 0) {
         if (ssids[i].len == 0) {
           ssids[i].len = len;
           std::memcpy(ssids[i].text, text, len);
         }
+        ssids[i].seen = ssidTick;
         return;
       }
     }
-    if (ssidCount >= kMaxLiveEntries) {
-      return;
+    uint16_t slot = 0;
+    if (ssidCount < kMaxLiveSsids) {
+      slot = ssidCount++;
+    } else {
+      // Tabella piena: si sostituisce il BSSID visto meno di recente, cosi'
+      // l'AP dell'handshake non viene espulso dai beacon di reti di passaggio.
+      for (uint16_t i = 1; i < kMaxLiveSsids; ++i) {
+        if (ssids[i].seen < ssids[slot].seen) {
+          slot = i;
+        }
+      }
     }
-    Ssid& item = ssids[ssidCount++];
+    Ssid& item = ssids[slot];
     std::memcpy(item.bssid, bssid, 6);
     item.len = len;
     std::memcpy(item.text, text, len);
+    item.seen = ssidTick;
   }
 
   const Ssid* findSsid(const uint8_t bssid[6]) const {
@@ -1466,9 +1482,13 @@ struct LiveCollector::Impl {
         continue;
       }
       const Ssid* ssid = findSsid(event.bssid);
+      if (ssid == nullptr || ssid->len == 0) {
+        // Senza ESSID hashcat non puo' verificare la riga: non scriverla.
+        ++result.skippedNoEssid;
+        continue;
+      }
       const std::string line =
-          formatPmkid(event.pmkid, event.bssid, event.sta, ssid ? ssid->text : nullptr,
-                      ssid ? ssid->len : 0);
+          formatPmkid(event.pmkid, event.bssid, event.sta, ssid->text, ssid->len);
       const LineWriter::Result res = writer.write(line);
       if (res == LineWriter::Result::Written) {
         ++result.pmkid;

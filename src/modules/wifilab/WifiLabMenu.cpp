@@ -18,6 +18,7 @@
 #include "MenuManager.h"
 #include "ModuleFlags.h"
 #include "Navigation.h"
+#include "NetGuard.h"
 #include "Storage.h"
 #include "Ui.h"
 
@@ -28,7 +29,7 @@ namespace {
 
 constexpr int kChannels = 13;
 constexpr int kMaxAps = 32;
-constexpr int kMaxWhitelist = 24;
+constexpr int kMaxWhitelist = netguard::kMaxEntries;
 constexpr int kMaxTargets = 3;
 constexpr int kMaxClients = 16;
 constexpr int kRxSlots = 6;
@@ -36,7 +37,7 @@ constexpr uint16_t kRxMax = 512;
 constexpr int kObsSlots = 16;
 constexpr int kWaterfallRows = 16;
 
-constexpr const char* kWhitePath = "/wifilab/whitelist.txt";
+constexpr const char* kWhitePath = netguard::kPath;
 constexpr const char* kPmkidDir = "/wifilab/pmkid";
 
 // ---------------------------------------------------------------------------
@@ -66,68 +67,8 @@ void bssidBase(const uint8_t mac[6], char out[13]) {
     out[12] = 0;
 }
 
-int hexValue(char c) {
-    if (c >= '0' && c <= '9') {
-        return c - '0';
-    }
-    if (c >= 'a' && c <= 'f') {
-        return c - 'a' + 10;
-    }
-    if (c >= 'A' && c <= 'F') {
-        return c - 'A' + 10;
-    }
-    return -1;
-}
-
-bool parseMac(const std::string& text, uint8_t out[6]) {
-    char hex[13];
-    int count = 0;
-    for (char c : text) {
-        if (c == ':' || c == '-' || c == ' ' || c == '.') {
-            continue;
-        }
-        if (count >= 12) {
-            return false;
-        }
-        hex[count++] = c;
-    }
-    if (count != 12) {
-        return false;
-    }
-    for (int i = 0; i < 6; ++i) {
-        const int hi = hexValue(hex[i * 2]);
-        const int lo = hexValue(hex[i * 2 + 1]);
-        if (hi < 0 || lo < 0) {
-            return false;
-        }
-        out[i] = static_cast<uint8_t>((hi << 4) | lo);
-    }
-    return true;
-}
-
 bool sameMac(const uint8_t a[6], const uint8_t b[6]) {
     return std::memcmp(a, b, 6) == 0;
-}
-
-// Confronto SSID conservativo: maiuscole/minuscole equivalenti. Per una
-// whitelist e' meglio escludere una rete in piu' che attaccarne una protetta.
-bool sameSsid(const char* a, const char* b) {
-    while (*a != 0 && *b != 0) {
-        char ca = *a;
-        char cb = *b;
-        if (ca >= 'A' && ca <= 'Z') {
-            ca = static_cast<char>(ca - 'A' + 'a');
-        }
-        if (cb >= 'A' && cb <= 'Z') {
-            cb = static_cast<char>(cb - 'A' + 'a');
-        }
-        if (ca != cb) {
-            return false;
-        }
-        ++a;
-        ++b;
-    }
-    return *a == 0 && *b == 0;
 }
 
 // Un BSSID valido è unicast e non tutto zero.
@@ -223,171 +164,32 @@ struct ApInfo {
     uint8_t auth = 0;
 };
 
-struct WhiteEntry {
-    uint8_t bssid[6] = {};
-    bool hasBssid = false;
-    char ssid[33] = {};
-    bool hasSsid = false;
-};
-
 ApInfo g_aps[kMaxAps];
 int g_apCount = 0;
-
-WhiteEntry g_white[kMaxWhitelist];
-int g_whiteCount = 0;
-// Fail-closed: se il file manca o non e' leggibile per intero non si attacca,
-// perche' non e' possibile sapere quali reti sono protette.
-bool g_whiteReady = false;
 
 std::string apSsid(const ApInfo& ap) {
     return ap.ssidLen == 0 ? std::string("(nascosta)") : std::string(ap.ssid);
 }
 
+// La whitelist e' quella condivisa con WiFi Atks: una sola implementazione
+// (netguard) e stessa policy fail-closed in tutti i moduli.
+void loadWhitelist() { netguard::reload(); }
+
+bool whitelistReady() { return netguard::ready(); }
+int whitelistCount() { return netguard::count(); }
+
 bool apWhitelisted(const ApInfo& ap) {
-    for (int i = 0; i < g_whiteCount; ++i) {
-        const WhiteEntry& entry = g_white[i];
-        if (entry.hasBssid && sameMac(entry.bssid, ap.bssid)) {
-            return true;
-        }
-        if (entry.hasSsid && ap.ssidLen > 0 &&
-            sameSsid(entry.ssid, ap.ssid)) {
-            return true;
-        }
-        // Voce solo-SSID e AP nascosto: non si puo' dimostrare che non sia la
-        // rete protetta, quindi si blocca l'attacco (fail-closed).
-        if (!entry.hasBssid && entry.hasSsid && ap.ssidLen == 0) {
-            return true;
-        }
-    }
-    return false;
+    return netguard::isProtected(ap.bssid, ap.ssidLen > 0 ? ap.ssid : nullptr,
+                                 ap.ssidLen);
 }
 
 bool bssidWhitelisted(const uint8_t bssid[6]) {
-    for (int i = 0; i < g_whiteCount; ++i) {
-        if (g_white[i].hasBssid && sameMac(g_white[i].bssid, bssid)) {
-            return true;
-        }
-    }
-    return false;
-}
-
-void trim(std::string& text) {
-    size_t begin = 0;
-    while (begin < text.size() &&
-           (text[begin] == ' ' || text[begin] == '\t' || text[begin] == '\r')) {
-        ++begin;
-    }
-    size_t end = text.size();
-    while (end > begin && (text[end - 1] == ' ' || text[end - 1] == '\t' ||
-                           text[end - 1] == '\r')) {
-        --end;
-    }
-    text = text.substr(begin, end - begin);
-}
-
-void loadWhitelist() {
-    g_whiteCount = 0;
-    g_whiteReady = false;
-    if (!storage::hasSD() || !storage::exists(kWhitePath, true)) {
-        return;
-    }
-    const size_t fileSize = storage::fileSize(kWhitePath, true);
-    if (fileSize > 4096) {
-        return;
-    }
-    std::string text;
-    if (!storage::readText(kWhitePath, text, 4096, true)) {
-        return;
-    }
-    size_t start = 0;
-    bool invalid = false;
-    bool overflow = false;
-    while (start < text.size()) {
-        size_t end = text.find('\n', start);
-        if (end == std::string::npos) {
-            end = text.size();
-        }
-        std::string line = text.substr(start, end - start);
-        start = end + 1;
-        trim(line);
-        if (line.empty() || line[0] == '#') {
-            continue;
-        }
-        const size_t bar = line.find('|');
-        std::string macPart = bar == std::string::npos ? line : line.substr(0, bar);
-        std::string ssidPart =
-            bar == std::string::npos ? std::string() : line.substr(bar + 1);
-        trim(macPart);
-        trim(ssidPart);
-        if (ssidPart.size() >= 2 && ssidPart.front() == '"' &&
-            ssidPart.back() == '"') {
-            ssidPart = ssidPart.substr(1, ssidPart.size() - 2);
-        }
-        WhiteEntry entry;
-        const bool hasMacText = !macPart.empty();
-        const bool macOk = parseMac(macPart, entry.bssid);
-        if (hasMacText && (!macOk || !validBssid(entry.bssid))) {
-            invalid = true;
-            continue;
-        }
-        entry.hasBssid = macOk;
-        if (ssidPart.size() > 32) {
-            ssidPart.resize(32);
-        }
-        entry.hasSsid = !ssidPart.empty();
-        if (!entry.hasSsid && !entry.hasBssid) {
-            invalid = true;
-            continue;
-        }
-        if (entry.hasSsid) {
-            std::memcpy(entry.ssid, ssidPart.data(), ssidPart.size());
-            entry.ssid[ssidPart.size()] = 0;
-        }
-        if (g_whiteCount < kMaxWhitelist) {
-            g_white[g_whiteCount++] = entry;
-        } else {
-            overflow = true;
-        }
-    }
-    g_whiteReady = !invalid && !overflow;
+    return netguard::isProtectedBssid(bssid);
 }
 
 bool addWhitelistEntry(const ApInfo& ap) {
-    if (g_whiteCount >= kMaxWhitelist) {
-        return false;
-    }
-    for (int i = 0; i < g_whiteCount; ++i) {
-        if (g_white[i].hasBssid && sameMac(g_white[i].bssid, ap.bssid)) {
-            return false;
-        }
-    }
-    std::string text;
-    if (storage::exists(kWhitePath, true)) {
-        // Fail-closed: un file esistente ma non leggibile per intero non deve
-        // essere riscritto con la sola nuova voce (perderebbe le protezioni).
-        if (!storage::readText(kWhitePath, text, 4096, true)) {
-            return false;
-        }
-    }
-    std::string line = macText(ap.bssid);
-    line.push_back('|');
-    if (ap.ssidLen > 0) {
-        line.append(ap.ssid, ap.ssidLen);
-    }
-    line.push_back('\n');
-    if (text.size() + line.size() > 4096) {
-        return false;
-    }
-    if (!text.empty() && text.back() != '\n') {
-        text.push_back('\n');
-    }
-    text += line;
-    storage::mkdir("/wifilab", true);
-    if (!storage::writeText(kWhitePath, text, true)) {
-        return false;
-    }
-    loadWhitelist();
-    return true;
+    return netguard::add(ap.bssid, ap.ssidLen > 0 ? ap.ssid : nullptr,
+                         ap.ssidLen);
 }
 
 // ---------------------------------------------------------------------------
@@ -1453,7 +1255,7 @@ void runPmkidHunt() {
         return;
     }
     loadWhitelist();
-    if (!g_whiteReady) {
+    if (!whitelistReady()) {
         ui::message("PMKID Hunt",
                     {"Whitelist assente o > 4 KB.", "Attacchi bloccati.",
                      "Crea /wifilab/whitelist.txt", "da WiFi Lab > Whitelist."},
@@ -1864,7 +1666,7 @@ void drawClientMonitor(const ApInfo& ap, int selected, int top) {
     }
 
 #if ENABLE_OFFENSIVE
-    const bool blocked = !g_whiteReady || bssidWhitelisted(ap.bssid) ||
+    const bool blocked = !whitelistReady() || bssidWhitelisted(ap.bssid) ||
                          apWhitelisted(ap);
     display::footer(blocked ? "deauth bloccato  ESC=esci"
                             : "D=deauth  ESC=esci");
@@ -1876,7 +1678,7 @@ void drawClientMonitor(const ApInfo& ap, int selected, int top) {
 
 #if ENABLE_OFFENSIVE
 void deauthClient(const ApInfo& ap, const uint8_t mac[6]) {
-    if (!g_whiteReady) {
+    if (!whitelistReady()) {
         ui::message("Deauth client",
                     {"Whitelist assente o > 4 KB.", "Azione bloccata."},
                     "Client Monitor");
@@ -2109,7 +1911,7 @@ void runClientMonitor() {
 void drawWhitelist() {
     display::clear();
     display::header("Whitelist", "WiFi Lab");
-    if (!g_whiteReady) {
+    if (!whitelistReady()) {
         display::text(8, 30, "File assente o > 4 KB.",
                       display::kWarning, 0);
         display::text(8, 44, "PMKID e deauth sono bloccati",
@@ -2121,7 +1923,7 @@ void drawWhitelist() {
         display::text(8, 88, "Formato: BSSID|SSID", display::kTextDim, 0);
         display::text(8, 108, "A = aggiungi AP   N = file vuoto",
                       display::kAccent, 0);
-    } else if (g_whiteCount == 0) {
+    } else if (whitelistCount() == 0) {
         display::text(8, 30, "Nessuna voce.", display::kTextDim, 0);
         display::text(8, 46, "File: /wifilab/whitelist.txt",
                       display::kTextDim, 0);
@@ -2130,12 +1932,12 @@ void drawWhitelist() {
                       display::kAccent, 0);
     } else {
         display::text(6, 24, "Escluse da PMKID e deauth.  " +
-                                 std::to_string(g_whiteCount) + "/" +
+                                 std::to_string(whitelistCount()) + "/" +
                                  std::to_string(kMaxWhitelist) +
                                  " voci",
                       display::kTextDim, 0);
-        for (int i = 0; i < g_whiteCount && i < 6; ++i) {
-            const WhiteEntry& entry = g_white[i];
+        for (int i = 0; i < whitelistCount() && i < 6; ++i) {
+            const netguard::Entry& entry = netguard::entry(i);
             const int y = 38 + i * 14;
             const std::string mac =
                 entry.hasBssid ? macText(entry.bssid) : std::string("(solo SSID)");
@@ -2143,7 +1945,7 @@ void drawWhitelist() {
             display::text(120, y, entry.hasSsid ? shorten(entry.ssid, 18) : "-",
                           display::kText, 0);
         }
-        if (g_whiteCount > 6) {
+        if (whitelistCount() > 6) {
             display::text(6, 122, "...", display::kTextDim, 0);
         }
     }
@@ -2152,14 +1954,14 @@ void drawWhitelist() {
 }
 
 void addWhitelistFromScan() {
-    if (!g_whiteReady && storage::exists(kWhitePath, true)) {
+    if (!whitelistReady() && storage::exists(kWhitePath, true)) {
         ui::message("Whitelist",
                     {"File non valido, > 4 KB o", "con voci malformate.",
                      "Correggi /wifilab/whitelist.txt."},
                     "WiFi Lab");
         return;
     }
-    if (g_whiteCount >= kMaxWhitelist) {
+    if (whitelistCount() >= kMaxWhitelist) {
         ui::message("Whitelist",
                     {"Massimo 24 voci.", "Riduci il file a mano."},
                     "WiFi Lab");
