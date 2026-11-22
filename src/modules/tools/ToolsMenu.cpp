@@ -290,9 +290,11 @@ std::string backupPath(const char* path) {
 }
 
 // Scrittura verificata: storage::writeText e' gia' atomico, ma qui si rilegge
-// il file prima di considerarlo salvato e solo dopo si rimuove un eventuale
-// .bak rimasto da un tentativo precedente.
-bool writeFileVerified(const char* path, const std::string& data, size_t maxBytes) {
+// il file prima di considerarlo salvato. Il .bak si rimuove solo quando il
+// contenuto precedente e' stato letto per intero (dropBackup): un errore di
+// lettura non deve distruggere l'ultima copia buona.
+bool writeFileVerified(const char* path, const std::string& data, size_t maxBytes,
+                       bool dropBackup = false) {
     if (!storage::writeText(path, data, true)) {
         return false;
     }
@@ -300,9 +302,11 @@ bool writeFileVerified(const char* path, const std::string& data, size_t maxByte
     if (!storage::readText(path, check, maxBytes, true) || check != data) {
         return false;
     }
-    const std::string bak = backupPath(path);
-    if (storage::exists(bak.c_str(), true)) {
-        storage::removeFile(bak.c_str(), true);
+    if (dropBackup) {
+        const std::string bak = backupPath(path);
+        if (storage::exists(bak.c_str(), true)) {
+            storage::removeFile(bak.c_str(), true);
+        }
     }
     return true;
 }
@@ -326,6 +330,8 @@ bool recoverBackup(const char* path, size_t maxBytes) {
 }
 
 // Aggiunge una riga a un file di testo preservando il contenuto esistente.
+// Se il file esiste ma non e' leggibile per intero non si appende nulla:
+// scrivere ora sostituirebbe i dati vecchi con la sola riga nuova.
 bool appendLine(const char* path, const std::string& line, size_t maxBytes) {
     if (!ensureToolsDir()) {
         return false;
@@ -334,7 +340,10 @@ bool appendLine(const char* path, const std::string& line, size_t maxBytes) {
         return false;
     }
     std::string data;
-    storage::readText(path, data, maxBytes, true);
+    const bool exists = storage::exists(path, true);
+    if (exists && !storage::readText(path, data, maxBytes, true)) {
+        return false;
+    }
     if (!data.empty() && data.back() != '\n') {
         data.push_back('\n');
     }
@@ -343,7 +352,7 @@ bool appendLine(const char* path, const std::string& line, size_t maxBytes) {
     if (data.size() > maxBytes) {
         return false;
     }
-    return writeFileVerified(path, data, maxBytes);
+    return writeFileVerified(path, data, maxBytes, exists);
 }
 
 // ---------------------------------------------------------------------------
@@ -555,11 +564,15 @@ struct CalEvent {
     std::string text;
 };
 
-std::vector<CalEvent> loadCalendar() {
-    std::vector<CalEvent> events;
+// false = file presente ma illeggibile (diverso da cartella vuota).
+bool loadCalendar(std::vector<CalEvent>& events) {
+    events.clear();
     std::string data;
+    if (!storage::exists(kCalendarPath, true)) {
+        return true;
+    }
     if (!storage::readText(kCalendarPath, data, kCalendarMax, true)) {
-        return events;
+        return false;
     }
     size_t pos = 0;
     while (pos < data.size() && events.size() < kCalendarEventsMax) {
@@ -593,7 +606,7 @@ std::vector<CalEvent> loadCalendar() {
         event.text = std::move(text);
         events.push_back(std::move(event));
     }
-    return events;
+    return true;
 }
 
 void drawCalendarMonth(int year, int month, int selected,
@@ -712,7 +725,13 @@ void calendarDay(int year, int month, int day, std::vector<CalEvent>& events) {
         }
         if (ev.type == navigation::Event::Text && (ev.ch == 'a' || ev.ch == 'A')) {
             addCalendarEvent(value);
-            events = loadCalendar();
+            std::vector<CalEvent> refreshed;
+            if (loadCalendar(refreshed)) {
+                events = std::move(refreshed);
+            } else {
+                ui::message("Calendario", {"!File non leggibile.", "Riapri il modulo."},
+                            "Utility");
+            }
             dirty = true;
         }
         delay(5);
@@ -731,7 +750,14 @@ void calendarScreen() {
                     "Utility");
         return;
     }
-    std::vector<CalEvent> events = loadCalendar();
+    std::vector<CalEvent> events;
+    if (!loadCalendar(events)) {
+        ui::message("Calendario",
+                    {"!File presente ma illeggibile.", "Controlla /tools/calendar.txt.",
+                     "Nessuna modifica effettuata."},
+                    "Utility");
+        return;
+    }
 
     const time_t now = time(nullptr);
     const bool valid = timeValid(now);
@@ -864,7 +890,9 @@ void drawNotes(const std::string& note, NoteSaveState state) {
 }
 
 bool saveNotes(const std::string& note) {
-    return ensureToolsDir() && writeFileVerified(kNotesPath, note, kNotesMax);
+    // Il chiamante entra nell'editor solo dopo aver letto la nota esistente
+    // per intero, quindi il .bak puo' essere sostituito.
+    return ensureToolsDir() && writeFileVerified(kNotesPath, note, kNotesMax, true);
 }
 
 void notesScreen() {
@@ -884,9 +912,13 @@ void notesScreen() {
         ui::message("Note", {"!File troppo grande.", "Il limite e' 1024 byte."}, "Utility");
         return;
     }
-    storage::readText(kNotesPath, note, kNotesMax, true);
-    if (note.size() > kNotesMax) {
-        note.resize(kNotesMax);
+    if (storage::exists(kNotesPath, true) &&
+        !storage::readText(kNotesPath, note, kNotesMax, true)) {
+        ui::message("Note",
+                    {"!Nota presente ma illeggibile.", "Controlla /tools/notes.txt.",
+                     "Nessuna modifica effettuata."},
+                    "Utility");
+        return;
     }
     note.erase(std::remove(note.begin(), note.end(), '\r'), note.end());
 
@@ -1273,11 +1305,15 @@ bool hotpCode(const TotpSecret& secret, uint64_t counter, uint32_t& code) {
     return true;
 }
 
-std::vector<TotpSecret> loadTotp() {
-    std::vector<TotpSecret> secrets;
+// false = file presente ma illeggibile (diverso da file assente/vuoto).
+bool loadTotp(std::vector<TotpSecret>& secrets) {
+    secrets.clear();
     std::string data;
+    if (!storage::exists(kTotpPath, true)) {
+        return true;
+    }
     if (!storage::readText(kTotpPath, data, kTotpMax, true)) {
-        return secrets;
+        return false;
     }
     size_t pos = 0;
     while (pos < data.size() && secrets.size() < kTotpSecretsMax) {
@@ -1314,7 +1350,7 @@ std::vector<TotpSecret> loadTotp() {
         }
         secrets.push_back(std::move(secret));
     }
-    return secrets;
+    return true;
 }
 
 void drawTotp(const std::vector<TotpSecret>& secrets, int selected) {
@@ -1363,7 +1399,15 @@ void drawTotp(const std::vector<TotpSecret>& secrets, int selected) {
 }
 
 void addTotpSecret() {
-    if (loadTotp().size() >= kTotpSecretsMax) {
+    std::vector<TotpSecret> existing;
+    if (!loadTotp(existing)) {
+        ui::message("TOTP",
+                    {"!File presente ma illeggibile.", "Controlla /tools/totp.txt.",
+                     "Nessuna modifica effettuata."},
+                    "TOTP");
+        return;
+    }
+    if (existing.size() >= kTotpSecretsMax) {
         ui::message("TOTP",
                     {"!Limite di 16 segreti raggiunto.",
                      "Rimuovi una riga da /tools/totp.txt."},
@@ -1432,7 +1476,14 @@ void totpScreen() {
                     "Utility");
         return;
     }
-    std::vector<TotpSecret> secrets = loadTotp();
+    std::vector<TotpSecret> secrets;
+    if (!loadTotp(secrets)) {
+        ui::message("TOTP",
+                    {"!File presente ma illeggibile.", "Controlla /tools/totp.txt.",
+                     "Nessuna modifica effettuata."},
+                    "Utility");
+        return;
+    }
     int selected = 0;
     navigation::waitRelease();
     uint32_t lastDraw = 0;
@@ -1460,7 +1511,13 @@ void totpScreen() {
         } else if (ev.type == navigation::Event::Text &&
                    (ev.ch == 'a' || ev.ch == 'A')) {
             addTotpSecret();
-            secrets = loadTotp();
+            std::vector<TotpSecret> refreshed;
+            if (loadTotp(refreshed)) {
+                secrets = std::move(refreshed);
+            } else {
+                ui::message("TOTP", {"!File non leggibile.", "Riapri il modulo."},
+                            "TOTP");
+            }
             lastDraw = 0;
         }
         delay(5);

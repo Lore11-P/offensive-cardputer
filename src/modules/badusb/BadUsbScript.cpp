@@ -655,8 +655,9 @@ bool runScript(const std::string& path, const std::string& name, bool preferSd) 
         }
 
         if (!parseLine(text, action)) {
-            logger::warn("BadUSB: riga %u non riconosciuta: %s",
-                         static_cast<unsigned>(lineNo), text.c_str());
+            // Mai il testo: la seriale della build HID e' la porta del target.
+            logger::warn("BadUSB: riga %u non riconosciuta",
+                         static_cast<unsigned>(lineNo));
             continue;
         }
 

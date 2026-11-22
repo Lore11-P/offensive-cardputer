@@ -2147,12 +2147,11 @@ void browseFiles(const std::string& path, int depth) {
         return;
     }
     std::vector<storage::Entry> entries;
+    bool truncated = false;
     {
         SdGuard sd;
-        entries = storage::listEntries(path, true);
-    }
-    if (entries.size() > 150) {
-        entries.resize(150);
+        // Tetto al vettore: una cartella enorme non deve esaurire l'heap.
+        entries = storage::listEntries(path, true, 150, &truncated);
     }
     if (entries.empty()) {
         ui::message("Scegli file", {"Cartella vuota.", path}, "ESP-NOW");
@@ -2169,7 +2168,8 @@ void browseFiles(const std::string& path, int depth) {
             menu.addItem(entry.name, "file", [child] { chooseFile(child); });
         }
     }
-    menu.setHint("ESC=indietro  ENTER=scegli");
+    menu.setHint(truncated ? "prime 150 voci  ESC=indietro"
+                           : "ESC=indietro  ENTER=scegli");
     menu.run(true);
 }
 
@@ -2243,9 +2243,10 @@ void verifyInboxFile(const std::string& path) {
 
 void deleteInboxFile() {
     std::vector<storage::Entry> entries;
+    bool truncated = false;
     {
         SdGuard sd;
-        entries = storage::listEntries(kInboxDir, true);
+        entries = storage::listEntries(kInboxDir, true, 256, &truncated);
     }
     std::vector<storage::Entry> files;
     for (const storage::Entry& entry : entries) {
@@ -2254,6 +2255,12 @@ void deleteInboxFile() {
         }
     }
     if (files.empty()) {
+        if (truncated) {
+            ui::message("Cancella file",
+                        {"!Prime 256 voci senza file.", "Cartella parziale."},
+                        "ESP-NOW > Inbox");
+            return;
+        }
         ui::message("Cancella file", {"Inbox vuota."}, "ESP-NOW > Inbox");
         return;
     }
@@ -2275,6 +2282,9 @@ void deleteInboxFile() {
                         "ESP-NOW > Inbox");
         });
     }
+    if (truncated) {
+        menu.setHint("prime 256 voci  ESC=indietro");
+    }
     menu.run(true);
 }
 
@@ -2284,9 +2294,10 @@ void inboxMenu() {
         return;
     }
     std::vector<storage::Entry> entries;
+    bool truncated = false;
     {
         SdGuard sd;
-        entries = storage::listEntries(kInboxDir, true);
+        entries = storage::listEntries(kInboxDir, true, 256, &truncated);
     }
     std::vector<storage::Entry> files;
     for (const storage::Entry& entry : entries) {
@@ -2296,6 +2307,12 @@ void inboxMenu() {
         files.push_back(entry);
     }
     if (files.empty()) {
+        if (truncated) {
+            ui::message("Inbox",
+                        {"!Prime 256 voci senza file.", "Cartella parziale."},
+                        "ESP-NOW");
+            return;
+        }
         ui::message("Inbox",
                     {"Nessun file ricevuto.", "I file arrivano in",
                      "/espnow/inbox/."},
@@ -2310,7 +2327,8 @@ void inboxMenu() {
     }
     menu.addSeparator("Gestione");
     menu.addItem("Cancella file...", "settings", deleteInboxFile);
-    menu.setHint("ESC=indietro  ENTER=verifica");
+    menu.setHint(truncated ? "prime 256 voci  ESC=indietro"
+                           : "ESC=indietro  ENTER=verifica");
     menu.run(true);
 }
 

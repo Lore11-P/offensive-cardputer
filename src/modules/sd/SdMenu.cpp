@@ -131,12 +131,9 @@ void browse(const std::string& path) {
         return;
     }
 
-    std::vector<storage::Entry> entries = storage::listEntries(path, true);
-    constexpr size_t kMaxEntries = 200;
-    const bool truncated = entries.size() > kMaxEntries;
-    if (truncated) {
-        entries.resize(kMaxEntries);
-    }
+    // Tetto al vettore: una cartella con migliaia di file esaurirebbe l'heap.
+    bool truncated = false;
+    std::vector<storage::Entry> entries = storage::listEntries(path, true, 200, &truncated);
     MenuManager menu("Sfoglia", path == "/" ? "SD" : path);
     ++depth;
     for (const auto& entry : entries) {

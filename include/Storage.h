@@ -32,13 +32,27 @@ bool remountSD();
 File openRead(const std::string& path, bool preferSD = false);
 bool exists(const std::string& path, bool preferSD = false);
 
+// Accesso a un backend specifico: onSd=true solo microSD, false solo LittleFS.
+// exists()/removeFile() ripiegano sull'altro filesystem, questi no.
+bool existsOn(const std::string& path, bool onSd);
+bool removeFileOn(const std::string& path, bool onSd);
+
+// Tetto suggerito per i chiamanti che lo richiedono (0 = illimitato).
+constexpr size_t kListMax = 256;
+
 // Elenca file o directory in un path logico (es. "/ir").
 // Se dirsOnly e' true restituisce solo directory, altrimenti solo file.
+// maxEntries > 0 limita il vettore; truncated (se non nullo) segnala che
+// la directory conteneva altre voci. maxEntries = 0 elenca tutto.
 std::vector<std::string> list(const std::string& path, bool dirsOnly,
-                              bool preferSD = false);
+                              bool preferSD = false,
+                              size_t maxEntries = 0,
+                              bool* truncated = nullptr);
 
 // Elenca file e directory con dimensione, directory prima dei file.
-std::vector<Entry> listEntries(const std::string& path, bool preferSD = true);
+std::vector<Entry> listEntries(const std::string& path, bool preferSD = true,
+                               size_t maxEntries = 0,
+                               bool* truncated = nullptr);
 
 // Legge un file di testo con limite massimo (protezione da file enormi).
 // false se il file e' assente, se un errore interrompe la lettura o se il file
