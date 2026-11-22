@@ -311,16 +311,43 @@ bool normalizeKey(std::string& key) {
     return true;
 }
 
+// Rimuove key.txt, key.txt.tmp e key.txt.bak da un backend.
+void removeKeyCopies(bool onSd) {
+    for (const char* suffix : {"", ".tmp", ".bak"}) {
+        const std::string path = std::string(kKeyPath) + suffix;
+        if (storage::existsOn(path, onSd)) {
+            storage::removeFileOn(path, onSd);
+        }
+    }
+}
+
+bool keyExistsOn(bool onSd) {
+    for (const char* suffix : {"", ".tmp", ".bak"}) {
+        if (storage::existsOn(std::string(kKeyPath) + suffix, onSd)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Un solo backend per la chiave: la microSD. LittleFS non viene piu' usato
+// per load/save, cosi' inserire o togliere la card non cambia la chiave vista.
 bool loadKey(std::string& key) {
-    if (!storage::readText(kKeyPath, key, 128, useSD())) {
+    if (!storage::readText(kKeyPath, key, 128, true)) {
         return false;
     }
     return normalizeKey(key);
 }
 
 bool saveKey(const std::string& key) {
-    storage::mkdir(kDir, useSD());
-    return storage::writeText(kKeyPath, key + "\n", useSD());
+    storage::mkdir(kDir, true);
+    if (!storage::writeText(kKeyPath, key + "\n", true)) {
+        return false;
+    }
+    // Migrazione esplicita: la vecchia copia su LittleFS non deve
+    // ricomparire quando la SD viene rimossa.
+    removeKeyCopies(false);
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -795,14 +822,18 @@ bool captureCracked(const std::string& name, const CrackIndex& index, std::strin
     return true;
 }
 
-bool loadCaptures(std::vector<Capture>& items, bool scanPasswords) {
+bool loadCaptures(std::vector<Capture>& items, bool scanPasswords,
+                  bool* truncated = nullptr) {
     items.clear();
     if (!storage::hasSD() && !storage::hasLittleFS()) {
         return false;
     }
     const bool sd = useSD();
+    bool listTruncated = false;
+    // Tetto al vettore: /captures puo' contenere migliaia di file.
     const std::vector<storage::Entry> entries =
-        storage::listEntries(pcaptools::kCaptureDir, sd);
+        storage::listEntries(pcaptools::kCaptureDir, sd, storage::kListMax,
+                             &listTruncated);
     std::string registry;
     storage::readText(kUploadedPath, registry, kMaxUploadedBytes, sd);
 
@@ -834,6 +865,9 @@ bool loadCaptures(std::vector<Capture>& items, bool scanPasswords) {
         }
         return a.name < b.name;
     });
+    if (truncated) {
+        *truncated = listTruncated;
+    }
     return true;
 }
 
@@ -1936,11 +1970,23 @@ void showDetail(const Capture& item) {
 
 void listCapturesFlow() {
     std::vector<Capture> items;
-    if (!loadCaptures(items, true)) {
+    bool truncated = false;
+    if (!loadCaptures(items, true, &truncated)) {
         ui::message("Catture", {"!Nessun filesystem disponibile."}, kModuleName);
         return;
     }
+    if (truncated) {
+        ui::message("Catture",
+                    {"!Solo le prime 256 catture.", "Archivia o elimina i file vecchi."},
+                    kModuleName);
+    }
     if (items.empty()) {
+        if (truncated) {
+            ui::message("Catture",
+                        {"!Prime 256 voci senza catture.", "Archivia o elimina i file vecchi."},
+                        kModuleName);
+            return;
+        }
         ui::message("Catture",
                     {"Nessun file in /captures.", "Registra con WiFi > Sniffer",
                      "oppure converti un .pcap."},
@@ -1962,11 +2008,23 @@ void uploadFlow() {
     }
 
     std::vector<Capture> items;
-    if (!loadCaptures(items, true)) {
+    bool truncated = false;
+    if (!loadCaptures(items, true, &truncated)) {
         ui::message("Upload", {"!Nessun filesystem disponibile."}, kModuleName);
         return;
     }
+    if (truncated) {
+        ui::message("Upload",
+                    {"!Solo le prime 256 catture.", "Archivia o elimina i file vecchi."},
+                    kModuleName);
+    }
     if (items.empty()) {
+        if (truncated) {
+            ui::message("Upload",
+                        {"!Prime 256 voci senza catture.", "Archivia o elimina i file vecchi."},
+                        kModuleName);
+            return;
+        }
         ui::message("Upload", {"Nessun file in /captures."}, kModuleName);
         return;
     }
@@ -2102,6 +2160,13 @@ void downloadFlow() {
 // ---------------------------------------------------------------------------
 
 void setKeyFlow() {
+    if (!storage::hasSD()) {
+        ui::message("Chiave",
+                    {"!microSD assente.", "La chiave viene salvata solo",
+                     "sulla microSD rimovibile."},
+                    kModuleName);
+        return;
+    }
     std::vector<textinput::Field> fields = {
         {"Chiave API (32 hex)", "", 32, true, false},
     };
@@ -2120,29 +2185,48 @@ void setKeyFlow() {
                     kModuleName);
         return;
     }
+    if (!ui::confirm("Chiave WPA-SEC",
+                     {"Salvare la chiave in chiaro", "sulla microSD rimovibile?",
+                      "Chi legge la card puo' usarla."},
+                     kModuleName)) {
+        return;
+    }
     if (!saveKey(key)) {
         ui::message("Chiave", {"!Salvataggio non riuscito.", "Verifica la microSD."},
                     kModuleName);
         return;
     }
-    ui::message("Chiave", {">Chiave API salvata.", "Non verra' mostrata ne'",
-                           "scritta nei log."},
+    ui::message("Chiave", {">Chiave API salvata.", "In chiaro su SD rimovibile.",
+                           "Non verra' mostrata ne' scritta nei log."},
                 kModuleName);
 }
 
 void clearKeyFlow() {
-    const bool sd = useSD();
-    if (!storage::exists(kKeyPath, sd)) {
+    if (!storage::hasSD()) {
+        ui::message("Cancella chiave",
+                    {"!microSD assente.", "Inserisci la card per revocare",
+                     "la chiave salvata su SD."},
+                    kModuleName);
+        return;
+    }
+    // La chiave puo' esistere su entrambi i filesystem (versioni precedenti):
+    // la revoca deve rimuovere key.txt, .tmp e .bak da SD e LittleFS.
+    if (!keyExistsOn(true) && !keyExistsOn(false)) {
         ui::message("Cancella chiave", {"Nessuna chiave salvata."}, kModuleName);
         return;
     }
     if (!ui::confirm("Cancella chiave",
-                     {"Rimuovere la chiave API da", "/wpasec/key.txt?"}, kModuleName)) {
+                     {"Rimuovere la chiave API da", "microSD e LittleFS?"},
+                     kModuleName)) {
         return;
     }
-    const bool removed = storage::removeFile(kKeyPath, sd);
+    removeKeyCopies(true);
+    removeKeyCopies(false);
+    const bool remaining = keyExistsOn(true) || keyExistsOn(false);
     ui::message("Cancella chiave",
-                {removed ? ">Chiave cancellata." : "!Cancellazione non riuscita."},
+                {remaining ? "!Cancellazione non riuscita."
+                           : ">Chiave cancellata.",
+                 remaining ? "Una copia e' ancora presente." : "Nessuna copia residua."},
                 kModuleName);
 }
 
@@ -2157,8 +2241,10 @@ void statusFlow() {
 
     uint32_t hc = 0;
     uint32_t pcap = 0;
+    bool capturesTruncated = false;
     const std::vector<storage::Entry> entries =
-        storage::listEntries(pcaptools::kCaptureDir, sd);
+        storage::listEntries(pcaptools::kCaptureDir, sd, storage::kListMax,
+                             &capturesTruncated);
     for (const auto& entry : entries) {
         if (entry.isDir) {
             continue;
@@ -2195,9 +2281,15 @@ void statusFlow() {
     const bool hasPotfile = index.build();
 
     std::vector<std::string> lines;
-    lines.push_back(std::string("Chiave: ") + (hasKey ? "presente" : "assente"));
+    lines.push_back(std::string("Chiave: ") +
+                    (hasKey ? "presente su SD"
+                            : (storage::hasSD() ? "assente" : "assente (SD non montata)")));
+    if (storage::existsOn(kKeyPath, false)) {
+        lines.push_back("!Copia su LittleFS ignorata.");
+    }
     lines.push_back("Catture: " + std::to_string(hc + pcap) + " (hc " +
-                    std::to_string(hc) + ", pcap " + std::to_string(pcap) + ")");
+                    std::to_string(hc) + ", pcap " + std::to_string(pcap) + ")" +
+                    (capturesTruncated ? " prime 256" : ""));
     lines.push_back("Inviati: " + std::to_string(uploaded));
     if (hasPotfile) {
         lines.push_back("Potfile: " + formatSize(storage::fileSize(kPotfilePath, sd)) +

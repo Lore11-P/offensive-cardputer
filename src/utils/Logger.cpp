@@ -7,6 +7,11 @@ namespace logger {
 namespace detail {
 
 void writeLine(char level, const char* fmt, ...) {
+#if defined(ORBIT_DISABLE_LOGGER) && ORBIT_DISABLE_LOGGER
+    // Build HID: la CDC e' la porta del target, nessun log.
+    (void)level;
+    (void)fmt;
+#else
     char line[kLineLen];
     line[0] = '[';
     line[1] = 'F';
@@ -30,6 +35,7 @@ void writeLine(char level, const char* fmt, ...) {
     }
     line[len++] = '\n';
     Serial.write(reinterpret_cast<const uint8_t*>(line), len);
+#endif
 }
 
 }  // namespace detail

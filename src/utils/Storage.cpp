@@ -146,8 +146,24 @@ bool exists(const std::string& path, bool preferSD) {
     return false;
 }
 
-std::vector<std::string> list(const std::string& path, bool dirsOnly, bool preferSD) {
+bool existsOn(const std::string& path, bool onSd) {
+    if (onSd) {
+        return g_sd && SD.exists(sdPath(path).c_str());
+    }
+    return g_littlefs && LittleFS.exists(path.c_str());
+}
+
+bool removeFileOn(const std::string& path, bool onSd) {
+    if (onSd) {
+        return g_sd && SD.remove(sdPath(path).c_str());
+    }
+    return g_littlefs && LittleFS.remove(path.c_str());
+}
+
+std::vector<std::string> list(const std::string& path, bool dirsOnly, bool preferSD,
+                              size_t maxEntries, bool* truncated) {
     std::vector<std::string> out;
+    bool full = false;
     auto collect = [&](fs::FS& filesystem, const std::string& base) {
         File dir = filesystem.open(base.c_str(), FILE_READ);
         if (!dir || !dir.isDirectory()) {
@@ -157,7 +173,12 @@ std::vector<std::string> list(const std::string& path, bool dirsOnly, bool prefe
         while (entry) {
             std::string name = trimEntryName(entry.name());
             if (name.size() && name[0] != '.' && entry.isDirectory() == dirsOnly) {
-                out.push_back(name);
+                if (maxEntries != 0 && out.size() >= maxEntries) {
+                    full = true;
+                    entry.close();
+                    break;
+                }
+                out.push_back(std::move(name));
             }
             entry.close();
             entry = dir.openNextFile();
@@ -173,17 +194,22 @@ std::vector<std::string> list(const std::string& path, bool dirsOnly, bool prefe
         if (g_littlefs) {
             collect(LittleFS, path);
         }
-        if (g_sd) {
+        if (g_sd && !full) {
             collect(SD, sdPath(path));
         }
     }
     std::sort(out.begin(), out.end());
     out.erase(std::unique(out.begin(), out.end()), out.end());
+    if (truncated) {
+        *truncated = full;
+    }
     return out;
 }
 
-std::vector<Entry> listEntries(const std::string& path, bool preferSD) {
+std::vector<Entry> listEntries(const std::string& path, bool preferSD,
+                               size_t maxEntries, bool* truncated) {
     std::vector<Entry> out;
+    bool full = false;
     auto collect = [&](fs::FS& filesystem, const std::string& base, bool onSd) {
         File dir = filesystem.open(base.c_str(), FILE_READ);
         if (!dir || !dir.isDirectory()) {
@@ -193,6 +219,11 @@ std::vector<Entry> listEntries(const std::string& path, bool preferSD) {
         while (entry) {
             std::string name = trimEntryName(entry.name());
             if (name.size() && name[0] != '.') {
+                if (maxEntries != 0 && out.size() >= maxEntries) {
+                    full = true;
+                    entry.close();
+                    break;
+                }
                 Entry item;
                 item.name = name;
                 item.isDir = entry.isDirectory();
@@ -214,7 +245,7 @@ std::vector<Entry> listEntries(const std::string& path, bool preferSD) {
         if (g_littlefs) {
             collect(LittleFS, path, false);
         }
-        if (g_sd) {
+        if (g_sd && !full) {
             collect(SD, sdPath(path), true);
         }
     }
@@ -230,6 +261,9 @@ std::vector<Entry> listEntries(const std::string& path, bool preferSD) {
                               return a.name == b.name && a.isDir == b.isDir;
                           }),
               out.end());
+    if (truncated) {
+        *truncated = full;
+    }
     return out;
 }
 
@@ -318,9 +352,14 @@ bool writeAtomic(fs::FS& filesystem, const char* backend,
         return true;
     }
     const std::string bak = path + ".bak";
+    // Senza file principale non c'e' nulla da spostare e il .bak esistente
+    // puo' essere l'unica copia: non va rimosso.
+    if (!filesystem.exists(path.c_str())) {
+        filesystem.remove(tmp.c_str());
+        return false;
+    }
     filesystem.remove(bak.c_str());  // residuo di un tentativo precedente
-    if (!filesystem.exists(path.c_str()) ||
-        !filesystem.rename(path.c_str(), bak.c_str())) {
+    if (!filesystem.rename(path.c_str(), bak.c_str())) {
         filesystem.remove(tmp.c_str());
         return false;
     }
