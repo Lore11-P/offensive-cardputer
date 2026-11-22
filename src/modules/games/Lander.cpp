@@ -7,6 +7,7 @@
 #include <cstdio>
 
 #include "Display.h"
+#include "Logger.h"
 #include "ModuleFlags.h"
 #include "Navigation.h"
 #include "Scores.h"
@@ -263,6 +264,15 @@ void runLander() {
         Phase phase = Phase::Fly;
         int attemptsLeft = 3;
         uint32_t score = 0;
+        // Il record si scrive una volta sola a fine partita o su ESC.
+        uint32_t pendingScore = 0;
+        const auto persist = [&] {
+            if (pendingScore > 0 && !scores::submit("lander", pendingScore)) {
+                logger::warn("Lander: record non salvato (%u)",
+                             static_cast<unsigned>(pendingScore));
+            }
+            pendingScore = 0;
+        };
         uint32_t lastTone = 0;
         const uint32_t gameStart = millis();
 
@@ -283,6 +293,7 @@ void runLander() {
             navigation::update();
             const navigation::EventData ev = navigation::poll();
             if (ev.type == navigation::Event::Back) {
+                persist();
                 return;
             }
             const uint32_t now = millis();
@@ -356,7 +367,7 @@ void runLander() {
                         score = static_cast<uint32_t>(
                             1000 + iround(ship.fuel * 3.0f) +
                             iround(500.0f * clampf(quality, 0.0f, 1.0f)));
-                        scores::submit("lander", score);
+                        pendingScore = std::max(pendingScore, score);
                         best = std::max(best, score);
                         ship.vx = 0.0f;
                         ship.vy = 0.0f;
@@ -377,6 +388,7 @@ void runLander() {
                         phase = Phase::Fly;
                         lastFrame = millis();
                     } else {
+                        persist();
                         break;  // nuova partita, nuovo terreno
                     }
                 }

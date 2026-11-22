@@ -1,5 +1,8 @@
 param(
     [string]$Port = "",
+    # Stesso rate validato in platformio.ini: la USB-Serial-JTAG nativa e'
+    # instabile a 1,5 Mbaud.
+    [int]$Baud = 460800,
     [switch]$Erase
 )
 
@@ -37,6 +40,7 @@ if ("$esptoolVersion" -match '^\s*(\d+)') {
 }
 if ($esptoolMajor -ge 5) {
     $eraseCmd = "erase-flash"
+    $eraseRegionCmd = "erase-region"
     $writeCmd = "write-flash"
     $resetBefore = "default-reset"
     $resetAfter = "hard-reset"
@@ -45,6 +49,7 @@ if ($esptoolMajor -ge 5) {
     $flashSizeFlag = "--flash-size"
 } else {
     $eraseCmd = "erase_flash"
+    $eraseRegionCmd = "erase_region"
     $writeCmd = "write_flash"
     $resetBefore = "default_reset"
     $resetAfter = "hard_reset"
@@ -56,7 +61,7 @@ if ($esptoolMajor -ge 5) {
 $common = @(
     "-m", "esptool",
     "--chip", "esp32s3",
-    "--baud", "1500000",
+    "--baud", "$Baud",
     "--before", $resetBefore,
     "--after", $resetAfter
 )
@@ -69,6 +74,14 @@ if ($Erase) {
     & python @common $eraseCmd
     if ($LASTEXITCODE -ne 0) {
         throw "Cancellazione della flash non riuscita."
+    }
+} else {
+    # otadata (0xE000, 8 KB): senza cancellazione il bootloader puo' avviare
+    # la vecchia app1 rimasta da un OTA precedente. NVS (0x9000) non si tocca.
+    Write-Host "Reset selezione OTA (otadata)..." -ForegroundColor Cyan
+    & python @common $eraseRegionCmd 0xE000 0x2000
+    if ($LASTEXITCODE -ne 0) {
+        throw "Cancellazione di otadata non riuscita."
     }
 }
 

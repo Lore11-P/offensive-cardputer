@@ -34,7 +34,14 @@ Con porta esplicita e cancellazione completa:
 ```
 
 Se la porta non viene rilevata: tieni premuto **G0**, reinserisci il cavo USB,
-ripeti il comando. Il baud rate predefinito è 1500000.
+ripeti il comando. Il baud rate predefinito è **460800**, lo stesso validato in
+`platformio.ini` per la USB-Serial-JTAG della Cardputer; si può cambiare con
+`-Baud` (es. `.\flash.bat -Baud 115200`).
+
+Lo script cancella sempre la regione `otadata` (`0xE000`, 8 KB): senza questo
+passo un device aggiornato via OTA può ripartire dalla vecchia `app1` e sembrare
+non aggiornato. La NVS (impostazioni) non viene toccata; `-Erase` resta per la
+cancellazione completa.
 
 ## Flasher web
 

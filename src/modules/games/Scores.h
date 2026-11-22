@@ -9,7 +9,12 @@ namespace scores {
 // L'API usa const char*: le chiamate passano tutti string literal e cosi'
 // non serve costruire std::string per ogni lettura/scrittura.
 uint32_t best(const char* game);
-void submit(const char* game, uint32_t score);
+// false solo se la scrittura fallisce (file illeggibile o filesystem pieno).
+bool submit(const char* game, uint32_t score);
+// Backend usato per leggere e scrivere /scores.txt (SD se montata).
+bool preferSD();
+// Unisce su SD i record rimasti su LittleFS, se la SD e' montata.
+void mergeBackends();
 
 }  // namespace scores
 }  // namespace games

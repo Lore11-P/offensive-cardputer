@@ -17,6 +17,9 @@
 #include "Navigation.h"
 #include "Storage.h"
 #include "Ui.h"
+#if ENABLE_MODULE_GAMES
+#include "modules/games/Scores.h"
+#endif
 
 #if ENABLE_MODULE_SD
 
@@ -205,6 +208,10 @@ void backupConfig() {
     storage::mkdir("/backup", true);
     const bool ok = storage::writeText("/backup/config.json", config::toJson(), true);
 
+#if ENABLE_MODULE_GAMES
+    // I record scritti su LittleFS senza card finiscono su SD prima del backup.
+    games::scores::mergeBackends();
+#endif
     std::string scores;
     if (storage::readText("/scores.txt", scores, 4096, true)) {
         storage::writeText("/backup/scores.txt", scores, true);
@@ -215,10 +222,18 @@ void backupConfig() {
 }
 
 void showScores() {
+#if ENABLE_MODULE_GAMES
+    games::scores::mergeBackends();
+    const bool preferSD = games::scores::preferSD();
+    const char* backend = preferSD ? "SD" : "LittleFS";
+#else
+    const bool preferSD = storage::hasSD();
+    const char* backend = preferSD ? "SD" : "LittleFS";
+#endif
     std::string text;
-    if (!storage::readText("/scores.txt", text, 4096, true) || text.empty()) {
+    if (!storage::readText("/scores.txt", text, 4096, preferSD) || text.empty()) {
         ui::message("Punteggi", {"Nessun punteggio salvato.", "Gioca e ottieni un record!"},
-                    "SD");
+                    backend);
         return;
     }
     std::vector<std::string> lines;
@@ -250,7 +265,7 @@ void showScores() {
     if (lines.size() > 8) {
         lines.resize(8);
     }
-    ui::message("Punteggi", lines, "SD");
+    ui::message("Punteggi", lines, backend);
 }
 
 }  // namespace
