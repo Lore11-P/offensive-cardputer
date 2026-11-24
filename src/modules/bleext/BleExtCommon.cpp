@@ -42,14 +42,14 @@ void buildRecord(NimBLEAdvertisedDevice* device, AdvertRecord& record) {
   record.connectable = device->isConnectable();
 
   const size_t length = device->getPayloadLength();
-  record.payloadLen = static_cast<uint16_t>(std::min<size_t>(length, 255));
+  // Lunghezza dichiarata (per la telemetria "troncati"), copia max 31 byte.
+  record.payloadLen = static_cast<uint8_t>(std::min<size_t>(length, 255));
   const uint8_t* payload = (length > 0) ? device->getPayload() : nullptr;
   if (payload == nullptr) {
     return;
   }
   const size_t copyLen = std::min<size_t>(length, sizeof(record.payload));
   std::memcpy(record.payload, payload, copyLen);
-  record.payloadLen = static_cast<uint16_t>(copyLen);
 
   size_t i = 0;
   while (i + 1 < length) {
@@ -78,6 +78,7 @@ void buildRecord(NimBLEAdvertisedDevice* device, AdvertRecord& record) {
       record.hasName = nameLen > 0;
     } else if (type == 0xFF && dataLen >= 2) {
       record.companyId = static_cast<uint16_t>(data[0] | (data[1] << 8));
+      // Bastano i primi 4 byte per AirTag/FindMy; il record e' x64.
       record.manufacturerLen =
           static_cast<uint8_t>(std::min<size_t>(dataLen, sizeof(record.manufacturer)));
       std::memcpy(record.manufacturer, data, record.manufacturerLen);
@@ -144,6 +145,9 @@ char lowerAscii(char c) {
 }
 
 }  // namespace
+
+// Definito qui perche' tutte le schermate BLE+ lo usano a turno.
+DeviceSummary g_deviceRows[kMaxDevices];
 
 void ensureBle() {
   if (NimBLEDevice::getInitialized()) {

@@ -33,8 +33,6 @@ uint32_t g_lastFlushMs = 0;
 // Righe gia' scritte nel CSV: il file viene solo accodato, mai riscritto.
 int g_flushedRows = 0;
 
-DeviceSummary g_rows[kMaxDevices];
-
 std::string csvEscapeName(const char* name) {
   std::string clean;
   for (const char* p = name; *p != '\0'; ++p) {
@@ -86,21 +84,22 @@ bool writeWardrivingCsv() {
       "timestamp_ms,mac,name,vendor_oui,rssi,adv_type,service_uuid_count\n";
   bool ok = !create || file.print(header) == std::strlen(header);
 
-  const int count = snapshotSummaries(g_rows, kMaxDevices, false);
+  const int count = snapshotSummaries(g_deviceRows, kMaxDevices, false);
   if (g_flushedRows > count) {
     g_flushedRows = count;
   }
   for (int i = g_flushedRows; ok && i < count; ++i) {
-    const std::string name =
-        g_rows[i].hasName ? csvEscapeName(g_rows[i].name) : std::string();
-    const std::string oui(g_rows[i].address, 8);
+    const std::string name = g_deviceRows[i].hasName
+                                 ? csvEscapeName(g_deviceRows[i].name)
+                                 : std::string();
+    const std::string oui(g_deviceRows[i].address, 8);
     char line[160];
     std::snprintf(line, sizeof(line), "%lu,%s,%s,%s,%d,%u,%u\n",
-                  static_cast<unsigned long>(g_rows[i].bestSeenMs),
-                  g_rows[i].address, name.c_str(), oui.c_str(),
-                  static_cast<int>(g_rows[i].bestRssi),
-                  static_cast<unsigned>(advEventToPdu(g_rows[i].advType)),
-                  static_cast<unsigned>(g_rows[i].serviceUuidCount));
+                  static_cast<unsigned long>(g_deviceRows[i].bestSeenMs),
+                  g_deviceRows[i].address, name.c_str(), oui.c_str(),
+                  static_cast<int>(g_deviceRows[i].bestRssi),
+                  static_cast<unsigned>(advEventToPdu(g_deviceRows[i].advType)),
+                  static_cast<unsigned>(g_deviceRows[i].serviceUuidCount));
     if (file.print(line) != std::strlen(line)) {
       ok = false;
       break;

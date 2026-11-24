@@ -36,9 +36,11 @@ struct AdvertRecord {
   int8_t rssi = -127;
   int8_t bestRssi = -127;
   uint8_t manufacturerLen = 0;
-  uint8_t manufacturer[32] = {0};
-  uint16_t payloadLen = 0;
-  uint8_t payload[62] = {0};
+  // Servono solo company ID (2 byte) e tipo FindMy (byte 2-3): il resto
+  // resta in payload[], gia' copiato per la cattura.
+  uint8_t manufacturer[4] = {0};
+  uint8_t payloadLen = 0;  // payload legacy, max 31 byte
+  uint8_t payload[31] = {0};
   uint8_t serviceUuidCount = 0;
   uint8_t tags = 0;
   bool hasName = false;
@@ -50,6 +52,9 @@ struct AdvertRecord {
   uint32_t bestSeenMs = 0;
   uint32_t hits = 0;
 };
+
+// Il record vive 64 volte nella tabella: ogni byte qui costa 64 in RAM.
+static_assert(sizeof(AdvertRecord) <= 124, "AdvertRecord oltre il budget RAM");
 
 struct DeviceSummary {
   char address[18] = {0};
@@ -68,6 +73,10 @@ struct DeviceSummary {
   uint32_t bestSeenMs = 0;
   uint32_t hits = 0;
 };
+
+// Buffer unico per le righe delle schermate BLE+ (sono seriali): una copia
+// da 64 record invece di cinque, ~19 KB di RAM risparmiati.
+extern DeviceSummary g_deviceRows[kMaxDevices];
 
 // Handler statico invocato dal callback unico di scansione. Tutte le funzioni
 // registrate hanno durata pari al programma: nessun puntatore a stack.
