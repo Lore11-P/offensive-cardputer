@@ -248,6 +248,20 @@ bool drawOrbitIcon(const std::string& id, int x, int y, int size, uint16_t tint)
         p.pix(3, 3, main);
         return true;
     }
+    if (id == "store") {
+        // Borsa con freccia di download: app store.
+        p.line(6, 5, 6, 2, main);
+        p.line(10, 5, 10, 2, main);
+        p.hline(6, 2, 5, main);
+        p.rect(2, 5, 12, 9, C(T_bg3));
+        p.frame(2, 5, 12, 9, main);
+        p.vline(8, 7, 5, hot);
+        p.line(8, 12, 5, 9, hot);
+        p.line(8, 12, 11, 9, hot);
+        p.dot(4, 7, alt);
+        p.dot(12, 7, alt);
+        return true;
+    }
     if (id == "sd") {
         p.rect(4, 2, 8, 12, C(T_bg3));
         p.frame(4, 2, 8, 12, main);

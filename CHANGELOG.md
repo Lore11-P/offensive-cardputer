@@ -2,6 +2,18 @@
 
 Tutte le modifiche rilevanti del progetto. Formato basato su Keep a Changelog.
 
+## [2.2.0] - 2026-11-24
+
+### Aggiunto
+
+- **Store giochi**: la voce Store scarica il catalogo `store/games.json` dal ramo `main` e salva i giochi Wren in `/games/<id>.wren` sulla microSD, con verifica SHA-256 prima della scrittura. Runtime sandbox con input, audio e schermo 240x135.
+- **Giochi iniziali**: Snake, Pong e Breakout, con titolo, comandi a schermo, `ENTER` per giocare/ripartire ed `ESC` per uscire.
+- **Catalogo**: `tools/build_store.py` rigenera `store/games.json` con dimensione e SHA-256; `store/README.md` documenta come aggiungere e pubblicare un gioco.
+
+### Rimosso
+
+- **Giochi compilati**: `ENABLE_MODULE_GAMES=0` nella build pubblica; i giochi si scaricano dallo Store e non occupano più flash.
+
 ## [2.1.0] - 2026-11-23
 
 ### Aggiunto

@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "games": [
+    {
+      "id": "breakout",
+      "name": "Breakout",
+      "version": "1.0",
+      "desc": "Rompi tutti i mattoni con tre vite.",
+      "url": "https://raw.githubusercontent.com/Lore11-P/offensive-cardputer/main/store/games/breakout.wren",
+      "size": 4714,
+      "sha256": "aa9dc94220af9830325542faabe330f12fd413de63dbd0c1367221d5f89d6bc2"
+    },
+    {
+      "id": "pong",
+      "name": "Pong",
+      "version": "1.0",
+      "desc": "Tu contro la CPU, primo a 5 punti.",
+      "url": "https://raw.githubusercontent.com/Lore11-P/offensive-cardputer/main/store/games/pong.wren",
+      "size": 4515,
+      "sha256": "5bfff42ae2a531090430cad570706c1bc29064951815dd8546b05208f8c2459a"
+    },
+    {
+      "id": "snake",
+      "name": "Snake",
+      "version": "1.0",
+      "desc": "Mangia e cresci senza morderti la coda. Griglia 20x10.",
+      "url": "https://raw.githubusercontent.com/Lore11-P/offensive-cardputer/main/store/games/snake.wren",
+      "size": 4406,
+      "sha256": "94357260fe8ed7fc19a20c2474864ba69432b8cd86a7d82c4c724ba368211573"
+    }
+  ]
+}
