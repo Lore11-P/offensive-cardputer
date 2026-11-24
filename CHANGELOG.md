@@ -2,6 +2,12 @@
 
 Tutte le modifiche rilevanti del progetto. Formato basato su Keep a Changelog.
 
+## [2.3.2] - 2026-11-24
+
+### Corretto
+
+- **Riavvio all'apertura dei giochi Wren**: il runtime ora gira in un task dedicato con 24 KB di stack, separato dal loop task da 16 KB; il compilatore Wren e' ricorsivo e poteva esaurire lo stack della UI. Il task viene distrutto a fine partita. Restano attivi il WiFi spento prima del gioco, la riserva esatta del codice e il limite heap della 2.3.1.
+
 ## [2.3.1] - 2026-11-24
 
 ### Corretto

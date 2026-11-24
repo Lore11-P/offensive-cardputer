@@ -1,6 +1,9 @@
 #include "GameRuntime.h"
 
 #include <Arduino.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+#include <freertos/task.h>
 
 #include <cstdint>
 #include <cstdio>
@@ -294,7 +297,7 @@ std::vector<std::string> errorLines() {
 
 }  // namespace
 
-bool runGame(const std::string& path) {
+static bool runGameInner(const std::string& path) {
     WrenInterpretResult result = WREN_RESULT_RUNTIME_ERROR;
     // Il WiFi dello Store non serve per giocare e occupa heap/TLS: spegnerlo
     // prima della VM evita OOM sui device senza PSRAM.
@@ -365,6 +368,51 @@ bool runGame(const std::string& path) {
         return false;
     }
     return true;
+}
+
+namespace {
+
+SemaphoreHandle_t g_gameDone = nullptr;
+
+struct GameJob {
+    const std::string* path = nullptr;
+    bool ok = false;
+};
+
+void gameTask(void* arg) {
+    GameJob* job = static_cast<GameJob*>(arg);
+    job->ok = runGameInner(*job->path);
+    xSemaphoreGive(g_gameDone);
+    vTaskDelete(nullptr);
+}
+
+}  // namespace
+
+bool runGame(const std::string& path) {
+    if (g_gameDone != nullptr) {
+        // Un gioco alla volta: la UI e' bloccante.
+        return false;
+    }
+    g_gameDone = xSemaphoreCreateBinary();
+    if (g_gameDone == nullptr) {
+        ui::message("Store", {"!Memoria insufficiente per il gioco."}, "Store");
+        return false;
+    }
+    GameJob job;
+    job.path = &path;
+    // Stack dedicato: il compilatore Wren e' ricorsivo e 16 KB del loopTask
+    // possono non bastare. Il task viene distrutto a fine partita.
+    if (xTaskCreatePinnedToCore(gameTask, "wren-game", 24 * 1024, &job, 1, nullptr, 1) !=
+        pdPASS) {
+        vSemaphoreDelete(g_gameDone);
+        g_gameDone = nullptr;
+        ui::message("Store", {"!Memoria insufficiente per il gioco."}, "Store");
+        return false;
+    }
+    xSemaphoreTake(g_gameDone, portMAX_DELAY);
+    vSemaphoreDelete(g_gameDone);
+    g_gameDone = nullptr;
+    return job.ok;
 }
 
 }  // namespace store
