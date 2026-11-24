@@ -10,12 +10,14 @@
 #include <string>
 
 #include "Display.h"
+#include "Logger.h"
 #include "ModuleFlags.h"
 #include "Navigation.h"
 #include "PowerTimer.h"
 #include "Storage.h"
 #include "Ui.h"
 #include "UsbLogic.h"
+#include "WifiSetup.h"
 
 #if ENABLE_MODULE_SD
 
@@ -26,9 +28,8 @@ constexpr uint32_t kHeaderTimeoutMs = 15000;
 constexpr uint32_t kChunkTimeoutMs = 10000;
 constexpr char kMagic[8] = {'O', 'R', 'B', 'I', 'T', 'P', 'U', 'T'};
 
-// Il loopTask ha 16 KB di stack: il buffer da 8 KB vive in .bss.
-uint8_t s_chunk[kChunkBytes];
-
+// Il buffer da 8 KB vive nell'heap solo durante il trasferimento: la RAM
+// statica resta libera per framebuffer/WiFi/Wren.
 enum class Rx { Ok, Timeout, Cancel };
 
 // Lettura non bloccante con timeout di inattivita' e poll della tastiera.
@@ -124,6 +125,12 @@ void runTransfer() {
     drawIdle();
     sendLine("ORBITPUT READY\n");
 
+    uint8_t* chunk = static_cast<uint8_t*>(malloc(kChunkBytes));
+    if (chunk == nullptr) {
+        ui::message("USB file", {"!Memoria insufficiente."}, "Sistema");
+        return;
+    }
+
     for (;;) {
         uint8_t raw[19];
         const Rx hr = readBytes(raw, sizeof(raw), kHeaderTimeoutMs);
@@ -218,7 +225,7 @@ void runTransfer() {
         while (written < size) {
             const size_t want =
                 std::min(kChunkBytes, static_cast<size_t>(size - written));
-            const Rx rr = readBytes(s_chunk, want, kChunkTimeoutMs);
+            const Rx rr = readBytes(chunk, want, kChunkTimeoutMs);
             if (rr != Rx::Ok) {
                 out.close();
                 SD.remove(tempPath.c_str());
@@ -233,7 +240,7 @@ void runTransfer() {
                 failed = true;
                 break;
             }
-            if (out.write(s_chunk, want) != want) {
+            if (out.write(chunk, want) != want) {
                 out.close();
                 SD.remove(tempPath.c_str());
                 sendLine("ERR write\n");
@@ -241,7 +248,7 @@ void runTransfer() {
                 failed = true;
                 break;
             }
-            crc = usb::crc32(s_chunk, want, crc);
+            crc = usb::crc32(chunk, want, crc);
             written += want;
             // Ridisegna prima dell'ACK: il PC non invia il chunk successivo
             // finche' non lo riceve e il buffer CDC non va in overflow.
@@ -293,6 +300,7 @@ void runTransfer() {
         drawIdle("File ricevuto", clean, true);
     }
 
+    free(chunk);
     navigation::waitRelease();
 }
 

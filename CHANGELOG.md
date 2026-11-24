@@ -2,6 +2,14 @@
 
 Tutte le modifiche rilevanti del progetto. Formato basato su Keep a Changelog.
 
+## [2.3.1] - 2026-11-24
+
+### Corretto
+
+- **Riavvio all'apertura di un gioco**: la VM Wren partiva con 32 KB di heap e il codice veniva riservato per 32 KB anche per giochi da 5 KB, con il WiFi dello Store ancora acceso. Ora il WiFi viene spento prima del gioco, la riserva e' esattamente la dimensione del file, l'heap iniziale Wren e' 16 KB e c'e' un controllo di heap minimo con messaggio invece del crash.
+- **USB**: il buffer da 8 KB non e' piu' statico ma allocato solo durante il trasferimento, restituendo 8 KB di RAM al resto del firmware.
+- **Store**: il download riconnette il WiFi se un gioco precedente lo ha spento.
+
 ## [2.3.0] - 2026-11-24
 
 ### Aggiunto

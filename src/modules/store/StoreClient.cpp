@@ -247,6 +247,12 @@ bool downloadGame(const GameInfo& info, const std::string& parent) {
         ui::message("Store", {"!Voce di catalogo non valida."}, parent);
         return false;
     }
+    // Dopo un gioco il WiFi viene spento per liberare heap: riconnetti prima
+    // di scaricare un'altra voce del catalogo.
+    if (!wifisetup::ensureConnected(true, parent)) {
+        ui::message("Store", {"!Serve una connessione WiFi."}, parent);
+        return false;
+    }
 
     WiFiClientSecure client;
     client.setCACert(ota::rootCaPem());

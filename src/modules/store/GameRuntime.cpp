@@ -9,10 +9,12 @@
 #include <vector>
 
 #include "Display.h"
+#include "Logger.h"
 #include "Navigation.h"
 #include "Storage.h"
 #include "StoreLogic.h"
 #include "Ui.h"
+#include "WifiSetup.h"
 #include "wren.h"
 
 namespace store {
@@ -294,11 +296,27 @@ std::vector<std::string> errorLines() {
 
 bool runGame(const std::string& path) {
     WrenInterpretResult result = WREN_RESULT_RUNTIME_ERROR;
-    // Il codice resta vivo solo durante l'interpretazione: il buffer da 64 KB
-    // non deve occupare RAM mentre la schermata d'errore aspetta un tasto.
+    // Il WiFi dello Store non serve per giocare e occupa heap/TLS: spegnerlo
+    // prima della VM evita OOM sui device senza PSRAM.
+    wifisetup::disconnect();
+    delay(50);
+
+    const size_t fileSize = storage::fileSize(path, true);
+    if (fileSize == 0 || fileSize > store::kMaxGameBytes) {
+        ui::message("Store", {"!Gioco non leggibile.", path}, "Store");
+        return false;
+    }
+    if (ESP.getFreeHeap() < 48 * 1024) {
+        ui::message("Store", {"!Memoria insufficiente.", "Chiudi le altre app e riprova."},
+                    "Store");
+        return false;
+    }
+
+    // Il codice resta vivo solo durante l'interpretazione: la capacita' e'
+    // esattamente il file + preludio, non il limite massimo di 32 KB.
     {
         std::string code;
-        code.reserve(store::kMaxGameBytes + sizeof(kPrelude));
+        code.reserve(fileSize + sizeof(kPrelude));
         if (!storage::readText(path, code, store::kMaxGameBytes, true)) {
             ui::message("Store", {"!Gioco non leggibile.", path}, "Store");
             return false;
@@ -312,10 +330,14 @@ bool runGame(const std::string& path) {
         g_down = false;
         g_select = false;
 
+        logger::info("Gioco: %s, %u B, heap=%u", path.c_str(),
+                     static_cast<unsigned>(fileSize),
+                     static_cast<unsigned>(ESP.getFreeHeap()));
+
         WrenConfiguration config;
         wrenInitConfiguration(&config);
-        config.initialHeapSize = 32 * 1024;
-        config.minHeapSize = 8 * 1024;
+        config.initialHeapSize = 16 * 1024;
+        config.minHeapSize = 4 * 1024;
         config.writeFn = wrenWrite;
         config.errorFn = wrenError;
         config.bindForeignMethodFn = bindForeignMethod;
@@ -325,8 +347,11 @@ bool runGame(const std::string& path) {
             ui::message("Store", {"!Wren VM non disponibile."}, "Store");
             return false;
         }
+        logger::info("Wren VM: heap=%u", static_cast<unsigned>(ESP.getFreeHeap()));
         result = wrenInterpret(vm, "main", code.c_str());
         wrenFreeVM(vm);
+        logger::info("Gioco finito: result=%d heap=%u", static_cast<int>(result),
+                     static_cast<unsigned>(ESP.getFreeHeap()));
     }
 
     display::clear();
