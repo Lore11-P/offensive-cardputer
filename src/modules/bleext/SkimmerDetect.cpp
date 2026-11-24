@@ -143,7 +143,7 @@ void runSkimmerDetect() {
   setScanHandler(skimmerHandler);
   configureScan(scan, false);  // passivo: nessuna richiesta di scan
 
-  static DeviceSummary rows[kMaxDevices];
+  DeviceSummary* rows = g_deviceRows;
   const auto draw = [&]() {
     int count = snapshotSummaries(rows, kMaxDevices, false);
     std::sort(rows, rows + count, [](const DeviceSummary& a,

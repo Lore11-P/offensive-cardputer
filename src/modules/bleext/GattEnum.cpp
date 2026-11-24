@@ -73,7 +73,6 @@ struct GattJob {
 };
 
 GattJob g_job;
-DeviceSummary g_devices[kMaxDevices];
 
 void gattScanHandler(const AdvertRecord& record) {
   ingestDevice(record);
@@ -383,7 +382,7 @@ void runGattEnum() {
   }
   stopScan(scan);
 
-  const int count = snapshotSummaries(g_devices, kMaxDevices, true);
+  const int count = snapshotSummaries(g_deviceRows, kMaxDevices, true);
   if (count == 0) {
     ui::message("Servizi GATT",
                 {"!Nessun dispositivo BLE rilevato.",
@@ -396,10 +395,10 @@ void runGattEnum() {
   labels.reserve(static_cast<size_t>(count));
   for (int i = 0; i < count; ++i) {
     const std::string name =
-        g_devices[i].hasName ? shortenText(g_devices[i].name, 12)
-                             : "(senza nome)";
-    const std::string tail = std::string(g_devices[i].address).substr(12);
-    labels.push_back(name + " " + std::to_string(g_devices[i].rssi) + " " +
+        g_deviceRows[i].hasName ? shortenText(g_deviceRows[i].name, 12)
+                                : "(senza nome)";
+    const std::string tail = std::string(g_deviceRows[i].address).substr(12);
+    labels.push_back(name + " " + std::to_string(g_deviceRows[i].rssi) + " " +
                      tail);
   }
   const int choice =
@@ -408,7 +407,7 @@ void runGattEnum() {
   if (choice < 0) {
     return;
   }
-  const DeviceSummary target = g_devices[choice];
+  const DeviceSummary target = g_deviceRows[choice];
 
   if (NimBLEDevice::getClientListSize() > 0) {
     ui::message("Servizi GATT",

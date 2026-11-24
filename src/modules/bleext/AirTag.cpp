@@ -125,7 +125,7 @@ void runAirTagFinder() {
   setScanHandler(airTagHandler);
   configureScan(scan, false);  // passivo: nessuna SCAN_REQ trasmessa
 
-  static DeviceSummary rows[kMaxDevices];
+  DeviceSummary* rows = g_deviceRows;
   const auto draw = [&]() {
     int count = snapshotSummaries(rows, kMaxDevices, true);
     uint32_t strong = 0;

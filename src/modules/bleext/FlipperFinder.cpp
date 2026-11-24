@@ -202,7 +202,7 @@ void runFlipperFinder() {
   }
   stopScan(scan);
 
-  static DeviceSummary rows[kMaxDevices];
+  DeviceSummary* rows = g_deviceRows;
   const int count = snapshotSummaries(rows, kMaxDevices, true);
   if (count == 0) {
     ui::message("Trova Flipper",
@@ -228,7 +228,7 @@ void runFlipperFinder() {
     return;
   }
 
-  const DeviceSummary& target = rows[choice];
+  const DeviceSummary target = rows[choice];
   std::snprintf(g_targetAddress, sizeof(g_targetAddress), "%s",
                 target.address);
   g_targetRssi = kRssiFloor;
