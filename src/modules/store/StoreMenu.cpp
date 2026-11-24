@@ -70,13 +70,6 @@ void runMenu() {
                     "Menu principale");
         return;
     }
-    if (!wifisetup::ensureConnected(true, "Store")) {
-        ui::message("Store",
-                    {"!Serve una connessione WiFi.", "Configura la rete da",
-                     "Impostazioni > Rete WiFi."},
-                    "Menu principale");
-        return;
-    }
 
     std::vector<GameInfo> games;
     const bool catalogOk = fetchCatalog(games, "Store");

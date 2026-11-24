@@ -29,10 +29,10 @@ var rowColors = [hot, acc, ok, warn]
 var buildBricks = Fn.new {
   bricks = []
   left = 0
-  for (r in 0...3) {
-    for (c in 0...5) {
+  for (r in 0...4) {
+    for (c in 0...6) {
       bricks.add({"x": 2 + c * 40, "y": 24 + r * 12, "row": r, "alive": true})
-      left += 1
+      left = left + 1
     }
   }
 }
@@ -117,10 +117,10 @@ while (true) {
   } else {
     if (state == 1) {
       if (Game.left) {
-        px -= 5
+        px = px - 5
       }
       if (Game.right) {
-        px += 5
+        px = px + 5
       }
       if (px < 2) {
         px = 2
@@ -129,8 +129,8 @@ while (true) {
         px = Game.width - paddleW - 2
       }
       if (Game.millis >= wait) {
-        ballX += vx
-        ballY += vy
+        ballX = ballX + vx
+        ballY = ballY + vy
         if (ballX < 0) {
           ballX = 0
           vx = -vx
@@ -167,8 +167,8 @@ while (true) {
           if (b["alive"] && ballX + 4 >= b["x"] && ballX <= b["x"] + 36 &&
               ballY + 4 >= b["y"] && ballY <= b["y"] + 8) {
             b["alive"] = false
-            left -= 1
-            score += 10
+            left = left - 1
+            score = score + 10
             vy = -vy
             Game.beep(880, 15)
             break
@@ -180,7 +180,7 @@ while (true) {
           Game.beep(1100, 180)
         }
         if (ballY > Game.height) {
-          lives -= 1
+          lives = lives - 1
           Game.beep(140, 250)
           if (lives <= 0) {
             won = false

@@ -35,9 +35,13 @@ bool isHttps(const std::string& url) {
 
 // Regole comuni a catalogo e download: niente voci ambigue o oversized.
 bool validInfo(const GameInfo& game) {
-    return validId(game.id) && !game.name.empty() && game.size > 0 &&
-           game.size <= kMaxGameBytes && isSha256Hex(game.sha256) &&
-           ota::githubUrlAllowed(game.url);
+    if (!validId(game.id) || game.name.empty() || game.name.size() > 24 ||
+        game.version.size() > 8 || game.desc.size() > 64 || game.size == 0 ||
+        game.size > kMaxGameBytes || !isSha256Hex(game.sha256)) {
+        return false;
+    }
+    // URL derivato dall'id: il catalogo non puo' puntare a repo esterni.
+    return game.url == std::string(kGameBaseUrl) + game.id + ".wren";
 }
 
 // GET solo verso URL https in allowlist, con redirect manuali (max 3).
@@ -79,8 +83,13 @@ bool readCapped(HTTPClient& http, size_t maxBytes, std::string& out) {
     if (declared > 0) {
         out.reserve(static_cast<size_t>(declared));
     }
-    const size_t target = declared >= 0 ? static_cast<size_t>(declared) : maxBytes + 1;
     WiFiClient* stream = http.getStreamPtr();
+    if (stream == nullptr) {
+        return false;
+    }
+    // Senza Content-Length si legge fino a maxBytes + 1: il byte in piu'
+    // segnala un corpo oversized.
+    const size_t target = declared > 0 ? static_cast<size_t>(declared) : maxBytes + 1;
     uint32_t lastData = millis();
     while (out.size() < target) {
         const size_t available = stream->available();
@@ -103,7 +112,7 @@ bool readCapped(HTTPClient& http, size_t maxBytes, std::string& out) {
     if (out.size() > maxBytes) {
         return false;
     }
-    return declared < 0 || out.size() == static_cast<size_t>(declared);
+    return declared > 0 ? out.size() == static_cast<size_t>(declared) : true;
 }
 
 void drawDownload(const std::string& name, size_t done, size_t total) {
@@ -170,6 +179,29 @@ bool fetchCatalog(std::vector<GameInfo>& out, const std::string& parent) {
         return false;
     }
 
+    // Firma ECDSA: lo SHA-256 da solo non autentica chi pubblica il catalogo.
+    WiFiClientSecure sigClient;
+    sigClient.setCACert(ota::rootCaPem());
+    HTTPClient sigHttp;
+    sigHttp.setTimeout(kHttpTimeoutMs);
+    sigHttp.setUserAgent("ORBIT-OS-STORE");
+    const int sigCode = getAllowlisted(sigHttp, sigClient, kCatalogSigUrl);
+    std::string signature;
+    const bool sigOk =
+        sigCode == HTTP_CODE_OK && readCapped(sigHttp, 64, signature) &&
+        signature.size() == 64;
+    sigHttp.end();
+    if (!sigOk) {
+        ui::message("Store", {"!Firma catalogo assente.", "Catalogo rifiutato."}, parent);
+        return false;
+    }
+    if (!ota::verifyBlob(reinterpret_cast<const uint8_t*>(body.data()), body.size(),
+                         reinterpret_cast<const uint8_t*>(signature.data()),
+                         signature.size())) {
+        ui::message("Store", {"!Firma catalogo non valida.", "Catalogo rifiutato."}, parent);
+        return false;
+    }
+
     JsonDocument doc;
     const DeserializationError error = deserializeJson(doc, body);
     if (error) {
@@ -194,7 +226,16 @@ bool fetchCatalog(std::vector<GameInfo>& out, const std::string& parent) {
         game.sha256 = static_cast<const char*>(entry["sha256"] | "");
         game.size = entry["size"] | 0U;
         if (validInfo(game)) {
-            out.push_back(game);
+            bool duplicate = false;
+            for (const GameInfo& existing : out) {
+                if (existing.id == game.id) {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (!duplicate) {
+                out.push_back(game);
+            }
         }
     }
     return true;
@@ -225,16 +266,22 @@ bool downloadGame(const GameInfo& info, const std::string& parent) {
         return false;
     }
     const int declared = http.getSize();
-    if (declared > static_cast<int>(kMaxGameBytes)) {
+    if (declared > static_cast<int>(kMaxGameBytes) ||
+        (declared >= 0 && declared != static_cast<int>(info.size))) {
         http.end();
-        ui::message("Store", {"!File troppo grande.", "Download interrotto."}, parent);
+        ui::message("Store", {"!Dimensione non valida.", "Download interrotto."}, parent);
         return false;
     }
-    const size_t total = declared > 0 ? static_cast<size_t>(declared) : info.size;
+    const size_t total = info.size;
 
     std::string body;
     body.reserve(total);
     WiFiClient* stream = http.getStreamPtr();
+    if (stream == nullptr) {
+        http.end();
+        ui::message("Store", {"!Connessione interrotta."}, parent);
+        return false;
+    }
     uint32_t lastData = millis();
     uint32_t lastDraw = millis();
     bool cancelled = false;
@@ -242,7 +289,7 @@ bool downloadGame(const GameInfo& info, const std::string& parent) {
 
     navigation::waitRelease();
     drawDownload(info.name, 0, total);
-    while (declared < 0 || body.size() < static_cast<size_t>(declared)) {
+    while (body.size() < info.size) {
         const size_t available = stream->available();
         if (available == 0) {
             if (!http.connected() || millis() - lastData > kStallTimeoutMs) {
@@ -260,7 +307,7 @@ bool downloadGame(const GameInfo& info, const std::string& parent) {
             if (read == 0) {
                 break;
             }
-            if (body.size() + read > kMaxGameBytes) {
+            if (body.size() + read > info.size) {
                 tooLarge = true;
                 break;
             }
@@ -285,7 +332,7 @@ bool downloadGame(const GameInfo& info, const std::string& parent) {
         ui::message("Store", {"!File troppo grande.", "Download interrotto."}, parent);
         return false;
     }
-    if (declared >= 0 && body.size() != static_cast<size_t>(declared)) {
+    if (body.size() != info.size) {
         ui::message("Store", {"!Download incompleto."}, parent);
         return false;
     }
@@ -295,11 +342,16 @@ bool downloadGame(const GameInfo& info, const std::string& parent) {
     uint8_t digest[32];
     mbedtls_sha256_context sha;
     mbedtls_sha256_init(&sha);
-    mbedtls_sha256_starts_ret(&sha, 0);
-    mbedtls_sha256_update_ret(
-        &sha, reinterpret_cast<const unsigned char*>(body.data()), body.size());
-    mbedtls_sha256_finish_ret(&sha, digest);
+    const bool hashOk =
+        mbedtls_sha256_starts_ret(&sha, 0) == 0 &&
+        mbedtls_sha256_update_ret(
+            &sha, reinterpret_cast<const unsigned char*>(body.data()), body.size()) == 0 &&
+        mbedtls_sha256_finish_ret(&sha, digest) == 0;
     mbedtls_sha256_free(&sha);
+    if (!hashOk) {
+        ui::message("Store", {"!Hash non calcolabile.", "Download scartato."}, parent);
+        return false;
+    }
 
     char hex[65];
     constexpr char kDigits[] = "0123456789abcdef";

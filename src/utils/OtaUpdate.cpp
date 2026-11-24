@@ -630,4 +630,19 @@ bool ensureClock(const std::string& parent) {
     return syncClock(parent);
 }
 
+bool verifyBlob(const uint8_t* data, size_t len, const uint8_t* signature,
+                size_t signatureLen) {
+    if (data == nullptr || signature == nullptr || signatureLen != kSignatureSize) {
+        return false;
+    }
+    uint8_t hash[32] = {};
+    mbedtls_sha256_context sha;
+    mbedtls_sha256_init(&sha);
+    const bool ok = mbedtls_sha256_starts_ret(&sha, 0) == 0 &&
+                    mbedtls_sha256_update_ret(&sha, data, len) == 0 &&
+                    mbedtls_sha256_finish_ret(&sha, hash) == 0;
+    mbedtls_sha256_free(&sha);
+    return ok && verifySignature(hash, signature);
+}
+
 }  // namespace ota

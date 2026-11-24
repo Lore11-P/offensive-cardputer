@@ -96,10 +96,10 @@ while (true) {
   } else {
     if (state == 1) {
       if (Game.up) {
-        py -= 4
+        py = py - 4
       }
       if (Game.down) {
-        py += 4
+        py = py + 4
       }
       if (py < top) {
         py = top
@@ -109,15 +109,15 @@ while (true) {
       }
       if (vx > 0) {
         if (ballY + 2 < cy + 13) {
-          cy -= 3
+          cy = cy - 3
         } else if (ballY + 2 > cy + 13) {
-          cy += 3
+          cy = cy + 3
         }
       } else {
         if (cy + 13 < Game.height / 2) {
-          cy += 2
+          cy = cy + 2
         } else if (cy + 13 > Game.height / 2) {
-          cy -= 2
+          cy = cy - 2
         }
       }
       if (cy < top) {
@@ -127,8 +127,8 @@ while (true) {
         cy = Game.height - paddleH
       }
       if (Game.millis >= serve) {
-        ballX += vx
-        ballY += vy
+        ballX = ballX + vx
+        ballY = ballY + vy
         if (ballY < top) {
           ballY = top
           vy = -vy
@@ -164,7 +164,7 @@ while (true) {
           Game.beep(440, 15)
         }
         if (ballX + 5 < 0) {
-          cpuScore += 1
+          cpuScore = cpuScore + 1
           Game.beep(180, 120)
           if (cpuScore >= 5) {
             won = false
@@ -173,7 +173,7 @@ while (true) {
             serveBall.call(-1)
           }
         } else if (ballX > Game.width) {
-          playerScore += 1
+          playerScore = playerScore + 1
           Game.beep(980, 120)
           if (playerScore >= 5) {
             won = true

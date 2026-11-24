@@ -151,8 +151,10 @@ while (true) {
         } else {
           var ate = hx == foodX && hy == foodY
           var hit = false
-          for (i in 0...body.count) {
-            if (!(ate && i == body.count - 1) && body[i][0] == hx && body[i][1] == hy) {
+          // Se non mangia, la coda si sposta: l'ultima cella e' libera.
+          var limit = ate ? body.count : body.count - 1
+          for (i in 0...limit) {
+            if (body[i][0] == hx && body[i][1] == hy) {
               hit = true
             }
           }
@@ -162,7 +164,7 @@ while (true) {
           } else {
             body.insert(0, [hx, hy])
             if (ate) {
-              score += 1
+              score = score + 1
               if (tick > 70) {
                 tick = tick - 4
               }

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
 #include <string>
 
 // Aggiornamento firmware via Wi-Fi (OTA) dal repository GitHub del progetto.
@@ -21,6 +23,12 @@ extern const char* const kFirmwareUrl;
 const char* rootCaPem();
 bool githubUrlAllowed(const std::string& url);
 bool ensureClock(const std::string& parent);
+
+// Verifica una firma ECDSA P-256/SHA-256 (64 byte r||s) su un blob arbitrario.
+// Usata dallo store per autenticare il catalogo con la stessa chiave offline
+// dell'OTA.
+bool verifyBlob(const uint8_t* data, size_t len, const uint8_t* signature,
+                size_t signatureLen);
 
 // Schermata "Aggiorna firmware": verifica la rete, chiede conferma, scarica il
 // firmware e riavvia. Mostra l'avanzamento e permette di annullare con `.

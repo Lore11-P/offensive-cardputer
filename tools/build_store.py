@@ -17,7 +17,9 @@ ROOT = Path(__file__).resolve().parent.parent
 GAMES_DIR = ROOT / "store" / "games"
 OUTPUT = ROOT / "store" / "games.json"
 BASE_URL = "https://raw.githubusercontent.com/Lore11-P/offensive-cardputer/main/store/games/"
-MAX_GAME_BYTES = 65536
+MAX_GAME_BYTES = 32768
+MAX_CATALOG_BYTES = 32768
+MAX_GAMES = 24
 ID_RE = re.compile(r"^[a-z0-9_-]+$")
 META_RE = re.compile(r"^//\s*(name|desc|version)\s*:\s*(.+?)\s*$")
 
@@ -59,6 +61,8 @@ def main():
 
         fallback = game_id.replace("-", " ").replace("_", " ").title()
         name, desc, version = metadata(data.decode("utf-8"), fallback)
+        if len(name) > 24 or len(desc) > 64 or len(version) > 8:
+            sys.exit(f"{path.name}: name<=24, desc<=64, version<=8")
         games.append(
             {
                 "id": game_id,
@@ -72,15 +76,22 @@ def main():
         )
 
     games.sort(key=lambda game: game["name"])
+    if len(games) > MAX_GAMES:
+        sys.exit(f"troppi giochi: {len(games)} (max {MAX_GAMES})")
     catalog = {"version": 1, "games": games}
 
+    payload = json.dumps(catalog, ensure_ascii=False, indent=2) + "\n"
+    encoded = payload.encode("utf-8")
+    if len(encoded) > MAX_CATALOG_BYTES:
+        sys.exit(f"catalogo {len(encoded)} byte, limite {MAX_CATALOG_BYTES}")
     with OUTPUT.open("w", encoding="utf-8", newline="\n") as handle:
-        json.dump(catalog, handle, ensure_ascii=False, indent=2)
-        handle.write("\n")
+        handle.write(payload)
 
     for game in games:
         print(f"{game['id']:12} {game['size']:6} B  {game['sha256'][:12]}")
     print(f"{OUTPUT.relative_to(ROOT)}: {len(games)} giochi")
+    if OUTPUT.with_suffix(".sig").exists():
+        print("ATTENZIONE: catalogo modificato; rifirma con tools/sign_store.py")
 
 
 if __name__ == "__main__":

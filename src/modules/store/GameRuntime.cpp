@@ -211,8 +211,14 @@ void gameRgb(WrenVM* vm) {
 }
 
 void gameBeep(WrenVM* vm) {
-    const double freq = num(vm, 1);
+    double freq = num(vm, 1);
     if (freq > 0.0) {
+        if (freq < 20.0) {
+            freq = 20.0;
+        }
+        if (freq > 20000.0) {
+            freq = 20000.0;
+        }
         double ms = num(vm, 2);
         if (ms < 0.0) {
             ms = 0.0;
@@ -292,6 +298,7 @@ bool runGame(const std::string& path) {
     // non deve occupare RAM mentre la schermata d'errore aspetta un tasto.
     {
         std::string code;
+        code.reserve(store::kMaxGameBytes + sizeof(kPrelude));
         if (!storage::readText(path, code, store::kMaxGameBytes, true)) {
             ui::message("Store", {"!Gioco non leggibile.", path}, "Store");
             return false;

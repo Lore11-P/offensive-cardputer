@@ -8,7 +8,7 @@
 namespace store {
 
 constexpr size_t kMaxCatalogBytes = 32768;
-constexpr size_t kMaxGameBytes = 65536;
+constexpr size_t kMaxGameBytes = 32768;
 constexpr size_t kMaxGames = 24;
 
 struct GameInfo {

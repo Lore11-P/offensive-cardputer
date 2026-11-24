@@ -1,0 +1,6 @@
+# I giochi sono scaricati via HTTPS e verificati con SHA-256: il byte stream
+# pubblicato da GitHub deve restare LF, identico a quello usato da
+# tools/build_store.py per generare store/games.json.
+store/games/*.wren text eol=lf
+store/games.json text eol=lf
+store/games.sig binary
