@@ -2,6 +2,12 @@
 
 Tutte le modifiche rilevanti del progetto. Formato basato su Keep a Changelog.
 
+## [2.3.0] - 2026-11-24
+
+### Aggiunto
+
+- **USB file transfer**: dal menu Sistema > USB file il device riceve file dal PC via USB CDC. `tools/usb_put.py COM5 file [path]` invia un header con path, dimensione e CRC-32, poi chunk da 8 KB con ACK; il device scrive su microSD in `/percorso/file.part`, verifica il CRC e rinomina il file solo alla fine. Timeout 15 s per l'header e 10 s per chunk, `ESC` per uscire.
+
 ## [2.2.0] - 2026-11-24
 
 ### Aggiunto

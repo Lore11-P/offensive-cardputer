@@ -28,6 +28,7 @@
 #endif
 #if ENABLE_MODULE_SD
 #include "modules/sd/SdMenu.h"
+#include "modules/usb/UsbTransfer.h"
 #endif
 #if ENABLE_MODULE_RADAR
 #include "modules/radar/RadarMenu.h"
@@ -195,6 +196,7 @@ void systemMenu() {
     RootScope scope("Sistema");
 #if ENABLE_MODULE_SD
     menu.addItem("SD", "sd", guarded("SD", "Sistema", config::Module::Sd, sd_module::runMenu));
+    menu.addItem("USB file", "usb", [] { usb::runTransfer(); });
 #endif
 #if ENABLE_MODULE_SETTINGS
     menu.addItem("Impostazioni", "settings", settings_module::run);

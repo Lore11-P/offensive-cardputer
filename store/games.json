@@ -2,6 +2,15 @@
   "version": 1,
   "games": [
     {
+      "id": "2048",
+      "name": "2048",
+      "version": "1.0",
+      "desc": "Unisci le tessere e arriva a 2048. Frecce per muovere.",
+      "url": "https://raw.githubusercontent.com/Lore11-P/offensive-cardputer/main/store/games/2048.wren",
+      "size": 5457,
+      "sha256": "fbfb770d5710378658cdc373bacf80f70418161f08bbb4c322fbb0b175450b4f"
+    },
+    {
       "id": "breakout",
       "name": "Breakout",
       "version": "1.0",
@@ -9,6 +18,15 @@
       "url": "https://raw.githubusercontent.com/Lore11-P/offensive-cardputer/main/store/games/breakout.wren",
       "size": 4762,
       "sha256": "de7e953a5739c29048bf6ff70968ff343d3060f45193d0bb422441392c97fb00"
+    },
+    {
+      "id": "flappy",
+      "name": "Flappy",
+      "version": "1.0",
+      "desc": "Passa tra i tubi e non toccarli. ENTER per riprovare.",
+      "url": "https://raw.githubusercontent.com/Lore11-P/offensive-cardputer/main/store/games/flappy.wren",
+      "size": 4473,
+      "sha256": "bbd9b622d2c1dd229bfcc9fb42ab536413a9de6a45ae89d09cc97a4b0ca03e69"
     },
     {
       "id": "pong",
