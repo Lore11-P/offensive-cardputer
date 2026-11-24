@@ -22,6 +22,7 @@
 #include "Storage.h"
 #include "TextInput.h"
 #include "Ui.h"
+#include "modules/mascot/Mascot.h"
 
 #if ENABLE_MODULE_IR
 
@@ -1665,6 +1666,9 @@ void runJammer() {
             display::push();
             lastDraw = now;
         }
+    }
+    if (packets > 0) {
+        mascot::award(mascot::Event::IrJammer);
     }
 #else
     ui::message("Jammer IR",

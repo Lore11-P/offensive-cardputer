@@ -20,6 +20,7 @@ extern "C" int ble_hs_id_set_rnd(const uint8_t* rnd_addr);
 #include "ModuleFlags.h"
 #include "Navigation.h"
 #include "Ui.h"
+#include "modules/mascot/Mascot.h"
 #if ENABLE_MODULE_BLEEXT
 #include "modules/bleext/BleExtMenu.h"
 #endif
@@ -419,6 +420,9 @@ void runSpam(const std::string& label,
     }
 
     advertising->stop();
+    if (packets > 0) {
+        mascot::award(mascot::Event::BleSpam);
+    }
     // Il singleton e' condiviso con Chat/AirTag: va lasciato fermo e senza i
     // payload falsi, e l'indirizzo deve tornare pubblico.
     advertising->reset();

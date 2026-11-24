@@ -2,6 +2,14 @@
 
 Tutte le modifiche rilevanti del progetto. Formato basato su Keep a Changelog.
 
+## [2.1.0] - 2026-11-23
+
+### Aggiunto
+
+- **Zorbo, la mascotte**: nuova voce nel menu principale con alieno procedurale animato (bob, blink, antenne, cuoricini), coccole con `ENTER` e cooldown, affetto 0-100 e punteggio persistente in NVS.
+- **Punti da laboratorio**: deauth 10, beacon spam 15, deauth flood 25, evil twin/portal 20, BLE spam 10, jammer IR 5, AirTag spoof 15. I punti arrivano solo dopo il `legalWarning`, a fine azione e sono fissi (non per pacchetto); Evil Twin richiede almeno 10 s di sessione.
+- **Test host**: copertura Unity per tabella punti, clamp di punteggio/affetto, cooldown e wrap di `millis()`.
+
 ## [2.0.3] - 2026-11-22
 
 - **Musica/SD**: remount SD, Diagnostica e fallback `/music`/`/Music` della 2.0.2 restano disponibili.

@@ -16,6 +16,7 @@
 #include "Navigation.h"
 #include "PowerTimer.h"
 #include "Ui.h"
+#include "modules/mascot/Mascot.h"
 
 extern "C" int ble_hs_id_set_rnd(const uint8_t* rnd_addr);
 
@@ -233,6 +234,9 @@ void runAirTagSpoof() {
   }
 
   advertising->stop();
+  if (millis() - start >= 5000) {
+    mascot::award(mascot::Event::AirTagSpoof);
+  }
   NimBLEDevice::setOwnAddrType(BLE_OWN_ADDR_PUBLIC, false);
   logger::info("Trasmissione AirTag terminata");
   navigation::waitRelease();

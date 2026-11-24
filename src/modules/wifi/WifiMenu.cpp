@@ -19,6 +19,7 @@
 #include "Logger.h"
 #include "MenuManager.h"
 #include "ModuleFlags.h"
+#include "modules/mascot/Mascot.h"
 #include "Navigation.h"
 #include "NetGuard.h"
 #include "Orbit.h"
@@ -2071,6 +2072,10 @@ void runDeauth() {
     }
 
     stopPromiscuous();
+    // Punti mascotte solo se almeno un frame e' partito.
+    if (packets > 0) {
+        mascot::award(mascot::Event::WifiDeauth);
+    }
     logger::info("Deauth terminato: %u frame", static_cast<unsigned>(packets));
 }
 
@@ -2236,6 +2241,10 @@ void runBeaconSpam() {
     }
 
     stopPromiscuous();
+    // Punti mascotte solo se almeno un beacon e' partito.
+    if (packets > 0) {
+        mascot::award(mascot::Event::WifiBeacon);
+    }
     logger::info("Beacon spam terminato: %u frame",
                  static_cast<unsigned>(packets));
 }
@@ -2384,6 +2393,10 @@ void runDeauthFlood() {
     }
 
     stopPromiscuous();
+    // Punti mascotte solo se almeno un frame e' partito.
+    if (packets > 0) {
+        mascot::award(mascot::Event::WifiDeauthFlood);
+    }
     logger::info("Deauth flood terminato: %u frame su %u target",
                  static_cast<unsigned>(packets),
                  static_cast<unsigned>(targets.size()));
@@ -2595,6 +2608,10 @@ void runFakeAccessPoint(const Network& target, bool portal) {
         delay(5);
     }
 
+    // Punti solo a sessione reale: evita di farmare aprendo e chiudendo l'AP.
+    if (millis() - start >= 10000) {
+        mascot::award(mascot::Event::EvilTwin);
+    }
     server.end();
     // Da qui i POST vengono solo rediretti; i callback gia' entrati hanno 250
     // ms per finire, poi si svuota la RAM. Il server non viene distrutto.

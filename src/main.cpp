@@ -1,5 +1,5 @@
 // ============================================================================
-//  ORBIT OS v2.0.2 - entry point
+//  ORBIT OS v2.1.0 - entry point
 //  M5Stack Cardputer ADV (ESP32-S3FN8, 8 MB flash)
 //
 //  Menu principale a hub: pochi gruppi coerenti, ogni modulo resta invariato.
@@ -19,6 +19,7 @@
 #include "PowerTimer.h"
 #include "Storage.h"
 #include "modules/hub/HubMenus.h"
+#include "modules/mascot/Mascot.h"
 
 namespace {
 
@@ -46,6 +47,7 @@ void buildAndRunMainMenu() {
 #if ENABLE_MODULE_GAMES
     menu.addItem("Giochi", "games", hub::gamesEntry);
 #endif
+    menu.addItem("Zorbo", "alien", mascot::runMenu);
     menu.addItem("Sistema", "chip", hub::systemMenu);
 
     menu.run(false);
@@ -69,6 +71,7 @@ void setup() {
     // Filesystem prima della configurazione (import opzionale di /config.json).
     storage::begin();
     config::begin();
+    mascot::begin();
 
     display::begin();
     display::setTheme(config::theme());

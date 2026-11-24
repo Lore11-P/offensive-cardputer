@@ -512,6 +512,20 @@ bool drawOrbitIcon(const std::string& id, int x, int y, int size, uint16_t tint)
         p.dot(6, 6, C(T_pl4));
         return true;
     }
+    if (id == "alien") {
+        // Zorbo: testa tonda, occhi grandi e antenne con bulbetti.
+        p.line(6, 3, 4, 1, main);
+        p.line(10, 3, 12, 1, main);
+        p.dot(4, 1, hot);
+        p.dot(12, 1, hot);
+        p.disc(8, 8, 5, main);
+        p.disc(6, 7, 2, bg);
+        p.disc(10, 7, 2, bg);
+        p.dot(6, 7, hot);
+        p.dot(10, 7, hot);
+        p.hline(7, 11, 3, alt);
+        return true;
+    }
     if (id == "power") {
         p.circle(8, 8, 6, main);
         p.rect(7, 1, 2, 6, main);

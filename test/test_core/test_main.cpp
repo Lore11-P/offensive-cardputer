@@ -1,6 +1,7 @@
 #include <unity.h>
 
 #include "GridMath.h"
+#include "MascotLogic.h"
 #include "NavCore.h"
 
 using navigation::Event;
@@ -89,6 +90,58 @@ void test_escape_is_not_queued_as_text() {
     TEST_ASSERT_EQUAL_INT(static_cast<int>(Event::None), typeOf(ev));
 }
 
+// I punti sono fissi per evento; Count non vale nulla.
+void test_mascot_points_for() {
+    using mascot::Event;
+    TEST_ASSERT_EQUAL_UINT16(10, mascot::pointsFor(Event::WifiDeauth));
+    TEST_ASSERT_EQUAL_UINT16(15, mascot::pointsFor(Event::WifiBeacon));
+    TEST_ASSERT_EQUAL_UINT16(25, mascot::pointsFor(Event::WifiDeauthFlood));
+    TEST_ASSERT_EQUAL_UINT16(20, mascot::pointsFor(Event::EvilTwin));
+    TEST_ASSERT_EQUAL_UINT16(10, mascot::pointsFor(Event::BleSpam));
+    TEST_ASSERT_EQUAL_UINT16(5, mascot::pointsFor(Event::IrJammer));
+    TEST_ASSERT_EQUAL_UINT16(15, mascot::pointsFor(Event::AirTagSpoof));
+    TEST_ASSERT_EQUAL_UINT16(0, mascot::pointsFor(Event::Count));
+}
+
+// Ogni evento valido ha un'etichetta mostrabile.
+void test_mascot_labels() {
+    for (int i = 0; i < static_cast<int>(mascot::Event::Count); ++i) {
+        const char* label = mascot::labelFor(static_cast<mascot::Event>(i));
+        TEST_ASSERT_NOT_NULL(label);
+        TEST_ASSERT_TRUE(label[0] != '\0');
+    }
+}
+
+void test_mascot_clamp_affection() {
+    TEST_ASSERT_EQUAL_UINT8(0, mascot::clampAffection(-5));
+    TEST_ASSERT_EQUAL_UINT8(0, mascot::clampAffection(0));
+    TEST_ASSERT_EQUAL_UINT8(100, mascot::clampAffection(100));
+    TEST_ASSERT_EQUAL_UINT8(100, mascot::clampAffection(140));
+}
+
+void test_mascot_clamp_score() {
+    TEST_ASSERT_EQUAL_UINT32(mascot::kMaxScore, mascot::clampScore(mascot::kMaxScore));
+    TEST_ASSERT_EQUAL_UINT32(mascot::kMaxScore, mascot::clampScore(mascot::kMaxScore + 1ULL));
+}
+
+void test_mascot_affection_after_pet() {
+    TEST_ASSERT_EQUAL_UINT8(2, mascot::affectionAfterPet(0));
+    TEST_ASSERT_EQUAL_UINT8(100, mascot::affectionAfterPet(99));
+}
+
+void test_mascot_can_earn_pet_points() {
+    TEST_ASSERT_TRUE(mascot::canEarnPetPoints(99));
+    TEST_ASSERT_FALSE(mascot::canEarnPetPoints(100));
+}
+
+// Cooldown con sottrazione unsigned: il wrap di millis() non blocca la coccola.
+void test_mascot_pet_ready() {
+    TEST_ASSERT_TRUE(mascot::petReady(0, 0));
+    TEST_ASSERT_FALSE(mascot::petReady(12999, 1000));
+    TEST_ASSERT_TRUE(mascot::petReady(13000, 1000));
+    TEST_ASSERT_TRUE(mascot::petReady(0x1EE0, 0xFFFFF000));
+}
+
 int main(int, char**) {
     UNITY_BEGIN();
     RUN_TEST(test_char_with_enter_is_not_lost);
@@ -97,5 +150,12 @@ int main(int, char**) {
     RUN_TEST(test_grid_partial_last_page);
     RUN_TEST(test_grid_all_disabled_keeps_selection);
     RUN_TEST(test_escape_is_not_queued_as_text);
+    RUN_TEST(test_mascot_points_for);
+    RUN_TEST(test_mascot_labels);
+    RUN_TEST(test_mascot_clamp_affection);
+    RUN_TEST(test_mascot_clamp_score);
+    RUN_TEST(test_mascot_affection_after_pet);
+    RUN_TEST(test_mascot_can_earn_pet_points);
+    RUN_TEST(test_mascot_pet_ready);
     return UNITY_END();
 }
