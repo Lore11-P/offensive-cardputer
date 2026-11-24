@@ -1,6 +1,8 @@
 #include "GameRuntime.h"
 
 #include <Arduino.h>
+#include <NimBLEDevice.h>
+#include <esp_heap_caps.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 #include <freertos/task.h>
@@ -12,6 +14,7 @@
 #include <vector>
 
 #include "Display.h"
+#include "DiagLog.h"
 #include "Logger.h"
 #include "Navigation.h"
 #include "Storage.h"
@@ -55,6 +58,7 @@ bool g_right = false;
 bool g_up = false;
 bool g_down = false;
 bool g_select = false;
+bool g_exitRequested = false;
 
 void wrenWrite(WrenVM*, const char* text) {
     if (text != nullptr) {
@@ -178,11 +182,26 @@ void gameText(WrenVM* vm) {
 }
 
 void gamePresent(WrenVM* vm) {
+    static int diagFrames = 0;
+    if (diagFrames < 5) {
+        diag::log("present %d heap=%u", diagFrames,
+                  static_cast<unsigned>(ESP.getFreeHeap()));
+        ++diagFrames;
+    }
     display::push();
     wrenSetSlotNull(vm, 0);
 }
 
 void gameFrame(WrenVM* vm) {
+#ifdef ORBIT_DIAG_AUTOGAME
+    static uint32_t diagFrames = 0;
+    if (++diagFrames > 300) {
+        g_exitRequested = true;
+        wrenSetSlotBool(vm, 0, false);
+        wrenAbortFiber(vm, 0);
+        return;
+    }
+#endif
     navigation::update();
     const navigation::EventData ev = navigation::poll();
 
@@ -193,7 +212,10 @@ void gameFrame(WrenVM* vm) {
     g_select = ev.type == navigation::Event::Select;
 
     if (ev.type == navigation::Event::Back || navigation::backPressed()) {
-        wrenSetSlotString(vm, 0, "exit");
+        // Nessuna allocazione in uscita: un'eventuale stringa "exit" puo'
+        // fallire proprio quando l'heap e' pieno.
+        g_exitRequested = true;
+        wrenSetSlotBool(vm, 0, false);
         wrenAbortFiber(vm, 0);
         return;
     }
@@ -225,8 +247,8 @@ void gameBeep(WrenVM* vm) {
             freq = 20000.0;
         }
         double ms = num(vm, 2);
-        if (ms < 0.0) {
-            ms = 0.0;
+        if (ms < 1.0) {
+            ms = 1.0;  // tone(_,0) in M5Unified significa repeat infinito
         }
         if (ms > 60000.0) {
             ms = 60000.0;
@@ -237,7 +259,8 @@ void gameBeep(WrenVM* vm) {
 }
 
 void gameExit(WrenVM* vm) {
-    wrenSetSlotString(vm, 0, "exit");
+    g_exitRequested = true;
+    wrenSetSlotBool(vm, 0, false);
     wrenAbortFiber(vm, 0);
 }
 
@@ -295,38 +318,69 @@ std::vector<std::string> errorLines() {
     return lines;
 }
 
+// Il framebuffer viene ripristinato dal task UI dopo la morte del task Wren,
+// quando lo stack da 32 KB e' gia' stato liberato.
 }  // namespace
 
 static bool runGameInner(const std::string& path) {
     WrenInterpretResult result = WREN_RESULT_RUNTIME_ERROR;
-    // Il WiFi dello Store non serve per giocare e occupa heap/TLS: spegnerlo
-    // prima della VM evita OOM sui device senza PSRAM.
-    wifisetup::disconnect();
-    delay(50);
+    diag::log("inner start %s heap=%u", path.c_str(),
+              static_cast<unsigned>(ESP.getFreeHeap()));
 
-    const size_t fileSize = storage::fileSize(path, true);
+    bool preferSD = storage::hasSD();
+    size_t fileSize = storage::fileSize(path, preferSD);
+    if (fileSize == 0 && preferSD) {
+        preferSD = false;
+        fileSize = storage::fileSize(path, false);
+    }
+    diag::log("file size=%u sd=%d", static_cast<unsigned>(fileSize), preferSD ? 1 : 0);
     if (fileSize == 0 || fileSize > store::kMaxGameBytes) {
         ui::message("Store", {"!Gioco non leggibile.", path}, "Store");
         return false;
     }
-    if (ESP.getFreeHeap() < 48 * 1024) {
-        ui::message("Store", {"!Memoria insufficiente.", "Chiudi le altre app e riprova."},
+
+    // Libera tutto ciò che non serve al gioco: BLE (se inizializzato) e il
+    // framebuffer full-screen. Wren usa ~110-130 KB di heap e >32 KB di stack.
+    if (NimBLEDevice::getInitialized()) {
+        NimBLEDevice::deinit(true);
+        diag::log("BLE deinit heap=%u", static_cast<unsigned>(ESP.getFreeHeap()));
+    }
+    const bool framebufferReleased = display::releaseFramebuffer();
+    diag::log("framebuffer release=%d heap=%u", framebufferReleased ? 1 : 0,
+              static_cast<unsigned>(ESP.getFreeHeap()));
+    if (ESP.getFreeHeap() < 150 * 1024 ||
+        heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) < 64 * 1024) {
+        ui::message("Store", {"!Memoria insufficiente.", "Riavvia il device e riprova."},
                     "Store");
         return false;
     }
 
     // Il codice resta vivo solo durante l'interpretazione: la capacita' e'
-    // esattamente il file + preludio, non il limite massimo di 32 KB.
+    // esattamente il file + preludio, non il limite massimo di 8 KB.
     {
+        diag::log("reserve start size=%u pre=%u", static_cast<unsigned>(fileSize),
+                  static_cast<unsigned>(sizeof(kPrelude)));
         std::string code;
         code.reserve(fileSize + sizeof(kPrelude));
-        if (!storage::readText(path, code, store::kMaxGameBytes, true)) {
+        diag::log("reserve ok");
+        diag::log("read start");
+        if (!storage::readText(path, code, store::kMaxGameBytes, preferSD)) {
+#ifdef ORBIT_DIAG_AUTOGAME
+            diag::log("read FAILED");
+            logger::info("DIAG read FAILED");
+            return false;
+#else
             ui::message("Store", {"!Gioco non leggibile.", path}, "Store");
             return false;
+#endif
         }
+        diag::log("read ok %u", static_cast<unsigned>(code.size()));
         code.insert(0, kPrelude);
+        diag::log("code ready %u heap=%u", static_cast<unsigned>(code.size()),
+                  static_cast<unsigned>(ESP.getFreeHeap()));
 
         resetError();
+        g_exitRequested = false;
         g_left = false;
         g_right = false;
         g_up = false;
@@ -340,18 +394,25 @@ static bool runGameInner(const std::string& path) {
         WrenConfiguration config;
         wrenInitConfiguration(&config);
         config.initialHeapSize = 16 * 1024;
-        config.minHeapSize = 4 * 1024;
+        config.minHeapSize = 8 * 1024;
+        config.heapGrowthPercent = 10;
         config.writeFn = wrenWrite;
         config.errorFn = wrenError;
         config.bindForeignMethodFn = bindForeignMethod;
 
+        diag::log("vm create heap=%u", static_cast<unsigned>(ESP.getFreeHeap()));
         WrenVM* vm = wrenNewVM(&config);
+        diag::log("vm=%p heap=%u", static_cast<void*>(vm),
+                  static_cast<unsigned>(ESP.getFreeHeap()));
         if (vm == nullptr) {
             ui::message("Store", {"!Wren VM non disponibile."}, "Store");
             return false;
         }
         logger::info("Wren VM: heap=%u", static_cast<unsigned>(ESP.getFreeHeap()));
+        diag::log("interpret start heap=%u", static_cast<unsigned>(ESP.getFreeHeap()));
         result = wrenInterpret(vm, "main", code.c_str());
+        diag::log("interpret end result=%d heap=%u", static_cast<int>(result),
+                  static_cast<unsigned>(ESP.getFreeHeap()));
         wrenFreeVM(vm);
         logger::info("Gioco finito: result=%d heap=%u", static_cast<int>(result),
                      static_cast<unsigned>(ESP.getFreeHeap()));
@@ -360,7 +421,7 @@ static bool runGameInner(const std::string& path) {
     display::clear();
     navigation::waitRelease();
 
-    if (strcmp(g_error, "exit") == 0) {
+    if (g_exitRequested) {
         return true;
     }
     if (result != WREN_RESULT_SUCCESS) {
@@ -393,6 +454,11 @@ bool runGame(const std::string& path) {
         // Un gioco alla volta: la UI e' bloccante.
         return false;
     }
+    // Il WiFi/TLS dello Store non serve al gioco: spegnerlo dal task della UI
+    // (non dal task Wren) prima di allocare stack e VM.
+    wifisetup::disconnect();
+    delay(50);
+    diag::log("wifi off heap=%u", static_cast<unsigned>(ESP.getFreeHeap()));
     g_gameDone = xSemaphoreCreateBinary();
     if (g_gameDone == nullptr) {
         ui::message("Store", {"!Memoria insufficiente per il gioco."}, "Store");
@@ -402,7 +468,8 @@ bool runGame(const std::string& path) {
     job.path = &path;
     // Stack dedicato: il compilatore Wren e' ricorsivo e 16 KB del loopTask
     // possono non bastare. Il task viene distrutto a fine partita.
-    if (xTaskCreatePinnedToCore(gameTask, "wren-game", 24 * 1024, &job, 1, nullptr, 1) !=
+    diag::log("task create heap=%u", static_cast<unsigned>(ESP.getFreeHeap()));
+    if (xTaskCreatePinnedToCore(gameTask, "wren-game", 32 * 1024, &job, 1, nullptr, 1) !=
         pdPASS) {
         vSemaphoreDelete(g_gameDone);
         g_gameDone = nullptr;
@@ -410,6 +477,14 @@ bool runGame(const std::string& path) {
         return false;
     }
     xSemaphoreTake(g_gameDone, portMAX_DELAY);
+    // Lascia al task il tempo di eseguire vTaskDelete e liberare lo stack da
+    // 32 KB; solo allora il framebuffer da 65 KB puo' essere riallocato.
+    vTaskDelay(pdMS_TO_TICKS(10));
+    const bool restored = display::restoreFramebuffer();
+    diag::log("framebuffer restore=%d heap=%u", restored ? 1 : 0,
+              static_cast<unsigned>(ESP.getFreeHeap()));
+    diag::log("task done ok=%d heap=%u", job.ok ? 1 : 0,
+              static_cast<unsigned>(ESP.getFreeHeap()));
     vSemaphoreDelete(g_gameDone);
     g_gameDone = nullptr;
     return job.ok;

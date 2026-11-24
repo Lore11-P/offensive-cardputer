@@ -1,5 +1,5 @@
 // ============================================================================
-//  ORBIT OS v2.3.2 - entry point
+//  ORBIT OS v2.3.3 - entry point
 //  M5Stack Cardputer ADV (ESP32-S3FN8, 8 MB flash)
 //
 //  Menu principale a hub: pochi gruppi coerenti, ogni modulo resta invariato.
@@ -20,7 +20,15 @@
 #include "Storage.h"
 #include "modules/hub/HubMenus.h"
 #include "modules/mascot/Mascot.h"
+#include "modules/store/DiagLog.h"
+#include "modules/store/GameRuntime.h"
 #include "modules/store/StoreMenu.h"
+
+#ifdef ORBIT_DIAG_AUTOGAME
+#include <LittleFS.h>
+
+#include "modules/store/DiagGame.h"
+#endif
 
 namespace {
 
@@ -73,6 +81,9 @@ void setup() {
     // Filesystem prima della configurazione (import opzionale di /config.json).
     storage::begin();
     config::begin();
+    diag::begin();
+    diag::log("BOOT reset=%d heap=%u", static_cast<int>(esp_reset_reason()),
+              static_cast<unsigned>(ESP.getFreeHeap()));
     mascot::begin();
 
     display::begin();
@@ -83,6 +94,33 @@ void setup() {
     navigation::begin();
     powertimer::begin();
     display::splash();
+
+#ifdef ORBIT_DIAG_AUTOGAME
+    logger::info("DIAG: heap=%u, invia 'r' per lanciare 2048",
+                 static_cast<unsigned>(ESP.getFreeHeap()));
+    diag::log("DIAG wait heap=%u", static_cast<unsigned>(ESP.getFreeHeap()));
+    {
+        File gameFile = LittleFS.open("/diag.wren", FILE_WRITE);
+        if (gameFile) {
+            gameFile.print(kDiagGame);
+            gameFile.close();
+            diag::log("diag file written");
+        } else {
+            diag::log("diag file write FAILED");
+        }
+    }
+    const uint32_t waitStart = millis();
+    while (millis() - waitStart < 8000) {
+        if (Serial.available() > 0 && Serial.read() == 'r') {
+            break;
+        }
+        delay(50);
+    }
+    diag::log("DIAG start game heap=%u", static_cast<unsigned>(ESP.getFreeHeap()));
+    const bool ok = store::runGame("/diag.wren");
+    diag::log("DIAG runGame=%d heap=%u", ok ? 1 : 0,
+              static_cast<unsigned>(ESP.getFreeHeap()));
+#endif
 
     logger::info("%s avviato", fw::kTitle);
     logger::info("flash=%uKB heap=%uKB offensive=%d", ESP.getFlashChipSize() / 1024,

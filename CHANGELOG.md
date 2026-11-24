@@ -2,6 +2,12 @@
 
 Tutte le modifiche rilevanti del progetto. Formato basato su Keep a Changelog.
 
+## [2.3.3] - 2026-11-24
+
+### Corretto
+
+- **Giochi Wren**: il framebuffer full-screen (65 KB) e il BLE (se inizializzato) vengono liberati prima della VM e ripristinati all'uscita; stack del task portato a 32 KB (misurato: `wrenNewVM` ne usa ~19,8 KB e un gioco con blocchi ~26 KB); `heapGrowthPercent=20` riduce il picco; gate heap a 190 KB + blocco contiguo >=64 KB; limite gioco a 8 KB; uscita senza allocazioni (`g_exitRequested`). Questo copre il picco reale di 2048 (~130 KB) senza OOM.
+
 ## [2.3.2] - 2026-11-24
 
 ### Corretto

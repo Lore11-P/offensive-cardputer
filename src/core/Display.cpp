@@ -238,6 +238,21 @@ uint32_t framebufferBytes() {
     return s_spriteBytes;
 }
 
+bool releaseFramebuffer() {
+    if (!s_spriteOk) {
+        return false;
+    }
+    s_sprite.deleteSprite();
+    releaseFallbackBuffer();
+    s_spriteOk = false;
+    s_spriteBytes = 0;
+    return true;
+}
+
+bool restoreFramebuffer() {
+    return ensureSprite(M5Cardputer.Display.width(), M5Cardputer.Display.height());
+}
+
 uint8_t rotation() {
     return s_rotation;
 }

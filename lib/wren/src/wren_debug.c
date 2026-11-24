@@ -35,7 +35,14 @@ void wrenDebugPrintStackTrace(WrenVM* vm)
     if (fn->module->name == NULL) continue;
     
     // -1 because IP has advanced past the instruction that it just executed.
-    int line = fn->debug->sourceLines.data[frame->ip - fn->code.data - 1];
+    // ORBIT: sourceLines disabilitate; la riga non e' disponibile.
+    int line = 0;
+    if (fn->debug->sourceLines.count > 0) {
+        const int index = (int)(frame->ip - fn->code.data - 1);
+        if (index >= 0 && index < fn->debug->sourceLines.count) {
+            line = fn->debug->sourceLines.data[index];
+        }
+    }
     vm->config.errorFn(vm, WREN_ERROR_STACK_TRACE,
                        fn->module->name->value, line,
                        fn->debug->name);
@@ -105,7 +112,10 @@ static int dumpInstruction(WrenVM* vm, ObjFn* fn, int i, int* lastLine)
   uint8_t* bytecode = fn->code.data;
   Code code = (Code)bytecode[i];
 
-  int line = fn->debug->sourceLines.data[i];
+  int line = 0;
+  if (fn->debug->sourceLines.count > i) {
+      line = fn->debug->sourceLines.data[i];
+  }
   if (lastLine == NULL || *lastLine != line)
   {
     printf("%4d:", line);

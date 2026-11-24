@@ -19,7 +19,7 @@ sulla microSD.
    `name` e `desc` compaiono nel menu dello store; `version` e' opzionale
    (default `1.0`).
 3. Usa solo Wren core e il preludio `Game` (niente `import`). Il file deve
-   restare sotto 32 KB. Wren 0.4 non supporta gli operatori composti
+   restare sotto 8 KB. Wren 0.4 non supporta gli operatori composti
    (`+=`, `-=`, `*=`, `/=`): scrivi `x = x + 1`. Non ha dichiarazioni `fun`:
    le funzioni sono closure, ad esempio `var tick = Fn.new { ... }`,
    richiamate con `tick.call()`.

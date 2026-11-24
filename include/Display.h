@@ -120,6 +120,10 @@ int height();
 bool framebufferActive();
 // Byte occupati dal framebuffer (0 se non allocato).
 uint32_t framebufferBytes();
+// Libera il framebuffer full-screen per lasciare heap ai giochi; il disegno
+// passa diretto al display finche' non viene ricreato.
+bool releaseFramebuffer();
+bool restoreFramebuffer();
 
 void clear(uint16_t color = kBackground);
 void push();
