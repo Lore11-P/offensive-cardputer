@@ -24,7 +24,7 @@ Firmware modulare per **M5Stack Cardputer ADV** (ESP32-S3FN8, 8 MB flash, **senz
 ## Novità 2.0.0
 
 - **10 nuovi moduli**: IR completo su SD, Radio con playlist/ICY/REC, Audio (FFT/REC/memo), BLE HID + Bad BLE, Utility (clock/note/calcolatrice/QR/TOTP), WiFi Lab (PMKID/client/spettro), WPA-SEC, Sensori (livella/goniometro/pedometro/torcia), WiFi+ (Responder/Karma/Auto-Portal), ESP-NOW.
-- **Menu a 7 hub**: Rete, Bluetooth, Analisi RF, Media, Strumenti, Giochi, Sistema.
+- **Menu a hub**: Rete, Bluetooth, Analisi RF, Media, Strumenti, Zorbo, Store, Sistema.
 - **Ottimizzazioni**: −32 KB di flash, ridisegni UI eliminati a riposo, pool fissi per WiFi/BLE/radar, chat senza log in chiaro.
 - **Layout 2.0**: due slot app da 2,6875 MB e LittleFS da 2,5 MB. Richiede un **flash USB una tantum** con la nuova tabella partizioni; il vecchio LittleFS a `0x510000` non viene più letto (il database IR completo vive su SD).
 - **Correzioni di sicurezza**: BLE HID richiede link cifrato e peer autorizzato; WPA-SEC valida il formato reale del potfile; WiFi+ corregge SMB2/overflow; ESP-NOW serializza la SD e vincola i pacchetti al MAC.
@@ -36,7 +36,7 @@ Firmware modulare per **M5Stack Cardputer ADV** (ESP32-S3FN8, 8 MB flash, **senz
 |---|---|---|
 | Menu principale / UI / navigazione | ✅ | Carosello orizzontale a icone con animazione, griglia, breadcrumb e liste scrollabili |
 | Impostazioni | ✅ | Luminosità, rotazione, **spegnimento automatico**, info dispositivo, **rete WiFi** (scansione + password), moduli on/off, export/import JSON, reset |
-| Giochi | ✅ | Tetris, Breakout, Pac-Man, Doom Lite, Snake, Pong, 2048, Flappy, Simon, Minesweeper, Connect 4, Scacchi, Minecraft 3D, StarSweep, Lander, Orbital e Pixel Jump (record su SD) |
+| Store giochi | ✅ | Catalogo GitHub firmato ECDSA P-256, giochi Wren scaricati su microSD, SHA-256, sandbox senza file/rete; i 17 giochi compilati sono stati rimossi dalla build. |
 | Infrarossi | ✅ | Parser `.ir` Flipper, ricerca per nome, preferiti, ripresa ultimo telecomando, tasti rapidi, scanner Power, TV-B-Gone, jammer opzionale, learn disabilitato |
 | BLE | ✅ | Scanner passivo/attivo, spam Random/Samsung/Google/Windows opzionale |
 | Chat BLE | ✅ | Messaggi cifrati AES e filtrati per destinatario, notifiche di presenza, nickname unico e cronologia locale |
@@ -47,12 +47,12 @@ Firmware modulare per **M5Stack Cardputer ADV** (ESP32-S3FN8, 8 MB flash, **senz
 | Capture | ✅ | Browser PCAP on-device, export hashcat hc22000 (PMKID/EAPOL) e pcap dei soli EAPOL |
 | BLE+ | ✅ | AirTag/FindMy, Flipper finder, enumerazione GATT, skimmer detect, wardriving CSV, cattura BLE (CSV + pcap 251) |
 | BadUSB | ✅ solo env `hid` | Script Ducky/Flipper da `/badusb`, tastiera HID via TinyUSB (nessun mouse) |
-| Aggiornamento OTA | ✅ | Da WiFi: scarica `firmware.bin` dal ramo `main` del repo GitHub e lo scrive nella partizione inattiva; richiede il layout dual-OTA (`partitions.csv`) |
+| Aggiornamento OTA | ✅ | Da WiFi: scarica manifest, `firmware.bin` e firma ECDSA P-256, verifica SHA-256 e firma, poi scrive nella partizione inattiva; richiede il layout dual-OTA (`partitions.csv`) |
 | microSD | ✅ | File browser, info spazio, screenshot BMP, backup config e punteggi |
 | Database IR | ✅ | **2.255 file .ir su SD**, 8 categorie (TV, Clima, Audio, DVD, Proiettore, Console, Universale, Altro); fallback LittleFS con 309 file. Verifica i codici sui tuoi apparecchi |
 | Moduli 2.0 | ✅ | IR completo, Radio+ (playlist/ICY/REC), Audio (FFT/REC/memo), BLE HID/Bad BLE, Utility (clock/note/QR/TOTP), WiFi Lab (PMKID/client/spettro), WPA-SEC, Sensori, WiFi+ (Responder/Karma/Portal), ESP-NOW |
 | Asset icone 32×32 | ✅ | BMP 24 bit generati, con fallback se assenti |
-| Test automatici host | ⬜ | Predisposta la cartella `test/`, nessun test incluso |
+| Test automatici host | ✅ | 19 test Unity (core, mascotte, store, Wren) in `pio test -e native`. |
 | Verifica su hardware reale | ⬜ | Compilazione e filesystem verificati; test su device da fare |
 
 ## Funzionalità
@@ -62,7 +62,7 @@ Firmware modulare per **M5Stack Cardputer ADV** (ESP32-S3FN8, 8 MB flash, **senz
 - **Batteria**: indicatore nella barra superiore con percentuale, colore per livello e stato di carica. Sui modelli senza PMIC (Cardputer/ADV) la ricarica viene stimata dalla tensione della batteria, perche' il chip di carica non e' leggibile.
 - **Storage** LittleFS + microSD opzionale (`/sd`), con fallback automatico e file browser.
 - **Configurazione** in NVS, export/import JSON (`/config.json`) senza dati sensibili; backup e screenshot su SD.
-- **Giochi interrompibili** con `` ` `` (ESC fisico), record persistenti su SD e ripristino della rotazione all'uscita.
+- **Giochi Wren** in sandbox con ESC, download da Store e verifica SHA-256; nessun accesso a file, rete o OS.
 - **Scacchi** giocatore contro bot con tre difficolta' scelte a inizio partita, regole complete (arrocco, en passant, promozione, matto, stallo), annullamento dell'ultima coppia di mosse e storico navigabile.
 - **Minecraft 3D** (`src/modules/games/Minecraft.cpp`): sandbox in prima persona su heightmap procedurale (isola con colline, spiagge, pietra e alberi). Render 3D via raycast per colonna con shading, nebbia e scacchiera dei blocchi; movimento W/A/S/D, sguardo con le frecce e piazzamento del blocco puntato con ENTER. Nessun obiettivo e nessun punteggio: solo movimento e costruzione.
 - **IR**: NEC/NECext, Samsung32, LG, Sony/SIRC, RC5/RC5X, RC6, JVC, Kaseikyo (Panasonic), RCA e comandi raw; preferiti in NVS, scanner Power per marca e anteprima dei telecomandi.
@@ -360,7 +360,7 @@ Protocolli parsed supportati: `NEC`, `NECext`, `Samsung32`, `LG`, `Sony`/`SIRC12
 - Radar CSI (`ENABLE_RADAR_CSI`): le API `esp_wifi_set_csi_rx_cb/_config/_set_csi` esistono su ESP32-S3 in arduino-esp32 2.0.16 e `CONFIG_ESP32_WIFI_CSI_ENABLED=1` nella sdkconfig precompilata, ma senza un access point che generi traffico arrivano solo i beacon degli AP vicini (10–30 frame/s). La sensibilità è quindi molto inferiore al progetto di riferimento (290–320 pkt/s iniettati). Va verificata su hardware e va ricalibrata a ogni cambio canale.
 - Web Radio: solo stream **HTTP in MP3/AAC** (niente HTTPS: il decoder non ha un client TLS e la RAM è contata) e una stazione alla volta. Durante l'ascolto il bus I2S è del decoder, quindi i beep del radar non suonano; il decoder consuma ~40 KB di heap, quindi conviene non ascoltare con radar/BLE attivi insieme. Se una stazione cambia URL va aggiornata la tabella `kStations` in `src/modules/radio/RadioMenu.cpp`.
 - Chat BLE: i messaggi sono offuscati con AES-128-CBC ma la chiave deriva dai nickname pubblici, quindi non è una cifratura end-to-end robusta: chi conosce mittente e destinatario può decifrare. Con le notifiche attive il nickname viene annunciato via BLE e quindi è visibile a chi ascolta; disattivale per la modalità stealth. La verifica di unicità del nickname funziona solo con gli altri dispositivi che hanno la Chat aperta. Funziona solo tra dispositivi compatibili con il protocollo v2 e non garantisce la consegna se il destinatario è fuori portata. L'ingresso in Chat forza l'indirizzo pubblico, quindi non eredita il MAC random del BLE spam.
-- OTA: il firmware scaricato dal repository **non è firmato né verificato** (solo TLS verso l'host), quindi chi può scrivere sul ramo `main` può distribuire una build arbitraria. Richiede il layout dual-OTA: la prima volta serve un flash USB della nuova tabella partizioni. Il download consuma heap per il client TLS: su device con poca memoria libera può fallire senza danni.
+- OTA: il firmware ? firmato ECDSA P-256 e verificato sul device (manifest, SHA-256 e firma). La chiave privata resta fuori dal repository; chi pu? scrivere su `main` senza la chiave non pu? distribuire una build valida. Richiede il layout dual-OTA: la prima volta serve un flash USB della nuova tabella partizioni. Il download consuma heap per il client TLS: su device con poca memoria libera pu? fallire senza danni.
 - Il progetto è compilato e verificato a livello di build; il collaudo su hardware reale è a carico dell'utente.
 
 ## Licenza
