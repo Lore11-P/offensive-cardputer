@@ -80,3 +80,24 @@ la copertina lì oppure indica l'album corretto.
 - Il nome file è fisso: `cover.cvr`.
 - Lo script non verifica la presenza del firmware né la versione: il contratto
   è il percorso e il formato descritti sopra.
+
+## USB file transfer (v2.3)
+
+`usb_put.py` invia un file alla microSD della Cardputer dalla porta USB.
+
+Requisiti: Python 3 e `pyserial` (`python -m pip install pyserial`).
+
+1. Sul device apri **Sistema > USB file**.
+2. Dal PC:
+
+   ```powershell
+   python tools/usb_put.py COM5 C:\percorso\file.ir ir/tv/file.ir
+   ```
+
+   Il secondo argomento e' il path sulla microSD (senza leading slash, niente
+   `..`). Se lo ometti viene usato il nome del file.
+3. Il device verifica CRC-32, scrive un `.part` e rinomina il file solo al
+   termine. `ESC` sul device annulla.
+
+Limiti: un file alla volta, massimo 64 MB, solo microSD. La porta seriale e'
+la USB CDC del firmware, non serve cambiare modalita' USB.
