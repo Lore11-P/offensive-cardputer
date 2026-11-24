@@ -15,6 +15,13 @@ namespace ota {
 // URL del firmware pubblicato sul repository del progetto.
 extern const char* const kFirmwareUrl;
 
+// Helper TLS condivisi con lo store giochi: CA pinnata del progetto,
+// allowlist GitHub e sincronizzazione NTP (necessaria per la validita' del
+// certificato sui device senza orologio).
+const char* rootCaPem();
+bool githubUrlAllowed(const std::string& url);
+bool ensureClock(const std::string& parent);
+
 // Schermata "Aggiorna firmware": verifica la rete, chiede conferma, scarica il
 // firmware e riavvia. Mostra l'avanzamento e permette di annullare con `.
 void run(const std::string& parent);

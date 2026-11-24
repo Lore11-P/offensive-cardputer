@@ -1,0 +1,14 @@
+{
+  "name": "wren",
+  "version": "0.4.0",
+  "description": "Wren scripting language, MIT. Core VM + compiler, senza moduli opzionali meta/random.",
+  "license": "MIT",
+  "build": {
+    "srcDir": "src",
+    "flags": [
+      "-DWREN_OPT_META=0",
+      "-DWREN_OPT_RANDOM=0",
+      "-Os"
+    ]
+  }
+}

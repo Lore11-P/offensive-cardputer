@@ -618,4 +618,16 @@ void run(const std::string& parent) {
     ESP.restart();
 }
 
+const char* rootCaPem() {
+    return kRootCaPem;
+}
+
+bool githubUrlAllowed(const std::string& url) {
+    return allowedUrl(url);
+}
+
+bool ensureClock(const std::string& parent) {
+    return syncClock(parent);
+}
+
 }  // namespace ota

@@ -20,6 +20,7 @@
 #include "Storage.h"
 #include "modules/hub/HubMenus.h"
 #include "modules/mascot/Mascot.h"
+#include "modules/store/StoreMenu.h"
 
 namespace {
 
@@ -48,6 +49,7 @@ void buildAndRunMainMenu() {
     menu.addItem("Giochi", "games", hub::gamesEntry);
 #endif
     menu.addItem("Zorbo", "alien", mascot::runMenu);
+    menu.addItem("Store", "store", store::runMenu);
     menu.addItem("Sistema", "chip", hub::systemMenu);
 
     menu.run(false);
