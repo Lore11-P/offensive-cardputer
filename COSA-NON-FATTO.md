@@ -39,8 +39,8 @@ portate. Il resto è in `docs/3.0-STATO.md` e nei README dei componenti.
 - **Giochi Wren**: il framebuffer 16bpp resta allocato anche durante la VM
   (niente disegno diretto, niente calo di colori all'uscita), creato una sola
   volta nella rotazione salvata. Per far spazio a Wren si ferma il WiFi e si
-  usa uno stack task da 24 KB; gate 136 KB, 2048/breakout/flappy partono con
-  ~164 KB liberi. I giochi Wren forzano il landscape se la rotazione utente è
+  usa uno stack task da 20 KB; gate 116 KB, 2048/breakout/flappy partono con
+  ~168 KB liberi e anche con 120 KB sotto stress. I giochi Wren forzano il landscape se la rotazione utente è
   portrait. Non è stato testato l'uscita fisica con ESC né la resa a schermo
   di ogni gioco.
 - **Deauth**: IDF 5.4 blocca i frame deauth con un controllo chiuso in

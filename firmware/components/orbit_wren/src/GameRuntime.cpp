@@ -305,10 +305,10 @@ bool runGameInner(const std::string& path) {
              static_cast<unsigned>(esp_get_free_heap_size()));
 
     // Wren non ha un percorso di errore per l'OOM: una realloc a NULL diventa
-    // un fault. 136 KB lasciano margine per VM (~78 KB) + compilazione.
+    // un fault. 116 KB = VM (~78 KB) + compilazione (~37 KB) + margine minimo.
     const uint32_t freeHeap = esp_get_free_heap_size();
-    if (freeHeap < 136 * 1024) {
-        ESP_LOGE(TAG, "memoria insufficiente: free=%uKB, servono 136KB",
+    if (freeHeap < 116 * 1024) {
+        ESP_LOGE(TAG, "memoria insufficiente: free=%uKB, servono 116KB",
                  static_cast<unsigned>(freeHeap / 1024));
         return false;
     }
@@ -330,8 +330,8 @@ bool runGameInner(const std::string& path) {
 
     WrenConfiguration config;
     wrenInitConfiguration(&config);
-    config.initialHeapSize = 8 * 1024;
-    config.minHeapSize = 4 * 1024;
+    config.initialHeapSize = 4 * 1024;
+    config.minHeapSize = 2 * 1024;
     config.heapGrowthPercent = 10;
     config.writeFn = wrenWrite;
     config.errorFn = wrenError;
@@ -408,7 +408,8 @@ bool runGame(const std::string& path) {
 
     // Il framebuffer 16bpp resta allocato: durante il gioco niente disegno
     // diretto (flicker) e all'uscita la palette resta completa. Per far
-    // stare Wren si libera solo la radio e si usa uno stack piu' contenuto.
+    // stare Wren si liberano audio, radio/netif e si usa uno stack contenuto.
+    orbit_audio::end();
     orbit_store::wifiShutdownDriver();
 
     g_gameDone = xSemaphoreCreateBinary();
@@ -420,18 +421,17 @@ bool runGame(const std::string& path) {
     GameJob job;
     job.path = &path;
     // Stack dedicato: il compilatore Wren e' ricorsivo e i 16 KB del task UI
-    // non bastano. 24 KB misurati sufficienti (high-water ~12 KB) e lasciano
-    // piu' heap alla VM rispetto ai 32 KB precedenti.
-    if (xTaskCreatePinnedToCore(gameTask, "wren-game", 24 * 1024, &job, 1, nullptr, 1) !=
+    // non bastano. 20 KB lasciano ~8 KB sul high-water misurato (~12 KB).
+    if (xTaskCreatePinnedToCore(gameTask, "wren-game", 20 * 1024, &job, 1, nullptr, 1) !=
         pdPASS) {
         vSemaphoreDelete(g_gameDone);
         g_gameDone = nullptr;
-        ESP_LOGE(TAG, "task wren-game non creato");
+        ESP_LOGE(TAG, "wren-game non creato");
         return false;
     }
 
     xSemaphoreTake(g_gameDone, portMAX_DELAY);
-    vTaskDelay(pdMS_TO_TICKS(10));
+    vTaskDelay(pdMS_TO_TICKS(20));
     vSemaphoreDelete(g_gameDone);
     g_gameDone = nullptr;
     return job.ok;

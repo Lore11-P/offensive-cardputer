@@ -185,6 +185,12 @@ void wifiShutdownDriver() {
         esp_wifi_deinit();
         s_inited = false;
     }
+    // Libera anche netif/LWIP della stazione: dopo un gioco Wren servono
+    // ~10-20 KB e la STA viene ricreata al prossimo ensureWifi().
+    if (s_staNetif != nullptr) {
+        esp_netif_destroy(s_staNetif);
+        s_staNetif = nullptr;
+    }
     s_connected = false;
 }
 

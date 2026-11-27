@@ -28,15 +28,19 @@ settings                  bright=128 theme=0 rot=0 nick=lore_1 (import 2.x)
 ```
 Framebuffer 240x135 sprite DMA 16bpp (63 KB, heap libero 196 KB)
 orbit: Home
-orbit_wren: start /littlefs/games/2048.wren heap=167844
+orbit_wren: start /littlefs/games/2048.wren heap=171940
 ```
 
 Il framebuffer viene creato una sola volta nella rotazione salvata (0 =
 landscape), resta allocato durante i giochi Wren e non viene mai rilasciato:
 niente disegno diretto, niente flicker, palette 16bpp ancora attiva
-all'uscita. Gate Wren alzato a 136 KB (free misurato 164 KB); stack del task
-Wren 24 KB. I giochi Wren forzano temporaneamente il landscape se la
-rotazione utente è portrait.
+all'uscita. Gate Wren 116 KB, stack del task 20 KB, heap iniziale VM 4 KB;
+audio e netif vengono liberati prima della VM.
+
+Stress test con 50 KB di heap occupati artificialmente (per simulare il menu
+Store): avvio a `heap=120728` e 2048/breakout/flappy girano senza OOM.
+I giochi Wren forzano temporaneamente il landscape se la rotazione utente è
+portrait.
 
 ## Firmware di produzione
 
