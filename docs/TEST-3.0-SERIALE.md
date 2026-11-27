@@ -67,6 +67,14 @@ esp_netif_handlers: sta ip: 192.168.1.9
 - Il test di uscita con ESC e la resa a schermo di ogni singolo gioco
   restano da verificare manualmente.
 
+## Beacon / SSID spam
+
+Il frame usa il template 2.x completo (109 byte: header, timestamp,
+interval, capability, SSID, rates, DS, RSN WPA2), non più un beacon minimo.
+Il loop attiva la modalità promiscua, invia un frame ogni 8 ms e cambia
+canale 1-11 ogni 8 frame, come il modulo 2.x. Il driver restituisce
+`ESP_OK`; la visibilità reale su telefoni va verificata a mano.
+
 ## Deauth
 
 `deauth-tx=OK (ESP_OK)` e `beacon-tx=OK` con il binario patchato.

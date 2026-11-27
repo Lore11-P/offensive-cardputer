@@ -59,6 +59,8 @@ portate. Il resto è in `docs/3.0-STATO.md` e nei README dei componenti.
 - **IR**: nessun RX/learn, niente scanner per marca/TV-B-Gone; carrier fisso
   38 kHz; file `.ir` oltre 16 KB rifiutati (15 dei 307 campioni).
 - **WiFi**: country forzato IT/1–13; max 24 AP; niente whitelist/NetGuard.
+  Il beacon/SSID spam usa il template 2.x con RSN e promiscuo, ma la
+  visibilità sui telefoni non è stata testata in questa sessione.
 - **Strumenti**: TOTP e note in chiaro in NVS; fuso fisso italiano; QR fino a
   78 byte; niente impostazione manuale dell'ora.
 

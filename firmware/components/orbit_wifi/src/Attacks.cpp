@@ -71,47 +71,59 @@ void buildDeauth(uint8_t frame[26], const uint8_t bssid[6], const uint8_t destin
     frame[25] = 0;
 }
 
+// Template beacon completo (109 byte, adattato dal modulo 2.x/Bruce):
+// header, timestamp, interval, capability, SSID 32 byte, rates, DS e RSN.
+// Il RSN IE fa apparire gli SSID come WPA2 e i telefoni li mostrano meglio.
+constexpr size_t kBeaconTemplateLen = 109;
+const uint8_t kBeaconTemplate[kBeaconTemplateLen] = {
+    0x80, 0x00, 0x00, 0x00,
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0x01, 0x02, 0x03, 0x04, 0x05, 0x06,
+    0x01, 0x02, 0x03, 0x04, 0x05, 0x06,
+    0x00, 0x00,
+    0x83, 0x51, 0xF7, 0x8F, 0x0F, 0x00, 0x00, 0x00,
+    0xE8, 0x03,
+    0x31, 0x00,
+    0x00, 0x20,
+    0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
+    0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
+    0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
+    0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
+    0x01, 0x08,
+    0x82, 0x84, 0x8B, 0x96, 0x24, 0x30, 0x48, 0x6C,
+    0x03, 0x01, 0x01,
+    0x30, 0x18, 0x01, 0x00, 0x00, 0x0F, 0xAC, 0x02,
+    0x02, 0x00, 0x00, 0x0F, 0xAC, 0x04, 0x00, 0x0F,
+    0xAC, 0x04, 0x01, 0x00, 0x00, 0x0F, 0xAC, 0x02,
+    0x00, 0x00,
+};
+constexpr size_t kBeaconTailOffset = 70;
+constexpr size_t kBeaconTailLen = kBeaconTemplateLen - kBeaconTailOffset;
+constexpr size_t kBeaconChannelOffset = 82 - kBeaconTailOffset;
+
 size_t buildBeacon(uint8_t* out, const uint8_t mac[6], const char* ssid, size_t ssidLen,
                    uint8_t channel, uint16_t sequence) {
     if (ssidLen > 32) {
         ssidLen = 32;
     }
-    out[0] = 0x80;  // beacon
-    out[1] = 0x00;
-    out[2] = 0x00;
-    out[3] = 0x00;
-    std::memcpy(out + 4, kBroadcast, 6);
+    std::memcpy(out, kBeaconTemplate, 38);
     std::memcpy(out + 10, mac, 6);
     std::memcpy(out + 16, mac, 6);
     const uint16_t control = static_cast<uint16_t>((sequence & 0x0FFF) << 4);
     out[22] = static_cast<uint8_t>(control & 0xFF);
     out[23] = static_cast<uint8_t>(control >> 8);
-
     const uint64_t timestamp = static_cast<uint64_t>(esp_timer_get_time());
     for (int i = 0; i < 8; ++i) {
         out[24 + i] = static_cast<uint8_t>((timestamp >> (8 * i)) & 0xFF);
     }
-    out[32] = 100;  // beacon interval 100 TU
-    out[33] = 0;
-    out[34] = 0x21;  // capability: ESS + short preamble + short slot
-    out[35] = 0x04;
-
-    size_t index = 36;
-    out[index++] = 0;  // SSID
-    out[index++] = static_cast<uint8_t>(ssidLen);
+    out[37] = static_cast<uint8_t>(ssidLen);
     if (ssidLen > 0) {
-        std::memcpy(out + index, ssid, ssidLen);
-        index += ssidLen;
+        std::memcpy(out + 38, ssid, ssidLen);
     }
-    const uint8_t rates[] = {0x82, 0x84, 0x8B, 0x96, 0x24, 0x30, 0x48, 0x6C};
-    out[index++] = 1;  // supported rates
-    out[index++] = static_cast<uint8_t>(sizeof(rates));
-    std::memcpy(out + index, rates, sizeof(rates));
-    index += sizeof(rates);
-    out[index++] = 3;  // DS parameter
-    out[index++] = 1;
-    out[index++] = channel;
-    return index;
+    std::memcpy(out + 38 + ssidLen, kBeaconTemplate + kBeaconTailOffset,
+                kBeaconTailLen);
+    out[38 + ssidLen + kBeaconChannelOffset] = channel;
+    return 38 + ssidLen + kBeaconTailLen;
 }
 
 void drawScanning(const char* parent) {
@@ -583,7 +595,10 @@ void runBeaconSpam() {
     const uint32_t start = millis();
     uint32_t lastDraw = start - 1000;
 
+    // Promiscuo come nel 2.x: aiuta il driver a inoltrare i management raw.
+    esp_wifi_set_promiscuous(true);
     esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE);
+    const char* lastSsid = names[0];
     navigation::waitRelease();
     while (millis() - start < durationMs) {
         const navigation::EventData ev = navigation::poll();
@@ -591,11 +606,8 @@ void runBeaconSpam() {
             break;
         }
 
-        const uint8_t channel = static_cast<uint8_t>((frameIndex % kChannelCount) + 1);
-        if (esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE) == ESP_OK) {
-            currentChannel = channel;
-        }
-        const char* name = names[frameIndex % kNameCount];
+        const char* name = names[esp_random() % kNameCount];
+        lastSsid = name;
         uint8_t mac[6];
         fillRandomBssid(mac);
         const size_t length = buildBeacon(frame, mac, name, std::strlen(name), currentChannel,
@@ -612,12 +624,18 @@ void runBeaconSpam() {
         }
         ++frameIndex;
 
+        // Come il 2.x: stesso canale per 8 frame, poi hop 1..11.
+        if ((frameIndex % 8) == 0) {
+            currentChannel = static_cast<uint8_t>(currentChannel % 11 + 1);
+            esp_wifi_set_channel(currentChannel, WIFI_SECOND_CHAN_NONE);
+        }
+
         const uint32_t now = millis();
         if (now - lastDraw >= 300) {
             lastDraw = now;
             ui::drawScreen(
                 "Beacon spam", "WiFi Attacks",
-                {"SSID: " + shortText(std::string(name), 22),
+                {"SSID: " + shortText(std::string(lastSsid), 22),
                  fmt("Canale: %u", static_cast<unsigned>(currentChannel)),
                  fmt("Frame inviati: %u", static_cast<unsigned>(sent)),
                  fmt("Errori TX: %u", static_cast<unsigned>(failed)),
@@ -625,9 +643,10 @@ void runBeaconSpam() {
                  "!SSID falsi: solo test RF isolati."},
                 "ESC = interrompi", display::C(display::T_err));
         }
-        delay(100);
+        delay(8);
     }
 
+    esp_wifi_set_promiscuous(false);
     const uint32_t elapsed = (millis() - start) / 1000;
     radioStop();
     std::vector<std::string> lines = {fmt("Frame inviati: %u", static_cast<unsigned>(sent)),
