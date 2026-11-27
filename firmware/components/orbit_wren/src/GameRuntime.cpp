@@ -383,19 +383,13 @@ bool runGame(const std::string& path) {
         return false;
     }
 
-    // Wren costa ~115 KB: senza liberare framebuffer (64 KB) e radio il gate
-    // da 120 KB non passa e i giochi dello Store non si aprono.
-    const bool hadFramebuffer = display::framebufferActive();
-    if (hadFramebuffer) {
-        display::releaseFramebuffer();
-    }
+    // Il framebuffer 16bpp resta allocato: durante il gioco niente disegno
+    // diretto (flicker) e all'uscita la palette resta completa. Per far
+    // stare Wren si libera solo la radio e si usa uno stack piu' contenuto.
     orbit_store::wifiShutdownDriver();
 
     g_gameDone = xSemaphoreCreateBinary();
     if (g_gameDone == nullptr) {
-        if (hadFramebuffer) {
-            display::restoreFramebuffer();
-        }
         ESP_LOGE(TAG, "semaphore non creato");
         return false;
     }
@@ -403,14 +397,12 @@ bool runGame(const std::string& path) {
     GameJob job;
     job.path = &path;
     // Stack dedicato: il compilatore Wren e' ricorsivo e i 16 KB del task UI
-    // non bastano. Il task muore a fine partita e lo stack torna all'idle.
-    if (xTaskCreatePinnedToCore(gameTask, "wren-game", 32 * 1024, &job, 1, nullptr, 1) !=
+    // non bastano. 24 KB misurati sufficienti (high-water ~12 KB) e lasciano
+    // piu' heap alla VM rispetto ai 32 KB precedenti.
+    if (xTaskCreatePinnedToCore(gameTask, "wren-game", 24 * 1024, &job, 1, nullptr, 1) !=
         pdPASS) {
         vSemaphoreDelete(g_gameDone);
         g_gameDone = nullptr;
-        if (hadFramebuffer) {
-            display::restoreFramebuffer();
-        }
         ESP_LOGE(TAG, "task wren-game non creato");
         return false;
     }
@@ -419,9 +411,6 @@ bool runGame(const std::string& path) {
     vTaskDelay(pdMS_TO_TICKS(10));
     vSemaphoreDelete(g_gameDone);
     g_gameDone = nullptr;
-    if (hadFramebuffer) {
-        display::restoreFramebuffer();
-    }
     return job.ok;
 }
 

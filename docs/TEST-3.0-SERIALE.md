@@ -39,8 +39,9 @@ esp_netif_handlers: sta ip: 192.168.1.9
 
 ## Giochi
 
-- Wren `2048` da `/littlefs/games/2048.wren`: avvio con `heap=225192`
-  dopo il rilascio di framebuffer e WiFi; nessun errore di memoria.
+- Wren `2048`, `breakout` e `flappy` da `/littlefs/games`: avvio con
+  `heap=167844` (framebuffer 16bpp mantenuto + WiFi fermato, stack task
+  24 KB); nessun errore di memoria.
 - Giochi nativi: rotazione scelta con `width > height` (landscape),
   ripristino della rotazione utente all'uscita.
 - Il test di uscita con ESC e la resa a schermo di ogni singolo gioco
