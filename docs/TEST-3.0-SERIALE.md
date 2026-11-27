@@ -13,6 +13,7 @@ RESULT codec-es8311       PASS  I2C 0x18
 RESULT nvs                PASS
 RESULT sd                 PASS
 RESULT sd-content         PASS  music=70 ir=2257 games=5
+audio file                /sd/data/Music/The Dark Side of the Moon/01 - Speak to Me.mp3
 RESULT littlefs           PASS
 RESULT lfs-content        PASS  games=3
 RESULT audio-begin        PASS
