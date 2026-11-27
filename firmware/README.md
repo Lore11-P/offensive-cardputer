@@ -56,8 +56,8 @@ powershell -ExecutionPolicy Bypass -File tools\idf.ps1 -DORBIT_DIAG_SELFTEST=ON 
 ```
 
 La variante stampa `RESULT ... PASS/FAIL` per display, framebuffer, codec,
-NVS, SD, LittleFS, playback MP3, scan WiFi + raw TX e scan BLE. Il log di
-questa sessione è in `tools/serial-3.0-final-selftest.log`.
+NVS, SD, LittleFS, playback MP3, scan WiFi + raw TX e scan BLE. Il riepilogo
+dei test hardware è in `docs/TEST-3.0-SERIALE.md`.
 
 ## Avviso legale
 
