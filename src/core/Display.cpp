@@ -128,11 +128,12 @@ M5Canvas s_sprite(&M5Cardputer.Display);
 bool s_spriteOk = false;
 uint8_t s_rotation = 1;
 
-// Buffer di riserva (non DMA) usato solo se l'allocazione DMA dello sprite
+// Buffer di riserva (non DMA) usato se l'allocazione DMA dello sprite
 // fallisce: senza framebuffer la UI ripiegherebbe sul disegno diretto e
 // flickerebbe. Con questa riserva il double buffer resta disponibile.
-uint16_t* s_fallbackBuffer = nullptr;
+void* s_fallbackBuffer = nullptr;
 bool s_fallbackMode = false;
+uint8_t s_spriteBpp = 2;
 uint32_t s_spriteBytes = 0;
 
 void releaseFallbackBuffer() {
@@ -143,9 +144,35 @@ void releaseFallbackBuffer() {
     s_fallbackMode = false;
 }
 
-// Crea (o riusa) un framebuffer full-screen 16 bpp per la dimensione data.
+// Ripiego su heap normale: niente DMA (push piu' lento), ma resta un vero
+// double buffer. 8 bpp = RGB332, meta' memoria.
+bool ensureHeapSprite(int w, int h, uint8_t bpp) {
+    const size_t bytes = static_cast<size_t>(w) * h * (bpp / 8);
+    void* buffer = heap_caps_malloc(bytes, MALLOC_CAP_8BIT);
+    if (buffer == nullptr) {
+        return false;
+    }
+    s_sprite.setColorDepth(bpp);
+    s_sprite.setBuffer(buffer, w, h, bpp);
+    if (s_sprite.getBuffer() == nullptr) {
+        heap_caps_free(buffer);
+        return false;
+    }
+    s_fallbackBuffer = buffer;
+    s_fallbackMode = true;
+    s_spriteBpp = bpp / 8;
+    s_spriteBytes = static_cast<uint32_t>(bytes);
+    // Senza questo il ripiego resta "invisibile": push() non disegna e
+    // releaseFramebuffer() non libera il buffer (32 KB persi a ogni gioco).
+    s_spriteOk = true;
+    return true;
+}
+
+// Crea (o riusa) un framebuffer full-screen per la dimensione data.
 // Prima prova la memoria DMA (pushSprite piu' veloce); se non basta ripiega
-// su heap normale, che non puo' fare DMA ma resta un vero double buffer.
+// su heap normale. Dopo un gioco l'heap resta frammentato (un'allocazione di
+// poche decine di byte divide il blocco del framebuffer): 64,8 KB contigui
+// mancano, 32,4 KB a 8 bpp ci stanno. Meglio RGB332 che disegno diretto.
 bool ensureSprite(int w, int h) {
     if (s_spriteOk && s_sprite.width() == w && s_sprite.height() == h) {
         return true;
@@ -153,6 +180,7 @@ bool ensureSprite(int w, int h) {
 
     s_spriteOk = false;
     s_spriteBytes = 0;
+    s_spriteBpp = 2;
     s_sprite.deleteSprite();
     releaseFallbackBuffer();
     s_sprite.setColorDepth(16);
@@ -160,32 +188,25 @@ bool ensureSprite(int w, int h) {
     if (s_sprite.createSprite(w, h) != nullptr) {
         s_spriteOk = true;
         s_spriteBytes = static_cast<uint32_t>(w) * h * 2;
+#ifdef ORBIT_DIAG_LOG
+        logger::info("FB create %dx%d alloc=%u free=%u blk=%u", w, h,
+                     static_cast<unsigned>(heap_caps_get_allocated_size(s_sprite.getBuffer())),
+                     static_cast<unsigned>(ESP.getFreeHeap()),
+                     static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)));
+#endif
         return true;
     }
 
-    const uint32_t heapFree = heap_caps_get_free_size(MALLOC_CAP_8BIT);
-    const uint32_t dmaFree = heap_caps_get_free_size(MALLOC_CAP_DMA);
-
-    const size_t bytes = static_cast<size_t>(w) * h * 2;
-    void* buffer = heap_caps_malloc(bytes, MALLOC_CAP_8BIT);
-    if (buffer != nullptr) {
-        s_fallbackBuffer = static_cast<uint16_t*>(buffer);
-        s_sprite.setBuffer(buffer, w, h, 16);
-        s_spriteOk = (s_sprite.getBuffer() != nullptr);
-        s_fallbackMode = s_spriteOk;
-        if (s_spriteOk) {
-            s_spriteBytes = static_cast<uint32_t>(bytes);
-            logger::warn("Framebuffer DMA non disponibile: uso heap normale (heap %u KB)",
-                         static_cast<unsigned>(heapFree / 1024));
-        }
+    if (ensureHeapSprite(w, h, 16) || ensureHeapSprite(w, h, 8)) {
+        logger::warn("Framebuffer %u bpp su heap normale (heap %u KB)", s_spriteBpp * 8,
+                     static_cast<unsigned>(ESP.getFreeHeap() / 1024));
+        return true;
     }
 
-    if (!s_spriteOk) {
-        logger::warn("Framebuffer non allocato: disegno diretto (heap %u KB, DMA %u KB)",
-                     static_cast<unsigned>(heapFree / 1024),
-                     static_cast<unsigned>(dmaFree / 1024));
-    }
-    return s_spriteOk;
+    logger::warn("Framebuffer non allocato: disegno diretto (heap %u KB, DMA %u KB)",
+                 static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_8BIT) / 1024),
+                 static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_DMA) / 1024));
+    return false;
 }
 
 }  // namespace
@@ -199,10 +220,11 @@ bool begin() {
     M5Cardputer.Display.setBrightness(128);
     M5Cardputer.Display.fillScreen(kBlack);
     const bool ok = ensureSprite(M5Cardputer.Display.width(), M5Cardputer.Display.height());
-    logger::info("Framebuffer %ux%u %s (%u KB, heap libero %u KB)",
+    logger::info("Framebuffer %ux%u %s %ubpp (%u KB, heap libero %u KB)",
                  static_cast<unsigned>(M5Cardputer.Display.width()),
                  static_cast<unsigned>(M5Cardputer.Display.height()),
                  !ok ? "diretto" : (s_fallbackMode ? "sprite RAM" : "sprite DMA"),
+                 static_cast<unsigned>(s_spriteBpp * 8),
                  static_cast<unsigned>(s_spriteBytes / 1024),
                  static_cast<unsigned>(ESP.getFreeHeap() / 1024));
     if (ok) {
@@ -238,14 +260,34 @@ uint32_t framebufferBytes() {
     return s_spriteBytes;
 }
 
+uint8_t framebufferBpp() {
+    return static_cast<uint8_t>(s_spriteBpp * 8);
+}
+
+bool framebufferFallback() {
+    return s_fallbackMode;
+}
+
 bool releaseFramebuffer() {
     if (!s_spriteOk) {
+        // Nessun framebuffer attivo, ma un buffer di ripiego orfano va liberato.
+        releaseFallbackBuffer();
         return false;
     }
+#ifdef ORBIT_DIAG_LOG
+    logger::info("FB release pre free=%u blk=%u",
+                 static_cast<unsigned>(ESP.getFreeHeap()),
+                 static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)));
+#endif
     s_sprite.deleteSprite();
     releaseFallbackBuffer();
     s_spriteOk = false;
     s_spriteBytes = 0;
+#ifdef ORBIT_DIAG_LOG
+    logger::info("FB release post free=%u blk=%u",
+                 static_cast<unsigned>(ESP.getFreeHeap()),
+                 static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)));
+#endif
     return true;
 }
 
@@ -311,8 +353,8 @@ void push(int x, int y, int w, int h) {
     }
     // Ogni riga e' contigua: le strisce a piena larghezza si pushano senza
     // copia, le altre passano da un buffer statico (nessuna allocazione).
-    static uint16_t s_row[240];
-    const int stride = s_sprite.width() * 2;
+    static uint8_t s_row[240 * 2];
+    const int stride = s_sprite.width() * s_spriteBpp;
     const auto srcDepth = s_sprite.getColorDepth();
     auto& d = M5Cardputer.Display;
     const auto dstDepth = d.getColorDepth();
@@ -322,9 +364,10 @@ void push(int x, int y, int w, int h) {
             lgfx::pixelcopy_t pc(base + (y + r) * stride, dstDepth, srcDepth);
             d.pushImage(0, y + r, w, 1, &pc);
         }
-    } else if (w <= static_cast<int>(sizeof(s_row) / sizeof(s_row[0]))) {
+    } else if (w <= static_cast<int>(sizeof(s_row) / s_spriteBpp)) {
         for (int r = 0; r < h; ++r) {
-            std::memcpy(s_row, base + (y + r) * stride + x * 2, static_cast<size_t>(w) * 2);
+            std::memcpy(s_row, base + (y + r) * stride + x * s_spriteBpp,
+                        static_cast<size_t>(w) * s_spriteBpp);
             lgfx::pixelcopy_t pc(s_row, dstDepth, srcDepth);
             d.pushImage(x, y + r, w, 1, &pc);
         }
@@ -832,6 +875,7 @@ void splash() {
             textCentered(14, "ORBIT", titleColor, 4);
             textCentered(34, "CARDPUTER FLIGHT DECK", C(T_acc), 0);
             textCentered(45, "firmware multi-funzione", C(T_dim), 0);
+            textCentered(56, "STORE UPDATE 1.0", C(T_ok), 0);
         }
         // Telemetria di fondo: striscia HUD che chiude la scena.
         auto& d = g();

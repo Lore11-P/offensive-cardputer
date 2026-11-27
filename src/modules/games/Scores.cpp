@@ -8,7 +8,7 @@
 #include "ModuleFlags.h"
 #include "Storage.h"
 
-#if ENABLE_MODULE_GAMES
+#if GAMES_ANY
 
 namespace games {
 namespace scores {

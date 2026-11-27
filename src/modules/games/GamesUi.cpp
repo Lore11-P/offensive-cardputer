@@ -5,7 +5,7 @@
 #include "ModuleFlags.h"
 #include "Navigation.h"
 
-#if ENABLE_MODULE_GAMES
+#if GAMES_ANY
 
 namespace games {
 namespace ui {

@@ -487,6 +487,21 @@ void endPlayback() {
     restoreSpeaker();
 }
 
+void releaseDecoder() {
+    if (g_decoder == nullptr) {
+        return;
+    }
+    if (g_i2sOwned) {
+        g_decoder->stopSong();
+        i2s_driver_uninstall(I2S_NUM_0);
+        g_i2sOwned = false;
+    }
+    // Il distruttore libera i buffer interni (MP3/AAC/FLAC, playlist).
+    delete g_decoder;
+    g_decoder = nullptr;
+    restoreSpeaker();
+}
+
 void pump() {
     if (g_decoder != nullptr) {
         g_decoder->loop();

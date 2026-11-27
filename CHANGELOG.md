@@ -2,6 +2,26 @@
 
 Tutte le modifiche rilevanti del progetto. Formato basato su Keep a Changelog.
 
+## [2.3.4] - 2026-11-25
+
+### Corretto
+
+- **Giochi Wren: reboot per memoria esaurita**. Misure sul device (log seriale, gioco 2048 da 5.457 B sul percorso reale Store, con catalogo e voci di menu vivi): la VM costa 77,7 KB fissi e compilazione+esecuzione altri ~37 KB, mentre dopo aver liberato framebuffer e BLE restavano ~112 KB con uno stack da 48 KB. Wren non ha un percorso di errore per l'OOM (una `realloc` a NULL diventa un fault), quindi il superamento della soglia era un reboot. Ora:
+  - stack del task `wren-game` da 48 KB a 32 KB (misurato: 11,7 KB usati, high-water mark registrato in `diag::log`);
+  - `MAX_LOCALS`/`MAX_UPVALUES` di Wren da 256 a 64: la `struct Compiler` passa da ~6,4 KB a ~1,5 KB per livello di annidamento (funzione/metodo/blocco), che era il vero consumo di stack;
+  - il decoder audio (~40 KB, mai liberato prima) viene distrutto da `audioout::releaseDecoder()` all'avvio del gioco: chi ascoltava Radio/Musica non perde piu' la memoria;
+  - semafori e task vengono creati **prima** di liberare il framebuffer, cosi' il suo blocco da 64 KB non viene spezzato da allocazioni piccole;
+  - gate a 136 KB liberi + 24 KB contigui, con messaggio "Memoria insufficiente" al posto del reboot.
+  Risultato misurato: tutti e 5 i giochi dello Store partono e girano con ~20-45 KB di heap libero (prima: 8 KB, sotto la soglia di fault).
+- **Log seriale**: env `cardputer-adv-serlog` (firmware di produzione + `diag::log` su USB CDC) e `cardputer-adv-probe` (all'avvio connette il WiFi, scarica il catalogo e lancia da solo i giochi su SD, senza input). `tools/serial_log.py` cattura COM5 con timestamp e riapre la porta dopo la ri-enumerazione USB.
+- **Flicker e "Memoria insufficiente" al secondo gioco**: il ripiego del framebuffer a 8 bpp su heap normale allocava i 32,4 KB ma non impostava `s_spriteOk`. Effetto: `releaseFramebuffer()` usciva subito e non liberava il buffer, quindi dal secondo gioco lo heap restava a ~111 KB (< gate 136 KB) e lo sprite non veniva nemmeno usato per disegnare. Ora il ripiego e' un framebuffer a tutti gli effetti (double buffer RGB332, niente flicker) e viene liberato/riallocato a ogni partita. Misurato sul device: 5 giochi di fila, gate sempre 139 KB, `restore=1`, `8 bpp su heap normale`.
+- **Giochi nativi "caldi"**: flag `ENABLE_HOT_GAMES` (attivo in `cardputer-adv` e probe) compila sempre i 5 titoli presenti anche nello Store (2048, Breakout, Flappy, Pong, Snake): +23,8 KB di flash, 0 B di bss. In **Giochi** restano disponibili anche senza Wren; l'arcade completo resta dietro `ENABLE_MODULE_GAMES`.
+- **Console diagnostica seriale** (`ORBIT_DIAG_CONSOLE`, attiva in `serlog`/`probe`/`diag`): `heap`, `fb [rel|res]`, `games`, `run <nome>`, `tasks`, `wifi`, `reset`. Il task console viene sospeso durante i giochi per non consumare heap. Client: `tools/serial_diag.py --cmd heap --cmd "run 2048"`. La scheda si riavvia con `esptool --after watchdog-reset` (il reset RTS la lascia in download mode).
+
+### Noto
+
+- Dopo un gioco il framebuffer viene riallocato a 8 bpp (RGB332): la UI resta fluida ma con 256 colori invece di 65.536. E' il compromesso che evita il disegno diretto quando 64,8 KB contigui non sono disponibili.
+
 ## [2.3.3] - 2026-11-24
 
 ### Corretto

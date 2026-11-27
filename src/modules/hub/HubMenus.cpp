@@ -20,7 +20,7 @@
 #if ENABLE_MODULE_IR
 #include "modules/ir/IrMenu.h"
 #endif
-#if ENABLE_MODULE_GAMES
+#if GAMES_ANY
 #include "modules/games/GamesMenu.h"
 #endif
 #if ENABLE_MODULE_SETTINGS
@@ -209,7 +209,7 @@ void systemMenu() {
 }
 
 void gamesEntry() {
-#if ENABLE_MODULE_GAMES
+#if GAMES_ANY
     guarded("Giochi", "Menu principale", config::Module::Games, games::runMenu)();
 #endif
 }

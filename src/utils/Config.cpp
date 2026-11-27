@@ -259,7 +259,7 @@ bool moduleCompiled(Module module) {
         case Module::Ir:
             return ENABLE_MODULE_IR;
         case Module::Games:
-            return ENABLE_MODULE_GAMES;
+            return GAMES_ANY;
         case Module::Settings:
             return ENABLE_MODULE_SETTINGS;
         case Module::Sd:

@@ -17,7 +17,7 @@
 #include "Navigation.h"
 #include "Storage.h"
 #include "Ui.h"
-#if ENABLE_MODULE_GAMES
+#if GAMES_ANY
 #include "modules/games/Scores.h"
 #endif
 
@@ -205,7 +205,7 @@ void backupConfig() {
     storage::mkdir("/backup", true);
     const bool ok = storage::writeText("/backup/config.json", config::toJson(), true);
 
-#if ENABLE_MODULE_GAMES
+#if GAMES_ANY
     // I record scritti su LittleFS senza card finiscono su SD prima del backup.
     games::scores::mergeBackends();
 #endif
@@ -219,7 +219,7 @@ void backupConfig() {
 }
 
 void showScores() {
-#if ENABLE_MODULE_GAMES
+#if GAMES_ANY
     games::scores::mergeBackends();
     const bool preferSD = games::scores::preferSD();
     const char* backend = preferSD ? "SD" : "LittleFS";

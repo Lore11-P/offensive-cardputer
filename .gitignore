@@ -1,6 +1,14 @@
 .pio/
 .vscode/
 *.log
+
+# OrbitOS 3.0 — artefatti di build e backup locali del firmware 2.x
+firmware/build/
+firmware/managed_components/
+backup/
+tools/app_head.bin
+tools/ocd-read.txt
+tools/serial-probe*.txt
 .DS_Store
 Thumbs.db
 .env

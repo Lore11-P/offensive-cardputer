@@ -51,6 +51,11 @@ void reinit();
 // registrazione e' ancora aperta la chiude prima di rilasciare il bus.
 void endPlayback();
 
+// Distrugge il decoder (~40 KB con i suoi buffer) e libera I2S0: serve a
+// restituire memoria a un'altra funzione (es. prima di un gioco Wren). La
+// prossima beginPlayback() lo ricrea da zero.
+void releaseDecoder();
+
 // Va chiamato spesso durante la riproduzione: pompa lo stream del decoder e
 // svuota il ring buffer della registrazione verso la SD.
 void pump();

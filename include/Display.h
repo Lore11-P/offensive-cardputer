@@ -120,6 +120,9 @@ int height();
 bool framebufferActive();
 // Byte occupati dal framebuffer (0 se non allocato).
 uint32_t framebufferBytes();
+// Profondita' in bit (16 o 8) e true se e' il ripiego su heap normale.
+uint8_t framebufferBpp();
+bool framebufferFallback();
 // Libera il framebuffer full-screen per lasciare heap ai giochi; il disegno
 // passa diretto al display finche' non viene ricreato.
 bool releaseFramebuffer();

@@ -22,11 +22,15 @@
 // Note that this limitation is also explicit in the bytecode. Since
 // `CODE_LOAD_LOCAL` and `CODE_STORE_LOCAL` use a single argument byte to
 // identify the local, only 256 can be in scope at one time.
-#define MAX_LOCALS 256
+// ORBIT: 64 invece di 256. locals[]+upvalues[] sono ~6 KB di stack per ogni
+// livello di compilazione (funzione, metodo, blocco): sul device lo stack del
+// task e' la risorsa piu' scarsa. I giochi sono < 8 KB e non superano 64
+// variabili per funzione; oltre, il compilatore segnala un errore normale.
+#define MAX_LOCALS 64
 
 // The maximum number of upvalues (i.e. variables from enclosing functions)
 // that a function can close over.
-#define MAX_UPVALUES 256
+#define MAX_UPVALUES 64
 
 // The maximum number of distinct constants that a function can contain. This
 // value is explicit in the bytecode since `CODE_CONSTANT` only takes a single

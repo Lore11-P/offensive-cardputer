@@ -10,7 +10,7 @@
 #include "Navigation.h"
 #include "Scores.h"
 
-#if ENABLE_MODULE_GAMES
+#if GAMES_ANY
 
 namespace games {
 namespace {

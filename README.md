@@ -1,3 +1,11 @@
+# ORBIT OS
+
+> **OrbitOS 3.0 (ESP-IDF)** — nuovo firmware in `firmware/`, C++17 su
+> ESP-IDF 5.4, senza Arduino. Include Home, Store, Giochi, Musica, BLE,
+> WiFi/offensive, IR, Strumenti, Chat e Zorbo; stato e limiti in
+> `docs/3.0-STATO.md` e `COSA-NON-FATTO.md`. Il firmware 2.x qui sotto resta
+> come riferimento e fallback.
+
 # ORBIT OS v2.0.3
 
 Firmware modulare per **M5Stack Cardputer ADV** (ESP32-S3FN8, 8 MB flash, **senza PSRAM**), scritto in C++17 con PlatformIO/Arduino. Interfaccia a menu con icone, navigazione da tastiera e moduli attivabili/disattivabili a runtime.

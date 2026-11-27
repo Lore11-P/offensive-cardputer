@@ -26,6 +26,15 @@
 #define ENABLE_MODULE_GAMES 1
 #endif
 
+// Giochi nativi "caldi": solo i 5 titoli presenti anche nello Store.
+// 0 RAM statica (misurato), ~28 KB di flash. Si somma a ENABLE_MODULE_GAMES.
+#ifndef ENABLE_HOT_GAMES
+#define ENABLE_HOT_GAMES 0
+#endif
+
+// Un pezzo di modulo giochi serve se e' attivo l'arcade completo o il set caldo.
+#define GAMES_ANY (ENABLE_MODULE_GAMES || ENABLE_HOT_GAMES)
+
 #ifndef ENABLE_MODULE_SETTINGS
 #define ENABLE_MODULE_SETTINGS 1
 #endif
@@ -143,8 +152,8 @@
 #endif
 
 namespace fw {
-inline constexpr const char* kVersion = "2.3.3";
-inline constexpr const char* kTitle = "ORBIT OS v2.3.3";
+inline constexpr const char* kVersion = "2.3.4";
+inline constexpr const char* kTitle = "ORBIT OS v2.3.4";
 inline constexpr const char* kShortTitle = "ORBIT OS";
 inline constexpr const char* kBuildDate = __DATE__;
 }  // namespace fw

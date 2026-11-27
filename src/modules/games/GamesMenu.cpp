@@ -22,7 +22,7 @@
 #include "Tetris.h"
 #include "Ui.h"
 
-#if ENABLE_MODULE_GAMES
+#if GAMES_ANY
 
 namespace games {
 namespace {
@@ -36,15 +36,18 @@ struct GameEntry {
 };
 
 // Tabella unica: una sola lambda di ingresso invece di 17 copie.
+// I 5 titoli "caldi" (gli stessi dello Store) restano compilati anche con
+// ENABLE_MODULE_GAMES=0: partono senza Wren e senza toccare il framebuffer.
 constexpr GameEntry kGames[] = {
-    {"Tetris", "games", runTetris},
+    {"2048", "2048", run2048},
     {"Breakout", "games", runBreakout},
+    {"Flappy", "flappy", runFlappy},
+    {"Pong", "pong", runPong},
+    {"Snake", "snake", runSnake},
+#if ENABLE_MODULE_GAMES
+    {"Tetris", "games", runTetris},
     {"Pac-Man", "pacman", runPacman},
     {"Doom Lite", "doom", runDoomLite},
-    {"Snake", "snake", runSnake},
-    {"Pong", "pong", runPong},
-    {"2048", "2048", run2048},
-    {"Flappy", "flappy", runFlappy},
     {"Simon", "simon", runSimon},
     {"Minesweeper", "mines", runMinesweeper},
     {"Connect 4", "connect4", runConnect4},
@@ -54,6 +57,7 @@ constexpr GameEntry kGames[] = {
     {"Lander", "planet", runLander},
     {"Orbital", "sat", runOrbital},
     {"Pixel Jump", "games", runPixelJump},
+#endif
 };
 constexpr size_t kGameCount = sizeof(kGames) / sizeof(kGames[0]);
 }  // namespace
