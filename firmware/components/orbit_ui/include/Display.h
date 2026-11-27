@@ -101,9 +101,9 @@ const char* themeNote(uint8_t id);
 // Colore di un token in una palette specifica (anteprime, selettore temi).
 uint16_t themeColor(uint8_t id, Tok token);
 
-// Inizializza display e framebuffer. Ritorna false se lo sprite non e'
-// allocabile (in tal caso si disegna direttamente sul display).
-bool begin();
+// Inizializza display e framebuffer direttamente nella rotazione richiesta
+// (0 = landscape 240x135). Ritorna false se lo sprite non e' allocabile.
+bool begin(uint8_t rotation = 0);
 
 // Ricrea il framebuffer dopo un cambio di rotazione.
 void applyRotation(uint8_t index);

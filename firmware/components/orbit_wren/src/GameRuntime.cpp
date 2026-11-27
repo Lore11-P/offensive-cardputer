@@ -304,10 +304,11 @@ bool runGameInner(const std::string& path) {
     ESP_LOGI(TAG, "start %s heap=%u", path.c_str(),
              static_cast<unsigned>(esp_get_free_heap_size()));
 
-    // Wren non ha un percorso di errore per l'OOM: sotto questa soglia non parte.
+    // Wren non ha un percorso di errore per l'OOM: una realloc a NULL diventa
+    // un fault. 136 KB lasciano margine per VM (~78 KB) + compilazione.
     const uint32_t freeHeap = esp_get_free_heap_size();
-    if (freeHeap < 120 * 1024) {
-        ESP_LOGE(TAG, "memoria insufficiente: free=%uKB, servono 120KB",
+    if (freeHeap < 136 * 1024) {
+        ESP_LOGE(TAG, "memoria insufficiente: free=%uKB, servono 136KB",
                  static_cast<unsigned>(freeHeap / 1024));
         return false;
     }
@@ -377,11 +378,33 @@ void gameTask(void* arg) {
 
 }  // namespace
 
+// I giochi Wren assumono 240x135: se l'utente ha una rotazione portrait si
+// passa temporaneamente al primo landscape e si ripristina all'uscita.
+struct LandscapeGuard {
+    uint8_t saved;
+    LandscapeGuard() : saved(display::rotation()) {
+        if (display::width() <= display::height()) {
+            for (uint8_t r = 0; r < 4; ++r) {
+                display::applyRotation(r);
+                if (display::width() > display::height()) {
+                    break;
+                }
+            }
+        }
+    }
+    ~LandscapeGuard() {
+        if (display::rotation() != saved) {
+            display::applyRotation(saved);
+        }
+    }
+};
+
 bool runGame(const std::string& path) {
     if (g_gameDone != nullptr) {
         // Un gioco alla volta: la UI e' bloccante.
         return false;
     }
+    LandscapeGuard landscape;
 
     // Il framebuffer 16bpp resta allocato: durante il gioco niente disegno
     // diretto (flicker) e all'uscita la palette resta completa. Per far

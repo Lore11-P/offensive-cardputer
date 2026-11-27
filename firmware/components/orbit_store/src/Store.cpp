@@ -40,6 +40,11 @@ std::string sha256Hex(const std::string& data) {
 }  // namespace
 
 bool downloadGame(const GameInfo& game, std::string* error) {
+    // Il runtime Wren spegne il WiFi prima di ogni gioco: senza questo,
+    // dopo una partita l'installazione di un altro gioco falliva.
+    if (!ensureWifi(error)) {
+        return false;
+    }
     std::string body;
     if (!httpGet(game.url, body, kMaxGameBytes, error)) {
         return false;

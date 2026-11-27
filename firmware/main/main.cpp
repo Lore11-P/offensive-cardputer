@@ -97,10 +97,10 @@ extern "C" void app_main(void) {
     orbit_settings::begin();
     mascot::begin();
 
-    if (!display::begin()) {
+    const uint8_t savedRotation = orbit_settings::rotation();
+    if (!display::begin(savedRotation)) {
         ESP_LOGE(TAG, "framebuffer non disponibile: disegno diretto");
     }
-    const uint8_t savedRotation = orbit_settings::rotation();
     if (display::rotation() != savedRotation) {
         display::applyRotation(savedRotation);
         if (display::rotation() != savedRotation) {

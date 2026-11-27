@@ -37,10 +37,12 @@ portate. Il resto è in `docs/3.0-STATO.md` e nei README dei componenti.
 - **Musica**: MP3 e WAV PCM16; FLAC/M4A/AAC/OGG/Opus sono elencati ma danno
   "formato non supportato". Niente seek/shuffle/repeat, durata MP3 stimata CBR.
 - **Giochi Wren**: il framebuffer 16bpp resta allocato anche durante la VM
-  (niente disegno diretto, niente calo di colori all'uscita). Per far spazio a
-  Wren si ferma il WiFi e si usa uno stack task da 24 KB; 2048, breakout e
-  flappy partono con ~164 KB liberi. Non è stato testato l'uscita fisica con
-  ESC né la resa a schermo di ogni gioco.
+  (niente disegno diretto, niente calo di colori all'uscita), creato una sola
+  volta nella rotazione salvata. Per far spazio a Wren si ferma il WiFi e si
+  usa uno stack task da 24 KB; gate 136 KB, 2048/breakout/flappy partono con
+  ~164 KB liberi. I giochi Wren forzano il landscape se la rotazione utente è
+  portrait. Non è stato testato l'uscita fisica con ESC né la resa a schermo
+  di ogni gioco.
 - **Deauth**: IDF 5.4 blocca i frame deauth con un controllo chiuso in
   `libnet80211.a`. Il binario consegnato è **patchato** con
   `tools/patch_raw_tx.py` (prologo della funzione → `movi.n a2,0; retw.n`) e

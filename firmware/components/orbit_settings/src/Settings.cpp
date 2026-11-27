@@ -13,7 +13,7 @@ constexpr const char* kTag = "settings";
 constexpr const char* kNamespace = "orbit-cfg";
 constexpr uint8_t kDefaultBrightness = 128;
 constexpr uint8_t kDefaultTheme = 0;
-constexpr uint8_t kDefaultRotation = 1;
+constexpr uint8_t kDefaultRotation = 0;  // 240x135 landscape
 constexpr const char* kDefaultNickname = "ORBIT";
 
 uint8_t s_brightness = kDefaultBrightness;

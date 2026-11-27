@@ -35,6 +35,15 @@ std::vector<std::string> sdGames() {
     return names;
 }
 
+void playWren(const std::string& path, const std::string& name) {
+    if (!orbit_wren::runGame(path)) {
+        ui::message("Giochi",
+                    {"!Gioco non avviato.", name,
+                     "Memoria insufficiente o file non valido."},
+                    "Giochi");
+    }
+}
+
 }  // namespace
 
 void runGames() {
@@ -45,15 +54,15 @@ void runGames() {
         const std::vector<std::string> files = orbit_store::installedGames();
         for (const std::string& file : files) {
             const std::string label = file.substr(0, file.size() - 5);
-            menu.addItem(label, "games", [file] {
-                orbit_wren::runGame(std::string(orbit_store::kGamesDir) + "/" + file);
+            menu.addItem(label, "games", [file, label] {
+                playWren(std::string(orbit_store::kGamesDir) + "/" + file, label);
             });
         }
     }
     for (const std::string& file : sdGames()) {
         const std::string label = file.substr(0, file.size() - 5) + " (SD)";
-        menu.addItem(label, "games", [file] {
-            orbit_wren::runGame("/sd/games/" + file);
+        menu.addItem(label, "games", [file, label] {
+            playWren("/sd/games/" + file, label);
         });
     }
     if (menu.items().size() == 1) {

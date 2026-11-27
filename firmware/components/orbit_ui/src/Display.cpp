@@ -171,7 +171,10 @@ bool ensureHeapSprite(int w, int h, uint8_t bpp) {
 // poche decine di byte divide il blocco del framebuffer): 64,8 KB contigui
 // mancano, 32,4 KB a 8 bpp ci stanno. Meglio RGB332 che disegno diretto.
 bool ensureSprite(int w, int h) {
-    if (s_spriteOk && s_sprite.width() == w && s_sprite.height() == h) {
+    // Riusa solo un framebuffer a 16 bpp: un vecchio ripiego 8 bpp alla stessa
+    // dimensione non deve impedire il ritorno alla palette completa.
+    if (s_spriteOk && s_spriteBpp == 2 && s_sprite.width() == w &&
+        s_sprite.height() == h) {
         return true;
     }
 
@@ -208,14 +211,14 @@ bool ensureSprite(int w, int h) {
 
 }  // namespace
 
-bool begin() {
+bool begin(uint8_t rotation) {
     if (!orbit_hal::displayBegin()) {
         logger::error("pannello non inizializzato");
     }
-    // Parte direttamente in landscape (rotazione 1, il default): creare prima
-    // lo sprite in portrait e poi ricrearlo raddoppiava le allocazioni grosse
-    // all'avvio, con rischio di fallire per frammentazione dell'heap.
-    s_rotation = 1;
+    // Alloca una sola volta, direttamente nella rotazione finale: creare lo
+    // sprite in portrait e poi ricrearlo in landscape raddoppiava le
+    // allocazioni grosse all'avvio, con rischio di finire a 8 bpp.
+    s_rotation = rotation & 0x03;
     M5Cardputer.Display.setRotation(s_rotation);
     M5Cardputer.Display.setBrightness(128);
     M5Cardputer.Display.fillScreen(kBlack);
